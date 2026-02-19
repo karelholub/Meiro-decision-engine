@@ -1,0 +1,19 @@
+{
+  "name": "decisioning-extension",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.12.2",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "db:migrate": "pnpm --filter @decisioning/api prisma:migrate",
+    "db:seed": "pnpm --filter @decisioning/api prisma:seed"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

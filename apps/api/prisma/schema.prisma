@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DecisionStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum Outcome {
+  ELIGIBLE
+  IN_HOLDOUT
+  CAPPED
+  NOT_ELIGIBLE
+  ERROR
+}
+
+model Decision {
+  id          String            @id @default(uuid())
+  key         String            @unique
+  name        String
+  description String            @default("")
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  versions    DecisionVersion[]
+  logs        DecisionLog[]
+}
+
+model DecisionVersion {
+  id             String         @id @default(uuid())
+  decisionId     String
+  version        Int
+  status         DecisionStatus
+  definitionJson Json
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  activatedAt    DateTime?
+  decision       Decision       @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionId, version])
+  @@index([decisionId, status])
+}
+
+model DecisionLog {
+  id             String   @id @default(uuid())
+  requestId      String
+  decisionId     String
+  version        Int
+  profileId      String
+  timestamp      DateTime @default(now())
+  actionType     String
+  payloadJson    Json
+  outcome        Outcome
+  reasonsJson    Json
+  debugTraceJson Json?
+  latencyMs      Int
+  decision       Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([decisionId, timestamp])
+  @@index([profileId, timestamp])
+  @@index([requestId])
+}

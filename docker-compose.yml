@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: decisioning
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/decisioning
+      API_PORT: 3001
+      API_WRITE_KEY: local-write-key
+      PROTECT_DECIDE: "false"
+      MEIRO_MODE: mock
+      NEXT_PUBLIC_API_BASE_URL: http://api:3001
+      NEXT_PUBLIC_API_KEY: local-write-key
+    depends_on:
+      - postgres
+    ports:
+      - "3001:3001"
+
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+      NEXT_PUBLIC_API_KEY: local-write-key
+      PORT: 3000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
