@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7-labs
 
-FROM node:20-alpine AS base
+FROM node:20-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
@@ -21,17 +21,19 @@ ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
 ARG NEXT_PUBLIC_API_KEY=
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS=--max-old-space-size=2048
 COPY --from=deps /app /app
 COPY . .
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --offline --filter @decisioning/ui...
 RUN pnpm --filter @decisioning/ui build
 
-FROM node:20-alpine AS runtime
+FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=build /app/apps/ui/.next/standalone ./
 COPY --from=build /app/apps/ui/.next/static ./apps/ui/.next/static
-COPY --from=build /app/apps/ui/public ./apps/ui/public
 EXPOSE 3000
 CMD ["node", "apps/ui/server.js"]
