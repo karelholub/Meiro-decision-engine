@@ -109,6 +109,8 @@ const createPrisma = (campaignFixture: InAppCampaignFixture) => {
   }> = [];
 
   const logs: unknown[] = [];
+  const events: Array<Record<string, unknown>> = [];
+  const decisionCache = new Map<string, { environment: "DEV"; cacheKey: string; responseJson: unknown; expiresAt: Date }>();
 
   const prisma = {
     inAppCampaign: {
@@ -182,6 +184,49 @@ const createPrisma = (campaignFixture: InAppCampaignFixture) => {
         return { id: `log-${logs.length}`, ...data };
       })
     },
+    inAppEvent: {
+      create: vi.fn().mockImplementation(async ({ data }: any) => {
+        const event = { id: `event-${events.length + 1}`, ...data };
+        events.push(event);
+        return event;
+      }),
+      findMany: vi.fn().mockResolvedValue([])
+    },
+    inAppDecisionCache: {
+      findUnique: vi.fn().mockImplementation(async ({ where }: any) => {
+        const cacheLookup = where.environment_cacheKey;
+        if (!cacheLookup) {
+          return null;
+        }
+        return (
+          decisionCache.get(`${cacheLookup.environment}:${cacheLookup.cacheKey}`) ?? null
+        );
+      }),
+      upsert: vi.fn().mockImplementation(async ({ where, create, update }: any) => {
+        const cacheLookup = where.environment_cacheKey;
+        const mapKey = `${cacheLookup.environment}:${cacheLookup.cacheKey}`;
+        const existing = decisionCache.get(mapKey);
+        const next = existing
+          ? {
+              ...existing,
+              responseJson: update.responseJson,
+              expiresAt: update.expiresAt
+            }
+          : {
+              environment: create.environment,
+              cacheKey: create.cacheKey,
+              responseJson: create.responseJson,
+              expiresAt: create.expiresAt
+            };
+        decisionCache.set(mapKey, next);
+        return { id: `cache-${decisionCache.size}`, ...next };
+      }),
+      delete: vi.fn().mockImplementation(async ({ where }: any) => {
+        const cacheLookup = where.environment_cacheKey;
+        decisionCache.delete(`${cacheLookup.environment}:${cacheLookup.cacheKey}`);
+        return { id: "cache-deleted" };
+      })
+    },
     decisionVersion: {
       findFirst: vi.fn().mockResolvedValue(null)
     },
@@ -198,7 +243,8 @@ const createPrisma = (campaignFixture: InAppCampaignFixture) => {
   return {
     prisma,
     impressions,
-    logs
+    logs,
+    events
   };
 };
 
@@ -275,6 +321,57 @@ describe("POST /v1/inapp/decide", () => {
     expect(first.body.tracking.message_id).toBe(second.body.tracking.message_id);
   });
 
+  it("returns cache miss then cache hit for repeated requests", async () => {
+    const campaign = baseCampaign();
+    const { prisma } = createPrisma(campaign);
+    const meiroAdapter = new MockMeiroAdapter([
+      {
+        profileId: "p-1001",
+        attributes: {
+          mx_first_name_last: ["Alex"],
+          web_rfm: ["Champions"],
+          web_churn_risk_score: ["0.21"],
+          web_total_spend: ["1240.55"],
+          web_product_recommended2: ['[{"id":"sku-42","name":"City Sneaker"}]']
+        },
+        audiences: ["vip", "newsletter"],
+        consents: ["email_marketing"]
+      }
+    ]);
+    const getProfileSpy = vi.spyOn(meiroAdapter, "getProfile");
+
+    const app = await buildApp({
+      prisma: prisma as any,
+      meiroAdapter,
+      now: () => fixedNow
+    });
+
+    const request = {
+      method: "POST" as const,
+      url: "/v1/inapp/decide",
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "cache-test-key"
+      },
+      payload: {
+        appKey: "meiro_store",
+        placement: "home_top",
+        profileId: "p-1001",
+        debug: true
+      }
+    };
+
+    const first = await app.inject(request);
+    const second = await app.inject(request);
+    await app.close();
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(first.json().payload.debug.cache.hit).toBe(false);
+    expect(second.json().payload.debug.cache.hit).toBe(true);
+    expect(getProfileSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces deterministic holdout", async () => {
     const campaign = baseCampaign();
     campaign.holdoutEnabled = true;
@@ -347,5 +444,189 @@ describe("POST /v1/inapp/decide", () => {
     expect(result.statusCode).toBe(200);
     expect(result.body.show).toBe(false);
     expect(result.body.templateId).toBe("none");
+  });
+
+  it("returns 429 when rate limit is exceeded", async () => {
+    const campaign = baseCampaign();
+    const { prisma } = createPrisma(campaign);
+    const app = await buildApp({ prisma: prisma as any, meiroAdapter: meiro, now: () => fixedNow });
+
+    let limitedResponse: { statusCode: number; json: () => any } | null = null;
+    for (let index = 0; index < 260; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/inapp/decide",
+        headers: {
+          "x-env": "DEV",
+          "x-api-key": "rate-limit-test-key"
+        },
+        payload: {
+          appKey: "meiro_store",
+          placement: "home_top",
+          profileId: "p-1001"
+        }
+      });
+
+      if (response.statusCode === 429) {
+        limitedResponse = response;
+        break;
+      }
+    }
+
+    await app.close();
+
+    expect(limitedResponse).not.toBeNull();
+    if (!limitedResponse) {
+      throw new Error("Expected rate limit response");
+    }
+    expect(limitedResponse.statusCode).toBe(429);
+    expect(limitedResponse.json().details.correlationId).toBeTruthy();
+  });
+
+  it("falls back to no-show when WBS lookup times out", async () => {
+    const campaign = baseCampaign();
+    const { prisma } = createPrisma(campaign);
+
+    (prisma.wbsInstance.findFirst as any).mockResolvedValue({
+      id: "wbs-1",
+      environment: "DEV",
+      name: "Mock WBS",
+      baseUrl: "https://mock.wbs.local",
+      attributeParamName: "attribute",
+      valueParamName: "value",
+      segmentParamName: "segment",
+      includeSegment: false,
+      defaultSegmentValue: null,
+      timeoutMs: 10_000,
+      isActive: true,
+      updatedAt: fixedNow
+    });
+    (prisma.wbsMapping.findFirst as any).mockResolvedValue({
+      id: "map-1",
+      environment: "DEV",
+      name: "Mock Mapping",
+      isActive: true,
+      profileIdStrategy: "HASH_FALLBACK",
+      profileIdAttributeKey: null,
+      mappingJson: {
+        attributeMappings: [],
+        audienceRules: []
+      },
+      updatedAt: fixedNow
+    });
+
+    const slowWbsAdapter = {
+      lookup: vi.fn().mockImplementation(
+        async () => new Promise((resolve) => setTimeout(() => resolve({ attributes: {} }), 1500))
+      )
+    };
+
+    const app = await buildApp({
+      prisma: prisma as any,
+      meiroAdapter: meiro,
+      wbsAdapter: slowWbsAdapter as any,
+      now: () => fixedNow
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/inapp/decide",
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "lookup-timeout-test-key"
+      },
+      payload: {
+        appKey: "meiro_store",
+        placement: "home_top",
+        lookup: {
+          attribute: "email",
+          value: "alex@example.com"
+        },
+        debug: true
+      }
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().show).toBe(false);
+    expect(response.json().templateId).toBe("none");
+    const reasonCodes = (response.json().payload.debug.reasons as Array<{ code: string }>).map((entry) => entry.code);
+    expect(reasonCodes).toContain("WBS_LOOKUP_TIMEOUT");
+  });
+});
+
+describe("POST /v1/inapp/events", () => {
+  it("stores an event and hashes lookup value", async () => {
+    const campaign = baseCampaign();
+    const { prisma, events } = createPrisma(campaign);
+    const app = await buildApp({
+      prisma: prisma as any,
+      meiroAdapter: meiro,
+      now: () => fixedNow
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/inapp/events",
+      headers: {
+        "x-env": "DEV"
+      },
+      payload: {
+        eventType: "IMPRESSION",
+        appKey: "meiro_store",
+        placement: "home_top",
+        tracking: {
+          campaign_id: "demo_home_top",
+          message_id: "msg_demo_home_top_A_1",
+          variant_id: "A"
+        },
+        lookup: {
+          attribute: "email",
+          value: "alex@example.com"
+        }
+      }
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().status).toBe("ok");
+    expect(events).toHaveLength(1);
+    const stored = events[0] as Record<string, unknown>;
+    expect(stored.lookupAttribute).toBe("email");
+    expect(stored.lookupValueHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(stored.lookupValueHash).not.toBe("alex@example.com");
+  });
+
+  it("rejects missing tracking fields", async () => {
+    const campaign = baseCampaign();
+    const { prisma } = createPrisma(campaign);
+    const app = await buildApp({
+      prisma: prisma as any,
+      meiroAdapter: meiro,
+      now: () => fixedNow
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/inapp/events",
+      headers: {
+        "x-env": "DEV"
+      },
+      payload: {
+        eventType: "CLICK",
+        appKey: "meiro_store",
+        placement: "home_top",
+        tracking: {
+          campaign_id: "demo_home_top",
+          message_id: "msg_demo_home_top_A_1"
+        }
+      }
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
   });
 });

@@ -1,5 +1,10 @@
-import { Environment, InAppCampaignStatus, Prisma, PrismaClient, WbsProfileIdStrategy } from "@prisma/client";
-import { createDefaultDecisionDefinition, type DecisionDefinition } from "@decisioning/dsl";
+import { Environment, InAppCampaignStatus, InAppUserRole, Prisma, PrismaClient, WbsProfileIdStrategy } from "@prisma/client";
+import {
+  createDefaultDecisionDefinition,
+  createDefaultDecisionStackDefinition,
+  type DecisionDefinition,
+  type DecisionStackDefinition
+} from "@decisioning/dsl";
 import type { MeiroProfile } from "@decisioning/meiro";
 import { type WbsMappingConfig } from "@decisioning/wbs-mapping";
 
@@ -195,6 +200,41 @@ const upsertDecision = async (input: {
   });
 };
 
+const upsertDecisionStack = async (input: {
+  key: string;
+  name: string;
+  description: string;
+  environment: Environment;
+  definitionFactory: () => DecisionStackDefinition;
+}) => {
+  const existingActive = await prisma.decisionStack.findFirst({
+    where: {
+      environment: input.environment,
+      key: input.key,
+      status: "ACTIVE"
+    }
+  });
+  if (existingActive) {
+    return;
+  }
+
+  const definition = input.definitionFactory();
+  await prisma.decisionStack.create({
+    data: {
+      id: definition.id,
+      environment: input.environment,
+      key: input.key,
+      name: input.name,
+      description: input.description,
+      status: "ACTIVE",
+      version: 1,
+      definitionJson: toInputJson(definition),
+      activatedAt: definition.activatedAt ? new Date(definition.activatedAt) : new Date(),
+      updatedAt: new Date(definition.updatedAt)
+    }
+  });
+};
+
 const upsertWbsInstance = async () => {
   const existingActive = await prisma.wbsInstance.findFirst({
     where: {
@@ -310,6 +350,23 @@ const inAppTemplateSchema = {
 };
 
 const upsertInAppMvpSeed = async () => {
+  await prisma.inAppUser.upsert({
+    where: { id: "seed-admin" },
+    update: {
+      role: InAppUserRole.ADMIN,
+      name: "Seed Admin",
+      email: "admin@example.com",
+      isActive: true
+    },
+    create: {
+      id: "seed-admin",
+      role: InAppUserRole.ADMIN,
+      name: "Seed Admin",
+      email: "admin@example.com",
+      isActive: true
+    }
+  });
+
   await prisma.inAppApplication.upsert({
     where: {
       environment_key: {
@@ -444,6 +501,79 @@ const upsertInAppMvpSeed = async () => {
       })
     }
   });
+
+  const existingVersion = await prisma.inAppCampaignVersion.findFirst({
+    where: {
+      campaignId: campaign.id,
+      environment: Environment.DEV,
+      version: 1
+    }
+  });
+
+  if (!existingVersion) {
+    const campaignWithVariants = await prisma.inAppCampaign.findFirstOrThrow({
+      where: { id: campaign.id },
+      include: { variants: true }
+    });
+
+    await prisma.inAppCampaignVersion.create({
+      data: {
+        campaignId: campaign.id,
+        campaignKey: campaign.key,
+        environment: Environment.DEV,
+        version: 1,
+        authorUserId: "seed-admin",
+        reason: "seed",
+        snapshotJson: toInputJson({
+          campaign: campaignWithVariants,
+          variants: campaignWithVariants.variants
+        })
+      }
+    });
+  }
+};
+
+const inAppHomeTopStackDefinition = (): DecisionStackDefinition => {
+  const definition = createDefaultDecisionStackDefinition({
+    id: "f5f498ba-4303-4ecb-a908-b2d56ff2bf41",
+    key: "inapp_home_top_default",
+    name: "In-App Home Top Default",
+    description: "Pipeline for suppression and home top message selection.",
+    version: 1,
+    status: "ACTIVE"
+  });
+  definition.steps = [
+    {
+      id: "global-suppression",
+      decisionKey: "global_suppression",
+      enabled: true,
+      stopOnMatch: false,
+      stopOnActionTypes: ["suppress"],
+      continueOnNoMatch: true
+    },
+    {
+      id: "consent-gate",
+      decisionKey: "consent_gate",
+      enabled: false,
+      stopOnMatch: false,
+      stopOnActionTypes: ["suppress"],
+      continueOnNoMatch: true
+    },
+    {
+      id: "home-top-pick",
+      decisionKey: "cart_recovery",
+      enabled: true,
+      stopOnMatch: false,
+      stopOnActionTypes: ["suppress"],
+      continueOnNoMatch: true
+    }
+  ];
+  definition.finalOutputMode = "FIRST_NON_NOOP";
+  definition.outputs.default = {
+    actionType: "noop",
+    payload: {}
+  };
+  return definition;
 };
 
 const main = async () => {
@@ -466,6 +596,13 @@ const main = async () => {
   await upsertWbsInstance();
   await upsertWbsMapping();
   await upsertInAppMvpSeed();
+  await upsertDecisionStack({
+    key: "inapp_home_top_default",
+    name: "In-App Home Top Default",
+    description: "Pipeline for suppression and home top message selection.",
+    environment: Environment.DEV,
+    definitionFactory: inAppHomeTopStackDefinition
+  });
 
   const now = new Date();
   const conversionTimestamp = new Date(now);

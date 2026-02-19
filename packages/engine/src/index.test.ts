@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createDefaultDecisionDefinition, type DecisionDefinition } from "@decisioning/dsl";
-import { evaluateDecision, evaluatePredicate } from "./index";
+import {
+  createDefaultDecisionDefinition,
+  createDefaultDecisionStackDefinition,
+  type DecisionDefinition
+} from "@decisioning/dsl";
+import { evaluateDecision, evaluatePredicate, evaluateStack } from "./index";
 
 const baseDefinition = (): DecisionDefinition => {
   const definition = createDefaultDecisionDefinition({
@@ -117,5 +121,200 @@ describe("evaluateDecision", () => {
 
     expect(result.outcome).toBe("NOT_ELIGIBLE");
     expect(result.reasons[0]?.code).toBe("AUDIENCES_ANY_FAILED");
+  });
+});
+
+describe("evaluateStack", () => {
+  const suppressDefinition = (): DecisionDefinition => {
+    const definition = createDefaultDecisionDefinition({
+      id: "8cfaef94-a29d-4d6a-a370-8b241d731020",
+      key: "global_suppression",
+      name: "Global Suppression",
+      version: 1,
+      status: "ACTIVE"
+    });
+    definition.flow.rules = [
+      {
+        id: "suppress",
+        priority: 1,
+        then: {
+          actionType: "suppress",
+          payload: { reason: "GLOBAL_SUPPRESS" }
+        }
+      }
+    ];
+    return definition;
+  };
+
+  const messageDefinition = (): DecisionDefinition => {
+    const definition = createDefaultDecisionDefinition({
+      id: "d8f4c4bc-9f5c-4b7d-ac64-d64018ee0c66",
+      key: "message_offer",
+      name: "Message Offer",
+      version: 1,
+      status: "ACTIVE"
+    });
+    definition.flow.rules = [
+      {
+        id: "message",
+        priority: 1,
+        then: {
+          actionType: "message",
+          payload: { templateId: "offer-v1" }
+        }
+      }
+    ];
+    return definition;
+  };
+
+  it("short-circuits on suppress action type", () => {
+    const stack = createDefaultDecisionStackDefinition({
+      id: "f3032728-cf89-44b3-8d91-b3e9602d52cb",
+      key: "stack_short_circuit",
+      name: "Short Circuit Stack",
+      version: 1,
+      status: "ACTIVE"
+    });
+    stack.steps = [
+      {
+        id: "s1",
+        decisionKey: "global_suppression",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: ["suppress"],
+        continueOnNoMatch: true
+      },
+      {
+        id: "s2",
+        decisionKey: "message_offer",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: ["suppress"],
+        continueOnNoMatch: true
+      }
+    ];
+
+    const result = evaluateStack({
+      stack,
+      profile: { profileId: "p-10", attributes: {}, audiences: [] },
+      context: { now: new Date().toISOString() },
+      decisionsByKey: {
+        global_suppression: suppressDefinition(),
+        message_offer: messageDefinition()
+      }
+    });
+
+    expect(result.final.actionType).toBe("suppress");
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]?.stop).toBe(true);
+  });
+
+  it("evaluates when conditions using exports and remains deterministic", () => {
+    const stack = createDefaultDecisionStackDefinition({
+      id: "8fbb731e-2fc2-43e9-838f-5ba2aadf85b5",
+      key: "stack_when",
+      name: "Conditional Stack",
+      version: 1,
+      status: "ACTIVE"
+    });
+    stack.steps = [
+      {
+        id: "s1",
+        decisionKey: "message_offer",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: ["suppress"],
+        continueOnNoMatch: true
+      },
+      {
+        id: "s2",
+        decisionKey: "global_suppression",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: ["suppress"],
+        continueOnNoMatch: true,
+        when: { op: "eq", left: "exports.suppressed", right: "true" }
+      }
+    ];
+
+    const input = {
+      stack,
+      profile: { profileId: "p-11", attributes: {}, audiences: [] },
+      context: { now: new Date().toISOString() },
+      decisionsByKey: {
+        global_suppression: suppressDefinition(),
+        message_offer: messageDefinition()
+      }
+    };
+
+    const first = evaluateStack(input);
+    const second = evaluateStack(input);
+
+    expect(first.final.actionType).toBe("message");
+    expect(first.steps[1]?.ran).toBe(false);
+    expect(first.steps[1]?.skippedReason).toBe("WHEN_CONDITION_FALSE");
+    expect(first.final.actionType).toBe(second.final.actionType);
+    expect(first.steps.map((step) => step.actionType)).toEqual(second.steps.map((step) => step.actionType));
+  });
+
+  it("returns default output when step limit or total budget is exceeded", () => {
+    const stack = createDefaultDecisionStackDefinition({
+      id: "17fc7ab8-0012-4f44-b0df-f1ff22311fbc",
+      key: "stack_limits",
+      name: "Limits Stack",
+      version: 1,
+      status: "ACTIVE"
+    });
+    stack.limits.maxSteps = 1;
+    stack.steps = [
+      {
+        id: "s1",
+        decisionKey: "message_offer",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: [],
+        continueOnNoMatch: true
+      },
+      {
+        id: "s2",
+        decisionKey: "message_offer",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: [],
+        continueOnNoMatch: true
+      }
+    ];
+
+    const stepLimitResult = evaluateStack({
+      stack,
+      profile: { profileId: "p-12", attributes: {}, audiences: [] },
+      context: { now: new Date().toISOString() },
+      decisionsByKey: {
+        message_offer: messageDefinition()
+      }
+    });
+    expect(stepLimitResult.final.reasonCodes).toContain("STACK_STEP_LIMIT");
+
+    const timeoutStack = {
+      ...stack,
+      limits: {
+        maxSteps: 10,
+        maxTotalMs: 1
+      }
+    };
+    let currentMs = 0;
+    const timeoutResult = evaluateStack({
+      stack: timeoutStack,
+      profile: { profileId: "p-13", attributes: {}, audiences: [] },
+      context: { now: new Date().toISOString() },
+      decisionsByKey: {
+        message_offer: messageDefinition()
+      },
+      nowMs: () => {
+        currentMs += 2;
+        return currentMs;
+      }
+    });
+    expect(timeoutResult.final.reasonCodes).toContain("STACK_TIMEOUT");
   });
 });

@@ -2,26 +2,40 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import EnvironmentSelector from "../environment-selector";
 import { cn } from "../../lib/cn";
 
-const navItems = [
+const coreNavItems = [
   { href: "/overview", label: "Overview" },
   { href: "/decisions", label: "Decisions" },
+  { href: "/stacks", label: "Decision Stacks" },
   { href: "/simulate", label: "Simulator" },
   { href: "/logs", label: "Logs" },
-  { href: "/engagement/inapp/apps", label: "Engagement: Apps" },
-  { href: "/engagement/inapp/placements", label: "Engagement: Placements" },
-  { href: "/engagement/inapp/templates", label: "Engagement: Templates" },
-  { href: "/engagement/inapp/campaigns", label: "Engagement: Campaigns" },
   { href: "/settings/wbs", label: "WBS Settings" },
   { href: "/settings/wbs-mapping", label: "WBS Mapping" }
+];
+
+const engagementNavItems = [
+  { href: "/engagement/inapp/apps", label: "Apps" },
+  { href: "/engagement/inapp/placements", label: "Placements" },
+  { href: "/engagement/inapp/templates", label: "Templates" },
+  { href: "/engagement/inapp/campaigns", label: "Campaigns" },
+  { href: "/engagement/inapp/reports", label: "Reports" },
+  { href: "/engagement/inapp/events", label: "Events" }
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const onEngagementRoute = pathname.startsWith("/engagement/");
+  const [engagementOpen, setEngagementOpen] = useState(onEngagementRoute);
+
+  useEffect(() => {
+    if (onEngagementRoute) {
+      setEngagementOpen(true);
+    }
+  }, [onEngagementRoute]);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1400px] gap-4 px-3 py-4 md:px-6 md:py-6">
@@ -39,7 +53,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="space-y-1 text-sm">
-          {navItems.map((item) => {
+          {coreNavItems.map((item) => {
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
@@ -55,6 +69,41 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+
+          <div className="space-y-1">
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition",
+                onEngagementRoute ? "bg-ink text-white" : "hover:bg-stone-100"
+              )}
+              onClick={() => setEngagementOpen((prev) => !prev)}
+            >
+              <span>Engagement</span>
+              <span className="text-xs">{engagementOpen ? "▾" : "▸"}</span>
+            </button>
+
+            {engagementOpen ? (
+              <div className="space-y-1 pl-3">
+                {engagementNavItems.map((item) => {
+                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        "block rounded-md px-3 py-2 transition",
+                        active ? "bg-ink text-white" : "hover:bg-stone-100"
+                      )}
+                      onClick={() => setSidebarOpen(false)}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </nav>
       </aside>
 

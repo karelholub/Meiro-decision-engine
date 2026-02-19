@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { DecisionVersionSummary, InAppDecideResponse } from "@decisioning/shared";
+import type { DecisionVersionSummary, DecideStackResponse, InAppDecideResponse } from "@decisioning/shared";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
-const savedProfiles = [
+type SimulationProfile = {
+  profileId: string;
+  attributes: Record<string, unknown>;
+  audiences: string[];
+  consents?: string[];
+};
+
+const DEFAULT_SAVED_PROFILES: SimulationProfile[] = [
   {
     profileId: "p-1001",
     attributes: { cartValue: 120, country: "US", churnRisk: "high" },
@@ -26,8 +33,10 @@ const savedProfiles = [
   }
 ];
 
+const SIMULATION_PROFILES_STORAGE_KEY = "decisioning.simulation-profiles.v1";
+
 const defaultSavedProfile =
-  savedProfiles[0] ??
+  DEFAULT_SAVED_PROFILES[0] ??
   ({
     profileId: "inline-profile",
     attributes: {},
@@ -45,10 +54,37 @@ type DecisionRunResult = {
 };
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const toStringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : []);
+
+const toSimulationProfile = (value: unknown): SimulationProfile | null => {
+  if (!isRecord(value) || typeof value.profileId !== "string" || value.profileId.trim().length === 0) {
+    return null;
+  }
+  const attributes = isRecord(value.attributes) ? value.attributes : {};
+  return {
+    profileId: value.profileId,
+    attributes,
+    audiences: toStringArray(value.audiences),
+    consents: toStringArray(value.consents)
+  };
+};
+
+const mergeProfiles = (profiles: SimulationProfile[]): SimulationProfile[] => {
+  const byId = new Map<string, SimulationProfile>();
+  for (const profile of DEFAULT_SAVED_PROFILES) {
+    byId.set(profile.profileId, profile);
+  }
+  for (const profile of profiles) {
+    byId.set(profile.profileId, profile);
+  }
+  return [...byId.values()];
+};
 
 export default function SimulatePage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
-  const [simulatorType, setSimulatorType] = useState<"decision" | "inapp">("decision");
+  const [simulatorType, setSimulatorType] = useState<"decision" | "stack" | "inapp">("decision");
 
   const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
   const [decisionId, setDecisionId] = useState("");
@@ -59,6 +95,8 @@ export default function SimulatePage() {
   const [profileInputMode, setProfileInputMode] = useState<"saved" | "json">("saved");
   const [decideLookupMode, setDecideLookupMode] = useState<"profileId" | "lookup">("profileId");
 
+  const [savedProfiles, setSavedProfiles] = useState<SimulationProfile[]>(DEFAULT_SAVED_PROFILES);
+  const [profilesHydrated, setProfilesHydrated] = useState(false);
   const [savedProfileId, setSavedProfileId] = useState(defaultSavedProfile.profileId);
   const [profileJson, setProfileJson] = useState(pretty(defaultSavedProfile));
   const [profileId, setProfileId] = useState("p-1001");
@@ -72,13 +110,22 @@ export default function SimulatePage() {
   const [inAppLookupAttribute, setInAppLookupAttribute] = useState("email");
   const [inAppLookupValue, setInAppLookupValue] = useState("alex@example.com");
 
+  const [stackKey, setStackKey] = useState("stack_suppress_first");
+  const [stackLookupMode, setStackLookupMode] = useState<"profileId" | "lookup">("profileId");
+  const [stackProfileId, setStackProfileId] = useState("p-1001");
+  const [stackLookupAttribute, setStackLookupAttribute] = useState("email");
+  const [stackLookupValue, setStackLookupValue] = useState("alex@example.com");
+
   const [decisionResult, setDecisionResult] = useState<DecisionRunResult | null>(null);
   const [previousDecisionResult, setPreviousDecisionResult] = useState<DecisionRunResult | null>(null);
   const [inAppResult, setInAppResult] = useState<InAppDecideResponse | null>(null);
   const [previousInAppResult, setPreviousInAppResult] = useState<InAppDecideResponse | null>(null);
+  const [stackResult, setStackResult] = useState<DecideStackResponse | null>(null);
+  const [previousStackResult, setPreviousStackResult] = useState<DecideStackResponse | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveProfileNotice, setSaveProfileNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -87,8 +134,39 @@ export default function SimulatePage() {
 
   const selectedSavedProfile = useMemo(
     () => savedProfiles.find((profile) => profile.profileId === savedProfileId) ?? defaultSavedProfile,
-    [savedProfileId]
+    [savedProfileId, savedProfiles]
   );
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SIMULATION_PROFILES_STORAGE_KEY);
+      if (!raw) {
+        setProfilesHydrated(true);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setProfilesHydrated(true);
+        return;
+      }
+      const restored = parsed
+        .map((entry) => toSimulationProfile(entry))
+        .filter((entry): entry is SimulationProfile => Boolean(entry));
+      if (restored.length > 0) {
+        setSavedProfiles(mergeProfiles(restored));
+      }
+      setProfilesHydrated(true);
+    } catch {
+      setProfilesHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!profilesHydrated) {
+      return;
+    }
+    window.localStorage.setItem(SIMULATION_PROFILES_STORAGE_KEY, JSON.stringify(savedProfiles));
+  }, [profilesHydrated, savedProfiles]);
 
   useEffect(() => {
     const load = async () => {
@@ -112,9 +190,17 @@ export default function SimulatePage() {
   }, [profileInputMode, selectedSavedProfile]);
 
   useEffect(() => {
+    if (savedProfiles.some((profile) => profile.profileId === savedProfileId)) {
+      return;
+    }
+    setSavedProfileId(defaultSavedProfile.profileId);
+  }, [savedProfileId, savedProfiles]);
+
+  useEffect(() => {
     const search = new URLSearchParams(window.location.search);
     const logId = search.get("logId");
-    const logType = search.get("logType") === "inapp" ? "inapp" : "decision";
+    const rawLogType = search.get("logType");
+    const logType = rawLogType === "inapp" || rawLogType === "stack" ? rawLogType : "decision";
     if (!logId) {
       return;
     }
@@ -126,6 +212,7 @@ export default function SimulatePage() {
           | {
               decisionId?: string;
               decisionKey?: string;
+              stackKey?: string;
               appKey?: string;
               placement?: string;
               profileId?: string;
@@ -134,6 +221,22 @@ export default function SimulatePage() {
           | undefined;
 
         if (!replay) {
+          return;
+        }
+
+        if (logType === "stack" || replay.stackKey) {
+          setSimulatorType("stack");
+          if (replay.stackKey) {
+            setStackKey(replay.stackKey);
+          }
+          if (replay.lookup) {
+            setStackLookupMode("lookup");
+            setStackLookupAttribute(replay.lookup.attribute);
+            setStackLookupValue(replay.lookup.value);
+          } else if (replay.profileId) {
+            setStackLookupMode("profileId");
+            setStackProfileId(replay.profileId);
+          }
           return;
         }
 
@@ -182,9 +285,24 @@ export default function SimulatePage() {
     void hydrateFromReplay();
   }, []);
 
+  const resolvedLookupProfile = useMemo(() => {
+    if (executionMode !== "decide" || decideLookupMode !== "lookup") {
+      return null;
+    }
+    if (!isRecord(decisionResult?.trace)) {
+      return null;
+    }
+    const integration = decisionResult.trace.integration;
+    if (!isRecord(integration)) {
+      return null;
+    }
+    return toSimulationProfile(integration.resolvedProfile);
+  }, [decisionResult?.trace, decideLookupMode, executionMode]);
+
   const run = async () => {
     setLoading(true);
     setError(null);
+    setSaveProfileNotice(null);
 
     try {
       if (simulatorType === "decision") {
@@ -219,6 +337,20 @@ export default function SimulatePage() {
 
         setPreviousDecisionResult(decisionResult);
         setDecisionResult(next);
+      } else if (simulatorType === "stack") {
+        const next = await apiClient.decideStack({
+          stackKey: stackKey || undefined,
+          profileId: stackLookupMode === "profileId" ? stackProfileId : undefined,
+          lookup: stackLookupMode === "lookup" ? { attribute: stackLookupAttribute, value: stackLookupValue } : undefined,
+          context: {
+            now: new Date().toISOString(),
+            channel: "web"
+          },
+          debug: true
+        });
+
+        setPreviousStackResult(stackResult);
+        setStackResult(next);
       } else {
         const next = await apiClient.inapp.decide({
           appKey: inAppAppKey,
@@ -240,6 +372,16 @@ export default function SimulatePage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveResolvedLookupProfile = () => {
+    if (!resolvedLookupProfile) {
+      return;
+    }
+    setSavedProfiles((current) => mergeProfiles([...current, resolvedLookupProfile]));
+    setSavedProfileId(resolvedLookupProfile.profileId);
+    setProfileInputMode("saved");
+    setSaveProfileNotice(`Saved profile ${resolvedLookupProfile.profileId} into simulation profiles.`);
   };
 
   const reasonDiff = useMemo(() => {
@@ -280,6 +422,7 @@ export default function SimulatePage() {
             className="rounded-md border border-stone-300 px-2 py-1"
           >
             <option value="decision">Decision</option>
+            <option value="stack">Stack</option>
             <option value="inapp">In-App</option>
           </select>
         </label>
@@ -419,6 +562,58 @@ export default function SimulatePage() {
               </>
             )}
           </>
+        ) : simulatorType === "stack" ? (
+          <>
+            <label className="flex flex-col gap-1 text-sm">
+              Stack key
+              <input
+                value={stackKey}
+                onChange={(event) => setStackKey(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Lookup mode
+              <select
+                value={stackLookupMode}
+                onChange={(event) => setStackLookupMode(event.target.value as "profileId" | "lookup")}
+                className="rounded-md border border-stone-300 px-2 py-1"
+              >
+                <option value="profileId">profileId</option>
+                <option value="lookup">WBS lookup</option>
+              </select>
+            </label>
+
+            {stackLookupMode === "profileId" ? (
+              <label className="flex flex-col gap-1 text-sm">
+                profileId
+                <input
+                  value={stackProfileId}
+                  onChange={(event) => setStackProfileId(event.target.value)}
+                  className="rounded-md border border-stone-300 px-2 py-1"
+                />
+              </label>
+            ) : (
+              <>
+                <label className="flex flex-col gap-1 text-sm">
+                  Lookup attribute
+                  <input
+                    value={stackLookupAttribute}
+                    onChange={(event) => setStackLookupAttribute(event.target.value)}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  Lookup value
+                  <input
+                    value={stackLookupValue}
+                    onChange={(event) => setStackLookupValue(event.target.value)}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  />
+                </label>
+              </>
+            )}
+          </>
         ) : (
           <>
             <label className="flex flex-col gap-1 text-sm">
@@ -503,6 +698,7 @@ export default function SimulatePage() {
       </div>
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {saveProfileNotice ? <p className="text-sm text-emerald-700">{saveProfileNotice}</p> : null}
 
       {simulatorType === "decision" ? (
         <div className="grid gap-4 lg:grid-cols-2">
@@ -535,6 +731,20 @@ export default function SimulatePage() {
                     {pretty(decisionResult.trace)}
                   </pre>
                 </details>
+                {resolvedLookupProfile ? (
+                  <div className="space-y-1 rounded-md border border-stone-200 bg-stone-50 p-2">
+                    <p className="text-xs text-stone-700">
+                      Lookup resolved profile: <strong>{resolvedLookupProfile.profileId}</strong>
+                    </p>
+                    <button
+                      className="rounded border border-stone-300 px-2 py-1 text-xs"
+                      onClick={saveResolvedLookupProfile}
+                      type="button"
+                    >
+                      Save to simulation profiles
+                    </button>
+                  </div>
+                ) : null}
               </>
             ) : null}
           </article>
@@ -573,6 +783,68 @@ export default function SimulatePage() {
                 <p>Added: {reasonDiff.added.length ? reasonDiff.added.join(", ") : "none"}</p>
                 <p>Removed: {reasonDiff.removed.length ? reasonDiff.removed.join(", ") : "none"}</p>
               </div>
+            ) : null}
+          </article>
+        </div>
+      ) : simulatorType === "stack" ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <article className="panel space-y-2 p-4 text-sm">
+            <h3 className="font-semibold">Current Stack response</h3>
+            {!stackResult ? <p className="text-stone-600">No run yet.</p> : null}
+            {stackResult ? (
+              <>
+                <p>
+                  <strong>Final action:</strong> {stackResult.final.actionType}
+                </p>
+                <p>
+                  <strong>Stack:</strong> {stackResult.trace.stackKey} v{stackResult.trace.version}
+                </p>
+                <p>
+                  <strong>Total:</strong> {stackResult.trace.totalMs}ms
+                </p>
+                <div className="flex items-center gap-2">
+                  <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(stackResult)}>
+                    Copy JSON
+                  </button>
+                </div>
+                <details open>
+                  <summary className="cursor-pointer font-medium">Step trace</summary>
+                  <div className="mt-2 space-y-2">
+                    {stackResult.steps.map((step, index) => (
+                      <div key={`${step.decisionKey}-${index}`} className="rounded-md border border-stone-200 bg-stone-50 p-2">
+                        <p>
+                          <strong>{index + 1}. {step.decisionKey}</strong>
+                        </p>
+                        <p>
+                          action={step.actionType} matched={step.matched ? "true" : "false"} stop={step.stop ? "true" : "false"} ms=
+                          {step.ms}
+                        </p>
+                        <p>reasons: {step.reasonCodes?.length ? step.reasonCodes.join(", ") : "none"}</p>
+                        {step.ran === false ? <p>skipped: {step.skippedReason ?? "unknown"}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+                <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{pretty(stackResult)}</pre>
+              </>
+            ) : null}
+          </article>
+
+          <article className="panel space-y-2 p-4 text-sm">
+            <h3 className="font-semibold">Previous Stack response</h3>
+            {!previousStackResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
+            {previousStackResult ? (
+              <>
+                <p>
+                  <strong>Final action:</strong> {previousStackResult.final.actionType}
+                </p>
+                <p>
+                  <strong>Stack:</strong> {previousStackResult.trace.stackKey} v{previousStackResult.trace.version}
+                </p>
+                <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  {pretty(previousStackResult)}
+                </pre>
+              </>
             ) : null}
           </article>
         </div>

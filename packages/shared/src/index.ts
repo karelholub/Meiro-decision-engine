@@ -1,4 +1,4 @@
-import type { DecisionDefinition, DecisionStatus, Outcome, Reason } from "@decisioning/dsl";
+import type { DecisionDefinition, DecisionStackDefinition, DecisionStatus, Outcome, Reason } from "@decisioning/dsl";
 import type { EngineContext, EngineProfile } from "@decisioning/engine";
 
 export type DecisionEnvironment = "DEV" | "STAGE" | "PROD";
@@ -94,17 +94,99 @@ export interface DecisionDetailsResponse {
   }>;
 }
 
+export interface DecisionStackVersionSummary {
+  stackId: string;
+  key: string;
+  environment: DecisionEnvironment;
+  name: string;
+  description: string;
+  version: number;
+  status: DecisionStatus;
+  updatedAt: string;
+  activatedAt?: string | null;
+}
+
+export interface DecisionStackDetailsResponse {
+  stackId: string;
+  key: string;
+  environment: DecisionEnvironment;
+  name: string;
+  description: string;
+  versions: Array<{
+    versionId: string;
+    version: number;
+    status: DecisionStatus;
+    definition: DecisionStackDefinition;
+    updatedAt: string;
+    activatedAt?: string | null;
+  }>;
+}
+
+export interface DecisionStackValidationResponse {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  metrics: {
+    stepCount: number;
+    enabledStepCount: number;
+    usesWhenConditions: boolean;
+    mayShortCircuit: boolean;
+  };
+  formatted?: string | null;
+}
+
+export interface DecideStackRequest {
+  stackKey: string;
+  profileId?: string;
+  lookup?: {
+    attribute: string;
+    value: string;
+  };
+  context?: Partial<EngineContext>;
+  debug?: boolean;
+}
+
+export interface DecideStackResponse {
+  final: {
+    actionType: string;
+    payload: Record<string, unknown>;
+  };
+  steps: Array<{
+    decisionKey: string;
+    matched: boolean;
+    actionType: string;
+    reasonCodes?: string[];
+    stop: boolean;
+    ms: number;
+    ruleId?: string;
+    ran?: boolean;
+    skippedReason?: string;
+  }>;
+  trace: {
+    correlationId: string;
+    stackKey: string;
+    version: number;
+    totalMs: number;
+  };
+  debug?: {
+    exports?: Record<string, unknown>;
+    profileSummary?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+}
+
 export interface LogsQueryResponseItem {
   id: string;
-  logType?: "decision" | "inapp";
+  logType?: "decision" | "stack" | "inapp";
   requestId: string;
   decisionId: string;
+  stackKey?: string;
   version: number;
   profileId: string;
   timestamp: string;
   actionType: string;
-  outcome: Outcome;
-  reasons: Reason[];
+  outcome: Outcome | "STACK_RUN";
+  reasons: Array<{ code: string; detail?: string }>;
   latencyMs: number;
   replayAvailable?: boolean;
   trace?: unknown;
@@ -121,16 +203,17 @@ export interface LogsQueryResponse {
 export interface LogDetailsResponse {
   item: {
     id: string;
-    logType?: "decision" | "inapp";
+    logType?: "decision" | "stack" | "inapp";
     requestId: string;
     decisionId: string;
+    stackKey?: string;
     version: number;
     profileId: string;
     timestamp: string;
     actionType: string;
     payload: Record<string, unknown>;
-    outcome: Outcome;
-    reasons: Reason[];
+    outcome: Outcome | "STACK_RUN";
+    reasons: Array<{ code: string; detail?: string }>;
     latencyMs: number;
     trace?: unknown;
     replayInput?: {
@@ -278,7 +361,7 @@ export interface InAppCampaign {
   key: string;
   name: string;
   description: string | null;
-  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED";
   appKey: string;
   placementKey: string;
   templateKey: string;
@@ -293,10 +376,35 @@ export interface InAppCampaign {
   capsPerProfilePerWeek: number | null;
   eligibilityAudiencesAny: string[];
   tokenBindingsJson: Record<string, unknown>;
+  submittedAt: string | null;
+  lastReviewComment: string | null;
   createdAt: string;
   updatedAt: string;
   activatedAt: string | null;
   variants: InAppCampaignVariant[];
+}
+
+export interface InAppCampaignVersion {
+  id: string;
+  campaignId: string;
+  campaignKey: string;
+  environment: DecisionEnvironment;
+  version: number;
+  authorUserId: string;
+  reason: string | null;
+  createdAt: string;
+  snapshotJson: Record<string, unknown>;
+}
+
+export interface InAppAuditLog {
+  id: string;
+  userId: string;
+  userRole: "VIEWER" | "EDITOR" | "APPROVER" | "ADMIN";
+  action: string;
+  beforeHash: string | null;
+  afterHash: string | null;
+  meta: Record<string, unknown> | null;
+  createdAt: string;
 }
 
 export interface InAppDecideRequest {
@@ -322,4 +430,59 @@ export interface InAppDecideResponse {
     variant_id: string;
   };
   payload: Record<string, unknown>;
+}
+
+export interface InAppEvent {
+  id: string;
+  environment: DecisionEnvironment;
+  eventType: "IMPRESSION" | "CLICK" | "DISMISS";
+  ts: string;
+  appKey: string;
+  placement: string;
+  campaignKey: string;
+  variantKey: string;
+  messageId: string;
+  profileId: string | null;
+  lookupAttribute: string | null;
+  lookupValueHash: string | null;
+  context: Record<string, unknown> | null;
+}
+
+export interface InAppOverviewGroup {
+  campaignKey: string;
+  variantKey: string;
+  placement: string;
+  impressions: number;
+  clicks: number;
+  dismiss: number;
+  ctr: number;
+  ctr_ci_low: number | null;
+  ctr_ci_high: number | null;
+}
+
+export interface InAppOverviewReport {
+  from: string | null;
+  to: string | null;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  uniqueProfilesReached: number;
+  groups: InAppOverviewGroup[];
+}
+
+export interface InAppCampaignSeriesPoint {
+  date: string;
+  variants: Array<{
+    variantKey: string;
+    impressions: number;
+    clicks: number;
+    ctr: number;
+  }>;
+}
+
+export interface InAppCampaignReport {
+  campaignKey: string;
+  from: string | null;
+  to: string | null;
+  series: InAppCampaignSeriesPoint[];
 }

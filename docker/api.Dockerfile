@@ -16,13 +16,12 @@ COPY packages/policies/package.json packages/policies/package.json
 COPY packages/shared/package.json packages/shared/package.json
 COPY packages/wbs-mapping/package.json packages/wbs-mapping/package.json
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm fetch --filter @decisioning/api...
+    pnpm fetch --filter @decisioning/api... \
+    && pnpm install --frozen-lockfile --offline --filter @decisioning/api...
 
 FROM base AS build
 COPY --from=deps /app /app
 COPY . .
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --offline --filter @decisioning/api...
 RUN pnpm --filter @decisioning/api prisma:generate
 RUN pnpm --filter @decisioning/api build
 

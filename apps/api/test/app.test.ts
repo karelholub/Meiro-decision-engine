@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDefaultDecisionDefinition, type DecisionDefinition } from "@decisioning/dsl";
+import {
+  createDefaultDecisionDefinition,
+  createDefaultDecisionStackDefinition,
+  type DecisionDefinition,
+  type DecisionStackDefinition
+} from "@decisioning/dsl";
 import { MockMeiroAdapter, type MeiroAdapter } from "@decisioning/meiro";
 import { buildApp } from "../src/app";
 
@@ -47,6 +52,12 @@ const definitionsByEnvAndKey: Record<string, DecisionDefinition> = {
     key: "cart_recovery",
     actionType: "suppress",
     payload: { reason: "stage-safe-mode" }
+  }),
+  "DEV:global_suppression": buildActiveDecision({
+    id: "f1d3779b-5108-40ea-b4b1-ff35f5bf7a8f",
+    key: "global_suppression",
+    actionType: "suppress",
+    payload: { reason: "global_suppression" }
   }),
   "DEV:consent_policy": buildActiveDecision({
     id: "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9d",
@@ -136,6 +147,35 @@ if (wbsLookupOfferDefinition) {
 
 const definitionsById = Object.fromEntries(Object.values(definitionsByEnvAndKey).map((definition) => [definition.id, definition]));
 
+const buildStackDefinition = (input: {
+  id: string;
+  key: string;
+  name: string;
+  version: number;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  maxSteps?: number;
+  maxTotalMs?: number;
+  finalOutputMode?: "FIRST_NON_NOOP" | "LAST_MATCH" | "EXPLICIT";
+  steps: DecisionStackDefinition["steps"];
+}): DecisionStackDefinition => {
+  const definition = createDefaultDecisionStackDefinition({
+    id: input.id,
+    key: input.key,
+    name: input.name,
+    version: input.version,
+    status: input.status
+  });
+  definition.steps = input.steps;
+  definition.limits.maxSteps = input.maxSteps ?? definition.limits.maxSteps;
+  definition.limits.maxTotalMs = input.maxTotalMs ?? definition.limits.maxTotalMs;
+  definition.finalOutputMode = input.finalOutputMode ?? definition.finalOutputMode;
+  definition.outputs.default = {
+    actionType: "noop",
+    payload: { reason: "stack_default" }
+  };
+  return definition;
+};
+
 const makePrisma = () => {
   const decisionLogCreate = vi.fn().mockResolvedValue({});
   const seenDecisionKeys = new Set<string>();
@@ -216,6 +256,161 @@ const makePrisma = () => {
     }
   ];
 
+  const stackNow = new Date("2026-02-19T00:00:00.000Z");
+  const decisionStacks = [
+    {
+      id: "11111111-1111-4111-8111-111111111111",
+      environment: "DEV",
+      key: "stack_suppress_first",
+      name: "Stack Suppress First",
+      description: "Suppress first pipeline",
+      status: "ACTIVE",
+      version: 1,
+      definitionJson: buildStackDefinition({
+        id: "11111111-1111-4111-8111-111111111111",
+        key: "stack_suppress_first",
+        name: "Stack Suppress First",
+        version: 1,
+        status: "ACTIVE",
+        steps: [
+          {
+            id: "s1",
+            decisionKey: "global_suppression",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: ["suppress"],
+            continueOnNoMatch: true
+          },
+          {
+            id: "s2",
+            decisionKey: "cart_recovery",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: ["suppress"],
+            continueOnNoMatch: true
+          }
+        ]
+      }),
+      createdAt: stackNow,
+      updatedAt: stackNow,
+      activatedAt: stackNow
+    },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      environment: "DEV",
+      key: "stack_when",
+      name: "Stack With Condition",
+      description: "Conditional step pipeline",
+      status: "ACTIVE",
+      version: 1,
+      definitionJson: buildStackDefinition({
+        id: "22222222-2222-4222-8222-222222222222",
+        key: "stack_when",
+        name: "Stack With Condition",
+        version: 1,
+        status: "ACTIVE",
+        steps: [
+          {
+            id: "s1",
+            decisionKey: "cart_recovery",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: [],
+            continueOnNoMatch: true
+          },
+          {
+            id: "s2",
+            decisionKey: "global_suppression",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: ["suppress"],
+            continueOnNoMatch: true,
+            when: {
+              op: "eq",
+              left: "exports.suppressed",
+              right: "true"
+            }
+          }
+        ]
+      }),
+      createdAt: stackNow,
+      updatedAt: stackNow,
+      activatedAt: stackNow
+    },
+    {
+      id: "33333333-3333-4333-8333-333333333333",
+      environment: "DEV",
+      key: "stack_limits",
+      name: "Stack Limits",
+      description: "Step limit pipeline",
+      status: "ACTIVE",
+      version: 1,
+      definitionJson: buildStackDefinition({
+        id: "33333333-3333-4333-8333-333333333333",
+        key: "stack_limits",
+        name: "Stack Limits",
+        version: 1,
+        status: "ACTIVE",
+        maxSteps: 1,
+        maxTotalMs: 250,
+        steps: [
+          {
+            id: "s1",
+            decisionKey: "cart_recovery",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: [],
+            continueOnNoMatch: true
+          },
+          {
+            id: "s2",
+            decisionKey: "cart_recovery",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: [],
+            continueOnNoMatch: true
+          }
+        ]
+      }),
+      createdAt: stackNow,
+      updatedAt: stackNow,
+      activatedAt: stackNow
+    },
+    {
+      id: "44444444-4444-4444-8444-444444444444",
+      environment: "DEV",
+      key: "stack_timeout",
+      name: "Stack Timeout",
+      description: "Timeout pipeline",
+      status: "ACTIVE",
+      version: 1,
+      definitionJson: buildStackDefinition({
+        id: "44444444-4444-4444-8444-444444444444",
+        key: "stack_timeout",
+        name: "Stack Timeout",
+        version: 1,
+        status: "ACTIVE",
+        maxSteps: 10,
+        maxTotalMs: 1,
+        steps: [
+          {
+            id: "s1",
+            decisionKey: "cart_recovery",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: [],
+            continueOnNoMatch: true
+          }
+        ]
+      }),
+      createdAt: stackNow,
+      updatedAt: stackNow,
+      activatedAt: stackNow
+    }
+  ];
+  const decisionStackLogs: Array<Record<string, any>> = [];
+  let decisionStackLogCounter = 1;
+
   const decisionVersionFindFirst = vi.fn().mockImplementation(async (args?: any) => {
     const where = args?.where ?? {};
     const env = where?.decision?.environment ?? "DEV";
@@ -280,6 +475,32 @@ const makePrisma = () => {
     activatedAt: data.activatedAt ?? null
   }));
 
+  const decisionVersionFindMany = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    const env = where?.decision?.environment ?? "DEV";
+    const keys: string[] = where?.decision?.key?.in ?? [];
+    if (!keys.length) {
+      return [];
+    }
+    return keys
+      .map((key) => definitionsByEnvAndKey[`${env}:${key}`])
+      .filter((definition): definition is DecisionDefinition => Boolean(definition))
+      .map((definition) => ({
+        id: `version-${definition.id}`,
+        decisionId: definition.id,
+        version: 1,
+        status: "ACTIVE",
+        definitionJson: definition,
+        decision: {
+          id: definition.id,
+          key: definition.key,
+          environment: env,
+          name: definition.name,
+          description: definition.description
+        }
+      }));
+  });
+
   const decisionFindFirst = vi.fn().mockImplementation(async (args?: any) => {
     const where = args?.where ?? {};
     if (!where.id) {
@@ -313,6 +534,22 @@ const makePrisma = () => {
     }
 
     return base;
+  });
+
+  const decisionFindMany = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    const env = where.environment ?? "DEV";
+    const keys: string[] = where?.key?.in ?? [];
+    return keys
+      .map((key) => definitionsByEnvAndKey[`${env}:${key}`])
+      .filter((definition): definition is DecisionDefinition => Boolean(definition))
+      .map((definition) => ({
+        id: definition.id,
+        key: definition.key,
+        environment: env,
+        name: definition.name,
+        description: definition.description
+      }));
   });
 
   const conversionCreate = vi.fn().mockImplementation(async ({ data }: any) => ({
@@ -425,17 +662,158 @@ const makePrisma = () => {
     return created;
   });
 
+  const decisionStackFindFirst = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    const filtered = decisionStacks
+      .filter((item) => (where.id ? item.id === where.id : true))
+      .filter((item) => (where.environment ? item.environment === where.environment : true))
+      .filter((item) => (where.key ? item.key === where.key : true))
+      .filter((item) => (where.status ? item.status === where.status : true));
+    if (filtered.length === 0) {
+      return null;
+    }
+    if (args?.orderBy?.version === "desc") {
+      return [...filtered].sort((a, b) => b.version - a.version)[0] ?? null;
+    }
+    return filtered[0] ?? null;
+  });
+
+  const decisionStackFindMany = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    const filtered = decisionStacks
+      .filter((item) => (where.id ? item.id === where.id : true))
+      .filter((item) => (where.environment ? item.environment === where.environment : true))
+      .filter((item) => (where.key ? item.key === where.key : true))
+      .filter((item) => (where.status ? item.status === where.status : true))
+      .filter((item) => (where.OR ? where.OR.some((cond: any) => item.key.includes(cond.key?.contains ?? "") || item.name.includes(cond.name?.contains ?? "")) : true));
+    const sorted = [...filtered];
+    if (Array.isArray(args?.orderBy)) {
+      if (args.orderBy.some((entry: any) => entry.updatedAt === "desc")) {
+        sorted.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      }
+    } else if (args?.orderBy?.version === "desc") {
+      sorted.sort((a, b) => b.version - a.version);
+    } else if (args?.orderBy?.timestamp === "desc") {
+      sorted.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    }
+    const skip = args?.skip ?? 0;
+    const take = args?.take ?? sorted.length;
+    return sorted.slice(skip, skip + take);
+  });
+
+  const decisionStackCount = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    return decisionStacks
+      .filter((item) => (where.environment ? item.environment === where.environment : true))
+      .filter((item) => (where.key ? item.key === where.key : true))
+      .filter((item) => (where.status ? item.status === where.status : true)).length;
+  });
+
+  const decisionStackCreate = vi.fn().mockImplementation(async ({ data }: any) => {
+    const created = {
+      id: data.id,
+      environment: data.environment,
+      key: data.key,
+      name: data.name,
+      description: data.description ?? "",
+      status: data.status,
+      version: data.version,
+      definitionJson: data.definitionJson,
+      createdAt: new Date(),
+      updatedAt: data.updatedAt ?? new Date(),
+      activatedAt: data.activatedAt ?? null
+    };
+    decisionStacks.push(created);
+    return created;
+  });
+
+  const decisionStackUpdate = vi.fn().mockImplementation(async ({ where, data }: any) => {
+    const target = decisionStacks.find((item) => item.id === where.id);
+    if (!target) {
+      return null;
+    }
+    Object.assign(target, data, {
+      updatedAt: data.updatedAt ?? new Date()
+    });
+    return target;
+  });
+
+  const decisionStackLogCreate = vi.fn().mockImplementation(async ({ data }: any) => {
+    const nextLogId = `aaaaaaaa-aaaa-4aaa-8aaa-${decisionStackLogCounter.toString(16).padStart(12, "0")}`;
+    decisionStackLogCounter += 1;
+    const created = {
+      id: data.id ?? nextLogId,
+      environment: data.environment,
+      requestId: data.requestId,
+      stackKey: data.stackKey,
+      version: data.version,
+      profileId: data.profileId,
+      lookupAttribute: data.lookupAttribute ?? null,
+      lookupValueHash: data.lookupValueHash ?? null,
+      timestamp: data.timestamp ?? new Date(),
+      finalActionType: data.finalActionType,
+      finalReasonsJson: data.finalReasonsJson ?? [],
+      stepsJson: data.stepsJson ?? [],
+      payloadJson: data.payloadJson ?? {},
+      debugJson: data.debugJson ?? null,
+      replayInputJson: data.replayInputJson ?? null,
+      correlationId: data.correlationId,
+      totalMs: data.totalMs ?? 0
+    };
+    decisionStackLogs.push(created);
+    return created;
+  });
+
   const prisma = {
     decisionVersion: {
       findFirst: decisionVersionFindFirst,
       create: decisionVersionCreate,
-      findMany: vi.fn().mockResolvedValue([]),
+      findMany: decisionVersionFindMany,
       update: vi.fn()
     },
     decision: {
       findFirst: decisionFindFirst,
       update: vi.fn(),
-      create: decisionCreate
+      create: decisionCreate,
+      findMany: decisionFindMany
+    },
+    decisionStack: {
+      findFirst: decisionStackFindFirst,
+      findMany: decisionStackFindMany,
+      count: decisionStackCount,
+      create: decisionStackCreate,
+      update: decisionStackUpdate
+    },
+    decisionStackLog: {
+      create: decisionStackLogCreate,
+      count: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        return decisionStackLogs
+          .filter((item) => (where.environment ? item.environment === where.environment : true))
+          .filter((item) => (where.stackKey ? item.stackKey === where.stackKey : true))
+          .filter((item) => (where.profileId ? item.profileId === where.profileId : true)).length;
+      }),
+      findMany: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        const filtered = decisionStackLogs
+          .filter((item) => (where.environment ? item.environment === where.environment : true))
+          .filter((item) => (where.stackKey ? item.stackKey === where.stackKey : true))
+          .filter((item) => (where.profileId ? item.profileId === where.profileId : true))
+          .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+        const skip = args?.skip ?? 0;
+        const take = args?.take ?? filtered.length;
+        return filtered.slice(skip, skip + take);
+      }),
+      findFirst: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        return (
+          decisionStackLogs.find(
+            (item) =>
+              (where.id ? item.id === where.id : true) &&
+              (where.environment ? item.environment === where.environment : true)
+          ) ?? null
+        );
+      })
     },
     decisionLog: {
       count: vi.fn().mockResolvedValue(0),
@@ -465,10 +843,13 @@ const makePrisma = () => {
   return {
     prisma: prisma as any,
     decisionLogCreate,
+    decisionStackLogCreate,
     decisionVersionFindFirst,
     conversionCreate,
     wbsInstances,
-    wbsMappings
+    wbsMappings,
+    decisionStacks,
+    decisionStackLogs
   };
 };
 
@@ -1279,10 +1660,202 @@ describe("API", () => {
     expect(body.outcome).toBe("ELIGIBLE");
     expect(body.trace.integration.mappingSummary.mappedAttributeKeys).toContain("web_total_spend");
     expect(body.trace.integration.rawWbsResponse.returned_attributes.email_address).toBe("[REDACTED]");
+    expect(body.trace.integration.resolvedProfile.profileId).toBe("cust-lookup-1");
+    expect(body.trace.integration.resolvedProfile.attributes.web_total_spend).toBe(9100);
     expect(wbsAdapter.lookup).toHaveBeenCalledTimes(1);
     expect(decisionLogCreate.mock.calls.at(-1)?.[0]?.data?.profileId).toBe("cust-lookup-1");
     const storedTrace = decisionLogCreate.mock.calls.at(-1)?.[0]?.data?.debugTraceJson;
-    expect(storedTrace?.rawWbsResponse).toBeUndefined();
+    expect(storedTrace?.integration?.rawWbsResponse).toBeUndefined();
+    expect(storedTrace?.integration?.resolvedProfile).toBeUndefined();
+
+    await app.close();
+  });
+
+  it("evaluates /v1/decide/stack with suppress short-circuit and creates stack log", async () => {
+    const { prisma, decisionStackLogCreate } = makePrisma();
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: {
+        getProfile: vi.fn().mockResolvedValue({
+          profileId: "p-suppress",
+          attributes: { cartValue: 120 },
+          audiences: ["global_suppress"],
+          consents: ["email_marketing"]
+        })
+      },
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_suppress_first",
+        profileId: "p-suppress",
+        context: { channel: "web" },
+        debug: true
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.final.actionType).toBe("suppress");
+    expect(body.steps).toHaveLength(1);
+    expect(body.steps[0].decisionKey).toBe("global_suppression");
+    expect(body.steps[0].stop).toBe(true);
+    expect(decisionStackLogCreate).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it("runs stack deterministically and honors when conditions", async () => {
+    const { prisma } = makePrisma();
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_when",
+        profileId: "p-1001",
+        context: { channel: "web" }
+      }
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_when",
+        profileId: "p-1001",
+        context: { channel: "web" }
+      }
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(first.json().final.actionType).toBe("message");
+    expect(second.json().final.actionType).toBe("message");
+    expect(first.json().steps[1].ran).toBe(false);
+    expect(first.json().steps[1].skippedReason).toBe("WHEN_CONDITION_FALSE");
+    expect(first.json().steps.map((step: { actionType: string }) => step.actionType)).toEqual(
+      second.json().steps.map((step: { actionType: string }) => step.actionType)
+    );
+
+    await app.close();
+  });
+
+  it("enforces stack maxSteps and maxTotalMs budgets", async () => {
+    const { prisma, decisionStackLogCreate } = makePrisma();
+    let stackClock = 0;
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      stackNowMs: () => {
+        stackClock += 2;
+        return stackClock;
+      },
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const stepLimit = await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_limits",
+        profileId: "p-1001"
+      }
+    });
+    expect(stepLimit.statusCode).toBe(200);
+    expect(stepLimit.json().final.actionType).toBe("noop");
+
+    const timeout = await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_timeout",
+        profileId: "p-1001"
+      }
+    });
+    expect(timeout.statusCode).toBe(200);
+    expect(timeout.json().final.actionType).toBe("noop");
+
+    const callArgs = decisionStackLogCreate.mock.calls.map((call) => call[0]?.data?.finalReasonsJson);
+    const flattened = callArgs.flatMap((value) => (Array.isArray(value) ? value : []));
+    expect(flattened).toContain("STACK_STEP_LIMIT");
+    expect(flattened).toContain("STACK_TIMEOUT");
+
+    await app.close();
+  });
+
+  it("lists stack logs with type=stack and returns details", async () => {
+    const { prisma } = makePrisma();
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_when",
+        profileId: "p-1001",
+        context: { channel: "web" }
+      }
+    });
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/logs?type=stack",
+      headers: { "x-env": "DEV" }
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().items[0].logType).toBe("stack");
+
+    const logId = list.json().items[0].id;
+    const details = await app.inject({
+      method: "GET",
+      url: `/v1/logs/${logId}?type=stack&includeTrace=true`,
+      headers: { "x-env": "DEV" }
+    });
+    expect(details.statusCode).toBe(200);
+    expect(details.json().item.logType).toBe("stack");
+    expect(Array.isArray(details.json().item.trace)).toBe(true);
 
     await app.close();
   });

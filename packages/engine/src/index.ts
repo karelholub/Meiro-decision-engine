@@ -4,6 +4,7 @@ import type {
   AttributePredicate,
   ConditionNode,
   DecisionDefinition,
+  DecisionStackDefinition,
   DecisionOutput,
   Outcome,
   Reason
@@ -66,6 +67,48 @@ export interface EngineResult {
   trace?: EvaluationTrace | undefined;
 }
 
+export interface StackStepTrace {
+  stepId: string;
+  decisionKey: string;
+  ran: boolean;
+  skippedReason?: string;
+  matched: boolean;
+  ruleId?: string;
+  actionType: ActionType;
+  reasonCodes: string[];
+  output: Record<string, unknown>;
+  ms: number;
+  stop: boolean;
+}
+
+export interface StackFinalResult {
+  actionType: ActionType;
+  payload: Record<string, unknown>;
+  reasonCodes?: string[];
+}
+
+export interface StackEvaluationResult {
+  final: StackFinalResult;
+  steps: StackStepTrace[];
+  exports?: Record<string, unknown>;
+  meta: {
+    stackKey: string;
+    version: number;
+    totalMs: number;
+    correlationId?: string;
+  };
+}
+
+export interface EvaluateStackInput {
+  stack: DecisionStackDefinition;
+  profile: EngineProfile;
+  context: EngineContext;
+  decisionsByKey: Record<string, DecisionDefinition>;
+  historyByDecisionKey?: Record<string, EngineHistory | undefined>;
+  debug?: boolean;
+  nowMs?: () => number;
+}
+
 const getNestedValue = (source: Record<string, unknown>, path: string): unknown => {
   return path.split(".").reduce<unknown>((acc, key) => {
     if (acc && typeof acc === "object" && key in (acc as Record<string, unknown>)) {
@@ -73,6 +116,46 @@ const getNestedValue = (source: Record<string, unknown>, path: string): unknown 
     }
     return undefined;
   }, source);
+};
+
+const parseConditionRight = (value: string | undefined): unknown => {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+const readStackRef = (
+  input: { exports: Record<string, unknown>; context: EngineContext },
+  left: string
+): unknown => {
+  if (left.startsWith("exports.")) {
+    return getNestedValue(input.exports, left.slice("exports.".length));
+  }
+  if (left.startsWith("context.")) {
+    return getNestedValue(input.context as unknown as Record<string, unknown>, left.slice("context.".length));
+  }
+  return undefined;
+};
+
+const evaluateStackWhen = (
+  input: { exports: Record<string, unknown>; context: EngineContext },
+  when: NonNullable<DecisionStackDefinition["steps"][number]["when"]>
+): boolean => {
+  const leftValue = readStackRef(input, when.left);
+  if (when.op === "exists") {
+    return leftValue !== undefined && leftValue !== null;
+  }
+
+  const right = parseConditionRight(when.right);
+  if (when.op === "eq") {
+    return leftValue === right;
+  }
+  return leftValue !== right;
 };
 
 export const evaluatePredicate = (attributes: Record<string, unknown>, predicate: AttributePredicate): boolean => {
@@ -280,6 +363,192 @@ export const evaluateDecision = ({ definition, profile, context, history, debug 
     outcome: "ELIGIBLE",
     reasons: [{ code: "DEFAULT_OUTPUT" }],
     trace: debug ? trace : undefined
+  };
+};
+
+export const evaluateStack = ({
+  stack,
+  profile,
+  context,
+  decisionsByKey,
+  historyByDecisionKey = {},
+  debug = false,
+  nowMs
+}: EvaluateStackInput): StackEvaluationResult => {
+  const hrNow = () => Number(process.hrtime.bigint() / 1000000n);
+  const readNow = nowMs ?? hrNow;
+  const startedMs = readNow();
+  const stepHardCap = 20;
+  const maxSteps = Math.min(stack.limits.maxSteps, stepHardCap);
+  const maxTotalMs = stack.limits.maxTotalMs;
+
+  const exportsState: Record<string, unknown> = { suppressed: false };
+  const traces: StackStepTrace[] = [];
+
+  let evaluatedSteps = 0;
+  let timeout = false;
+  let stepLimitHit = false;
+  let firstNonNoop: StackFinalResult | null = null;
+  let lastMatch: StackFinalResult | null = null;
+
+  const elapsedMs = () => Math.max(0, readNow() - startedMs);
+
+  for (const step of stack.steps) {
+    if (!step.enabled) {
+      traces.push({
+        stepId: step.id,
+        decisionKey: step.decisionKey,
+        ran: false,
+        skippedReason: "STEP_DISABLED",
+        matched: false,
+        actionType: "noop",
+        reasonCodes: ["STEP_DISABLED"],
+        output: {},
+        ms: 0,
+        stop: false
+      });
+      continue;
+    }
+
+    if (evaluatedSteps >= maxSteps) {
+      stepLimitHit = true;
+      break;
+    }
+
+    if (elapsedMs() >= maxTotalMs) {
+      timeout = true;
+      break;
+    }
+
+    if (step.when) {
+      const conditionOk = evaluateStackWhen({ exports: exportsState, context }, step.when);
+      if (!conditionOk) {
+        traces.push({
+          stepId: step.id,
+          decisionKey: step.decisionKey,
+          ran: false,
+          skippedReason: "WHEN_CONDITION_FALSE",
+          matched: false,
+          actionType: "noop",
+          reasonCodes: ["WHEN_CONDITION_FALSE"],
+          output: {},
+          ms: 0,
+          stop: false
+        });
+        continue;
+      }
+    }
+
+    const definition = decisionsByKey[step.decisionKey];
+    if (!definition) {
+      traces.push({
+        stepId: step.id,
+        decisionKey: step.decisionKey,
+        ran: false,
+        skippedReason: "DECISION_NOT_FOUND",
+        matched: false,
+        actionType: "noop",
+        reasonCodes: ["DECISION_NOT_FOUND"],
+        output: {},
+        ms: 0,
+        stop: false
+      });
+      continue;
+    }
+
+    const stepStartedMs = readNow();
+    const result = evaluateDecision({
+      definition,
+      profile,
+      context,
+      history: historyByDecisionKey[step.decisionKey],
+      debug
+    });
+    const stepMs = Math.max(0, readNow() - stepStartedMs);
+    evaluatedSteps += 1;
+
+    const matched = Boolean(result.selectedRuleId);
+    const reasonCodes = result.reasons.map((reason) => reason.code);
+    const summary = {
+      matched,
+      actionType: result.actionType,
+      payload: result.payload,
+      reasonCodes
+    };
+
+    exportsState[step.decisionKey] = summary;
+    exportsState.last = summary;
+    if (result.actionType === "suppress") {
+      exportsState.suppressed = true;
+    }
+
+    if (stack.finalOutputMode === "FIRST_NON_NOOP") {
+      if (!firstNonNoop && result.actionType !== "noop") {
+        firstNonNoop = {
+          actionType: result.actionType,
+          payload: result.payload,
+          reasonCodes
+        };
+      }
+    } else if (stack.finalOutputMode === "LAST_MATCH") {
+      if (matched) {
+        lastMatch = {
+          actionType: result.actionType,
+          payload: result.payload,
+          reasonCodes
+        };
+      }
+    }
+
+    const stop =
+      (step.stopOnMatch && matched) ||
+      step.stopOnActionTypes.includes(result.actionType) ||
+      (!step.continueOnNoMatch && !matched);
+
+    traces.push({
+      stepId: step.id,
+      decisionKey: step.decisionKey,
+      ran: true,
+      matched,
+      ruleId: result.selectedRuleId,
+      actionType: result.actionType,
+      reasonCodes,
+      output: result.payload,
+      ms: stepMs,
+      stop
+    });
+
+    if (stop) {
+      break;
+    }
+  }
+
+  const totalMs = elapsedMs();
+  const defaultFinal: StackFinalResult = {
+    actionType: stack.outputs.default.actionType,
+    payload: stack.outputs.default.payload,
+    reasonCodes: [
+      timeout ? "STACK_TIMEOUT" : stepLimitHit ? "STACK_STEP_LIMIT" : "STACK_DEFAULT_OUTPUT"
+    ]
+  };
+
+  const final =
+    timeout || stepLimitHit || stack.finalOutputMode === "EXPLICIT"
+      ? defaultFinal
+      : stack.finalOutputMode === "LAST_MATCH"
+        ? (lastMatch ?? defaultFinal)
+        : (firstNonNoop ?? defaultFinal);
+
+  return {
+    final,
+    steps: traces,
+    exports: debug ? exportsState : undefined,
+    meta: {
+      stackKey: stack.key,
+      version: stack.version,
+      totalMs,
+      correlationId: context.requestId
+    }
   };
 };
 

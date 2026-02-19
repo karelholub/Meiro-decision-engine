@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import type { InAppApplication, InAppCampaign, InAppPlacement, InAppTemplate } from "@decisioning/shared";
+import { useEffect, useMemo, useState } from "react";
+import type { InAppApplication, InAppAuditLog, InAppCampaign, InAppCampaignVersion, InAppPlacement, InAppTemplate } from "@decisioning/shared";
 import { apiClient } from "../../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
 
@@ -49,7 +49,7 @@ export default function InAppCampaignEditPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"basic" | "variants" | "bindings">("basic");
+  const [activeTab, setActiveTab] = useState<"basic" | "variants" | "bindings" | "governance">("basic");
 
   const [campaign, setCampaign] = useState<InAppCampaign | null>(null);
   const [apps, setApps] = useState<InAppApplication[]>([]);
@@ -59,7 +59,7 @@ export default function InAppCampaignEditPage() {
   const [key, setKey] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [status, setStatus] = useState<"DRAFT" | "ACTIVE" | "ARCHIVED">("DRAFT");
+  const [status, setStatus] = useState<"DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED">("DRAFT");
   const [appKey, setAppKey] = useState("");
   const [placementKey, setPlacementKey] = useState("");
   const [templateKey, setTemplateKey] = useState("");
@@ -76,6 +76,10 @@ export default function InAppCampaignEditPage() {
 
   const [variants, setVariants] = useState<VariantEditor[]>([]);
   const [bindings, setBindings] = useState<BindingEditor[]>([]);
+  const [versions, setVersions] = useState<InAppCampaignVersion[]>([]);
+  const [auditLogs, setAuditLogs] = useState<InAppAuditLog[]>([]);
+  const [reviewComment, setReviewComment] = useState("");
+  const [rollbackVersion, setRollbackVersion] = useState("");
 
   const load = async () => {
     if (!campaignId) {
@@ -84,11 +88,13 @@ export default function InAppCampaignEditPage() {
 
     setLoading(true);
     try {
-      const [campaignResponse, appsResponse, placementsResponse, templatesResponse] = await Promise.all([
+      const [campaignResponse, appsResponse, placementsResponse, templatesResponse, versionsResponse, auditResponse] = await Promise.all([
         apiClient.inapp.campaigns.get(campaignId),
         apiClient.inapp.apps.list(),
         apiClient.inapp.placements.list(),
-        apiClient.inapp.templates.list()
+        apiClient.inapp.templates.list(),
+        apiClient.inapp.campaigns.versions(campaignId),
+        apiClient.inapp.campaigns.audit(campaignId, 50)
       ]);
 
       const item = campaignResponse.item;
@@ -96,6 +102,8 @@ export default function InAppCampaignEditPage() {
       setApps(appsResponse.items);
       setPlacements(placementsResponse.items);
       setTemplates(templatesResponse.items);
+      setVersions(versionsResponse.items);
+      setAuditLogs(auditResponse.items);
 
       setKey(item.key);
       setName(item.name);
@@ -129,6 +137,7 @@ export default function InAppCampaignEditPage() {
           binding: typeof binding === "string" ? binding : JSON.stringify(binding)
         }))
       );
+      setRollbackVersion(versionsResponse.items[0] ? String(versionsResponse.items[0].version) : "");
 
       setError(null);
       setMessage(null);
@@ -147,6 +156,28 @@ export default function InAppCampaignEditPage() {
   useEffect(() => {
     void load();
   }, [campaignId, environment]);
+
+  const versionDiffPreview = useMemo(() => {
+    const latest = versions[0];
+    const previous = versions[1];
+    if (!latest || !previous) {
+      return "Need at least 2 versions to show diff.";
+    }
+
+    const latestText = JSON.stringify(latest.snapshotJson, null, 2);
+    const previousText = JSON.stringify(previous.snapshotJson, null, 2);
+    if (latestText === previousText) {
+      return `No snapshot changes between v${latest.version} and v${previous.version}.`;
+    }
+
+    return [
+      `v${latest.version} (${latest.createdAt})`,
+      latestText,
+      "",
+      `v${previous.version} (${previous.createdAt})`,
+      previousText
+    ].join("\n");
+  }, [versions]);
 
   const buildPayload = () => {
     return {
@@ -259,6 +290,58 @@ export default function InAppCampaignEditPage() {
     }
   };
 
+  const submitForApproval = async () => {
+    if (!campaignId) {
+      return;
+    }
+    try {
+      await apiClient.inapp.campaigns.submitForApproval(campaignId, reviewComment || undefined);
+      setMessage("Campaign submitted for approval.");
+      await load();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Submit for approval failed");
+    }
+  };
+
+  const approveAndActivate = async () => {
+    if (!campaignId) {
+      return;
+    }
+    try {
+      await apiClient.inapp.campaigns.approveAndActivate(campaignId, reviewComment || undefined);
+      setMessage("Campaign approved and activated.");
+      await load();
+    } catch (approveError) {
+      setError(approveError instanceof Error ? approveError.message : "Approve and activate failed");
+    }
+  };
+
+  const rejectToDraft = async () => {
+    if (!campaignId) {
+      return;
+    }
+    try {
+      await apiClient.inapp.campaigns.rejectToDraft(campaignId, reviewComment || undefined);
+      setMessage("Campaign moved back to draft.");
+      await load();
+    } catch (rejectError) {
+      setError(rejectError instanceof Error ? rejectError.message : "Reject to draft failed");
+    }
+  };
+
+  const rollback = async () => {
+    if (!campaignId || !rollbackVersion.trim()) {
+      return;
+    }
+    try {
+      await apiClient.inapp.campaigns.rollback(campaignId, Number.parseInt(rollbackVersion, 10));
+      setMessage(`Rolled back to version ${rollbackVersion}.`);
+      await load();
+    } catch (rollbackError) {
+      setError(rollbackError instanceof Error ? rollbackError.message : "Rollback failed");
+    }
+  };
+
   return (
     <section className="space-y-4">
       <header className="panel p-4">
@@ -294,6 +377,12 @@ export default function InAppCampaignEditPage() {
         >
           Token Bindings
         </button>
+        <button
+          className={`rounded-md px-3 py-2 ${activeTab === "governance" ? "bg-ink text-white" : "border border-stone-300"}`}
+          onClick={() => setActiveTab("governance")}
+        >
+          Governance
+        </button>
       </div>
 
       {activeTab === "basic" ? (
@@ -310,10 +399,11 @@ export default function InAppCampaignEditPage() {
             Status
             <select
               value={status}
-              onChange={(event) => setStatus(event.target.value as "DRAFT" | "ACTIVE" | "ARCHIVED")}
+              onChange={(event) => setStatus(event.target.value as "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED")}
               className="rounded-md border border-stone-300 px-2 py-1"
             >
               <option value="DRAFT">DRAFT</option>
+              <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
               <option value="ACTIVE">ACTIVE</option>
               <option value="ARCHIVED">ARCHIVED</option>
             </select>
@@ -597,6 +687,88 @@ export default function InAppCampaignEditPage() {
           >
             Add Binding
           </button>
+        </article>
+      ) : null}
+
+      {activeTab === "governance" ? (
+        <article className="panel space-y-4 p-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="flex flex-col gap-1 text-sm md:col-span-2">
+              Review Comment
+              <input
+                value={reviewComment}
+                onChange={(event) => setReviewComment(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                placeholder="Optional reviewer note"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Rollback Version
+              <input
+                value={rollbackVersion}
+                onChange={(event) => setRollbackVersion(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                placeholder="e.g. 3"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void submitForApproval()}>
+              Submit For Approval
+            </button>
+            <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void approveAndActivate()}>
+              Approve + Activate
+            </button>
+            <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void rejectToDraft()}>
+              Reject To Draft
+            </button>
+            <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void rollback()}>
+              Rollback
+            </button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-md border border-stone-200">
+              <p className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Versions</p>
+              <div className="max-h-72 overflow-auto p-3">
+                <ul className="space-y-2 text-sm">
+                  {versions.map((version) => (
+                    <li key={version.id} className="rounded border border-stone-200 p-2">
+                      <p className="font-medium">v{version.version}</p>
+                      <p className="text-xs text-stone-600">
+                        {new Date(version.createdAt).toLocaleString()} · {version.authorUserId}
+                      </p>
+                      <p className="text-xs text-stone-700">{version.reason ?? "-"}</p>
+                    </li>
+                  ))}
+                </ul>
+                {versions.length === 0 ? <p className="text-sm text-stone-600">No versions yet.</p> : null}
+              </div>
+            </div>
+
+            <div className="rounded-md border border-stone-200">
+              <p className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Snapshot Diff (Latest vs Previous)</p>
+              <pre className="max-h-72 overflow-auto p-3 text-xs">{versionDiffPreview}</pre>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-stone-200">
+            <p className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Audit Log</p>
+            <div className="max-h-72 overflow-auto p-3">
+              <ul className="space-y-2 text-sm">
+                {auditLogs.map((entry) => (
+                  <li key={entry.id} className="rounded border border-stone-200 p-2">
+                    <p className="font-medium">{entry.action}</p>
+                    <p className="text-xs text-stone-600">
+                      {entry.userId} ({entry.userRole}) · {new Date(entry.createdAt).toLocaleString()}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              {auditLogs.length === 0 ? <p className="text-sm text-stone-600">No audit events yet.</p> : null}
+            </div>
+          </div>
         </article>
       ) : null}
 

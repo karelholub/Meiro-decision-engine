@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { Environment, InAppCampaignStatus, Prisma, type PrismaClient } from "@prisma/client";
+import {
+  Environment,
+  InAppCampaignStatus,
+  InAppEventType,
+  InAppUserRole,
+  Prisma,
+  type PrismaClient
+} from "@prisma/client";
 import { DecisionDefinitionSchema } from "@decisioning/dsl";
 import { evaluateDecision, type EngineProfile } from "@decisioning/engine";
 import type { MeiroAdapter, WbsLookupAdapter, WbsLookupResponse } from "@decisioning/meiro";
@@ -128,6 +135,50 @@ const inAppCampaignIdParamsSchema = z.object({
   id: z.string().uuid()
 });
 
+const inAppCampaignActionBodySchema = z.object({
+  comment: z.string().optional()
+});
+
+const inAppCampaignRollbackBodySchema = z.object({
+  version: z.number().int().positive()
+});
+
+const inAppCampaignPromoteBodySchema = z.object({
+  targetEnvironment: z.nativeEnum(Environment)
+});
+
+const inAppEventsBodySchema = z.object({
+  eventType: z.nativeEnum(InAppEventType),
+  ts: z.string().datetime().optional(),
+  appKey: z.string().min(1),
+  placement: z.string().min(1),
+  tracking: z.object({
+    campaign_id: z.string().min(1),
+    message_id: z.string().min(1),
+    variant_id: z.string().min(1)
+  }),
+  profileId: z.string().min(1).optional(),
+  lookup: z
+    .object({
+      attribute: z.string().min(1),
+      value: z.string().min(1)
+    })
+    .optional(),
+  context: z.record(z.unknown()).optional()
+});
+
+const inAppReportQuerySchema = z.object({
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  appKey: z.string().optional(),
+  placement: z.string().optional(),
+  campaignKey: z.string().optional()
+});
+
+const inAppCampaignKeyParamsSchema = z.object({
+  key: z.string().min(1)
+});
+
 const inAppDecideSchema = z
   .object({
     appKey: z.string().min(1),
@@ -221,6 +272,105 @@ const deterministicBucket = (seed: string): number => {
   const value = Number.parseInt(hash.slice(0, 8), 16);
   return value % 100;
 };
+
+const hashSha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+const stableStringify = (value: unknown): string => {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(",")}}`;
+};
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, timeoutError: string): Promise<T> => {
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(timeoutError)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+};
+
+const toRole = (raw: unknown): InAppUserRole => {
+  if (typeof raw !== "string") {
+    return InAppUserRole.ADMIN;
+  }
+  const normalized = raw.trim().toUpperCase();
+  if (normalized === "VIEWER") return InAppUserRole.VIEWER;
+  if (normalized === "EDITOR") return InAppUserRole.EDITOR;
+  if (normalized === "APPROVER") return InAppUserRole.APPROVER;
+  return InAppUserRole.ADMIN;
+};
+
+const roleRank: Record<InAppUserRole, number> = {
+  VIEWER: 1,
+  EDITOR: 2,
+  APPROVER: 3,
+  ADMIN: 4
+};
+
+const getActorFromHeaders = (request: FastifyRequest): { userId: string; role: InAppUserRole } => {
+  const userHeader = request.headers["x-user-id"];
+  const roleHeader = request.headers["x-user-role"];
+  const userId = typeof userHeader === "string" && userHeader.trim().length > 0 ? userHeader.trim() : "system-admin";
+  const role = toRole(roleHeader);
+  return { userId, role };
+};
+
+const hasAnyRole = (role: InAppUserRole, accepted: InAppUserRole[]): boolean => {
+  const current = roleRank[role];
+  const threshold = Math.min(...accepted.map((entry) => roleRank[entry]));
+  return current >= threshold;
+};
+
+class InMemoryRateLimiter {
+  private readonly buckets = new Map<string, { count: number; resetAtMs: number }>();
+
+  check(input: { key: string; limit: number; windowMs: number; nowMs?: number }): { allowed: boolean; retryAfterMs: number } {
+    const nowMs = input.nowMs ?? Date.now();
+    const existing = this.buckets.get(input.key);
+
+    if (!existing || existing.resetAtMs <= nowMs) {
+      this.buckets.set(input.key, {
+        count: 1,
+        resetAtMs: nowMs + input.windowMs
+      });
+      return { allowed: true, retryAfterMs: 0 };
+    }
+
+    if (existing.count >= input.limit) {
+      return {
+        allowed: false,
+        retryAfterMs: Math.max(0, existing.resetAtMs - nowMs)
+      };
+    }
+
+    existing.count += 1;
+    return {
+      allowed: true,
+      retryAfterMs: 0
+    };
+  }
+}
+
+const perApiKeyLimiter = new InMemoryRateLimiter();
+const perAppKeyLimiter = new InMemoryRateLimiter();
+
+const INAPP_RATE_WINDOW_MS = Number.parseInt(process.env.INAPP_RATE_LIMIT_WINDOW_MS ?? "60000", 10);
+const INAPP_RATE_PER_API_KEY = Number.parseInt(process.env.INAPP_RATE_LIMIT_PER_API_KEY ?? "240", 10);
+const INAPP_RATE_PER_APP_KEY = Number.parseInt(process.env.INAPP_RATE_LIMIT_PER_APP_KEY ?? "360", 10);
+const INAPP_WBS_TIMEOUT_MS = Number.parseInt(process.env.INAPP_WBS_TIMEOUT_MS ?? "800", 10);
 
 const allowedTransforms = new Set<WbsTransform>(["takeFirst", "takeAll", "parseJsonIfString", "coerceNumber"]);
 
@@ -420,6 +570,8 @@ const serializeCampaign = (item: {
   capsPerProfilePerWeek: number | null;
   eligibilityAudiencesAny: unknown;
   tokenBindingsJson: unknown;
+  submittedAt: Date | null;
+  lastReviewComment: string | null;
   createdAt: Date;
   updatedAt: Date;
   activatedAt: Date | null;
@@ -453,6 +605,8 @@ const serializeCampaign = (item: {
     capsPerProfilePerWeek: item.capsPerProfilePerWeek,
     eligibilityAudiencesAny: Array.isArray(item.eligibilityAudiencesAny) ? item.eligibilityAudiencesAny : [],
     tokenBindingsJson: isObject(item.tokenBindingsJson) ? item.tokenBindingsJson : {},
+    submittedAt: item.submittedAt?.toISOString() ?? null,
+    lastReviewComment: item.lastReviewComment,
     createdAt: item.createdAt.toISOString(),
     updatedAt: item.updatedAt.toISOString(),
     activatedAt: item.activatedAt?.toISOString() ?? null,
@@ -618,6 +772,172 @@ const buildNoShowResponse = (input: {
   };
 };
 
+const withOptionalDebug = (
+  response: InAppDecideResponse,
+  debugEnabled: boolean,
+  debugPayload: Record<string, unknown> | undefined
+): InAppDecideResponse => {
+  if (!debugEnabled || !debugPayload) {
+    return response;
+  }
+  const nextPayload = { ...response.payload, debug: debugPayload };
+  return {
+    ...response,
+    payload: nextPayload
+  };
+};
+
+const stripDebugPayload = (payload: Record<string, unknown>) => {
+  const next = { ...payload };
+  delete next.debug;
+  return next;
+};
+
+const computeCacheExpiry = (nowDate: Date, ttlSeconds: number): Date => {
+  if (ttlSeconds <= 0) {
+    return new Date(nowDate.getTime());
+  }
+  return new Date(nowDate.getTime() + ttlSeconds * 1000);
+};
+
+const parseDateRange = (query: { from?: string; to?: string }) => {
+  const from = query.from ? new Date(query.from) : undefined;
+  const to = query.to ? new Date(query.to) : undefined;
+  return {
+    from: from && !Number.isNaN(from.getTime()) ? from : undefined,
+    to: to && !Number.isNaN(to.getTime()) ? to : undefined
+  };
+};
+
+const dayBucket = (date: Date): string => {
+  return date.toISOString().slice(0, 10);
+};
+
+const wilsonInterval = (clicks: number, impressions: number): { low: number; high: number } | null => {
+  if (impressions < 30) {
+    return null;
+  }
+  const z = 1.96;
+  const p = clicks / impressions;
+  const denominator = 1 + (z * z) / impressions;
+  const center = (p + (z * z) / (2 * impressions)) / denominator;
+  const margin =
+    (z *
+      Math.sqrt((p * (1 - p)) / impressions + (z * z) / (4 * impressions * impressions))) /
+    denominator;
+  return {
+    low: Math.max(0, center - margin),
+    high: Math.min(1, center + margin)
+  };
+};
+
+const toCsv = (rows: Array<Record<string, string | number | null>>) => {
+  if (rows.length === 0) {
+    return "campaignKey,variantKey,placement,impressions,clicks,dismiss,ctr,ctr_ci_low,ctr_ci_high\n";
+  }
+  const headers = Object.keys(rows[0] ?? {});
+  const escape = (value: string | number | null) => {
+    if (value === null) {
+      return "";
+    }
+    const stringValue = String(value);
+    if (stringValue.includes(",") || stringValue.includes("\"") || stringValue.includes("\n")) {
+      return `"${stringValue.replace(/"/g, "\"\"")}"`;
+    }
+    return stringValue;
+  };
+  const lines = rows.map((row) => headers.map((key) => escape(row[key] ?? null)).join(","));
+  return `${headers.join(",")}\n${lines.join("\n")}\n`;
+};
+
+interface CampaignSnapshot {
+  campaign: {
+    key: string;
+    name: string;
+    description: string | null;
+    status: InAppCampaignStatus;
+    appKey: string;
+    placementKey: string;
+    templateKey: string;
+    priority: number;
+    ttlSeconds: number;
+    startAt: string | null;
+    endAt: string | null;
+    holdoutEnabled: boolean;
+    holdoutPercentage: number;
+    holdoutSalt: string;
+    capsPerProfilePerDay: number | null;
+    capsPerProfilePerWeek: number | null;
+    eligibilityAudiencesAny: string[];
+    tokenBindingsJson: Record<string, unknown>;
+    submittedAt: string | null;
+    lastReviewComment: string | null;
+  };
+  variants: Array<{
+    variantKey: string;
+    weight: number;
+    contentJson: Record<string, unknown>;
+  }>;
+}
+
+const makeCampaignSnapshot = (campaign: {
+  key: string;
+  name: string;
+  description: string | null;
+  status: InAppCampaignStatus;
+  appKey: string;
+  placementKey: string;
+  templateKey: string;
+  priority: number;
+  ttlSeconds: number;
+  startAt: Date | null;
+  endAt: Date | null;
+  holdoutEnabled: boolean;
+  holdoutPercentage: number;
+  holdoutSalt: string;
+  capsPerProfilePerDay: number | null;
+  capsPerProfilePerWeek: number | null;
+  eligibilityAudiencesAny: unknown;
+  tokenBindingsJson: unknown;
+  submittedAt: Date | null;
+  lastReviewComment: string | null;
+  variants: Array<{
+    variantKey: string;
+    weight: number;
+    contentJson: unknown;
+  }>;
+}): CampaignSnapshot => {
+  return {
+    campaign: {
+      key: campaign.key,
+      name: campaign.name,
+      description: campaign.description,
+      status: campaign.status,
+      appKey: campaign.appKey,
+      placementKey: campaign.placementKey,
+      templateKey: campaign.templateKey,
+      priority: campaign.priority,
+      ttlSeconds: campaign.ttlSeconds,
+      startAt: campaign.startAt?.toISOString() ?? null,
+      endAt: campaign.endAt?.toISOString() ?? null,
+      holdoutEnabled: campaign.holdoutEnabled,
+      holdoutPercentage: campaign.holdoutPercentage,
+      holdoutSalt: campaign.holdoutSalt,
+      capsPerProfilePerDay: campaign.capsPerProfilePerDay,
+      capsPerProfilePerWeek: campaign.capsPerProfilePerWeek,
+      eligibilityAudiencesAny: Array.isArray(campaign.eligibilityAudiencesAny) ? (campaign.eligibilityAudiencesAny as string[]) : [],
+      tokenBindingsJson: isObject(campaign.tokenBindingsJson) ? campaign.tokenBindingsJson : {},
+      submittedAt: campaign.submittedAt?.toISOString() ?? null,
+      lastReviewComment: campaign.lastReviewComment
+    },
+    variants: campaign.variants.map((variant) => ({
+      variantKey: variant.variantKey,
+      weight: variant.weight,
+      contentJson: isObject(variant.contentJson) ? variant.contentJson : {}
+    }))
+  };
+};
+
 export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
   const {
     app,
@@ -634,6 +954,97 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     fetchActiveWbsMapping,
     redactSensitiveFields
   } = deps;
+
+  const ensureRole = async (request: FastifyRequest, reply: FastifyReply, accepted: InAppUserRole[]) => {
+    const actor = getActorFromHeaders(request);
+    if (!hasAnyRole(actor.role, accepted)) {
+      buildResponseError(reply, 403, "Forbidden");
+      return null;
+    }
+
+    await prisma.inAppUser.upsert({
+      where: { id: actor.userId },
+      update: {
+        role: actor.role,
+        isActive: true
+      },
+      create: {
+        id: actor.userId,
+        role: actor.role,
+        isActive: true
+      }
+    });
+
+    return actor;
+  };
+
+  const recordAudit = async (input: {
+    environment: Environment;
+    userId: string;
+    role: InAppUserRole;
+    action: string;
+    entityType: string;
+    entityId: string;
+    beforeValue?: unknown;
+    afterValue?: unknown;
+    meta?: Record<string, unknown>;
+  }) => {
+    await prisma.inAppAuditLog.create({
+      data: {
+        environment: input.environment,
+        userId: input.userId,
+        userRole: input.role,
+        action: input.action,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        beforeHash: input.beforeValue !== undefined ? hashSha256(stableStringify(input.beforeValue)) : null,
+        afterHash: input.afterValue !== undefined ? hashSha256(stableStringify(input.afterValue)) : null,
+        metaJson: input.meta ? toInputJson(input.meta) : Prisma.JsonNull
+      }
+    });
+  };
+
+  const createCampaignVersionSnapshot = async (input: {
+    campaignId: string;
+    environment: Environment;
+    authorUserId: string;
+    reason?: string;
+  }) => {
+    const campaign = await prisma.inAppCampaign.findFirst({
+      where: {
+        id: input.campaignId,
+        environment: input.environment
+      },
+      include: {
+        variants: true
+      }
+    });
+    if (!campaign) {
+      return null;
+    }
+
+    const maxVersion = await prisma.inAppCampaignVersion.findFirst({
+      where: {
+        campaignKey: campaign.key,
+        environment: input.environment
+      },
+      orderBy: { version: "desc" }
+    });
+    const nextVersion = (maxVersion?.version ?? 0) + 1;
+    const snapshot = makeCampaignSnapshot(campaign);
+
+    return prisma.inAppCampaignVersion.create({
+      data: {
+        campaignId: campaign.id,
+        campaignKey: campaign.key,
+        environment: input.environment,
+        version: nextVersion,
+        snapshotJson: toInputJson(snapshot),
+        authorUserId: input.authorUserId,
+        reason: input.reason
+      }
+    });
+  };
 
   app.get("/v1/inapp/apps", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
@@ -656,6 +1067,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
 
     const parsed = inAppApplicationCreateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -670,6 +1085,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           name: parsed.data.name,
           platforms: parsed.data.platforms ? toInputJson(parsed.data.platforms) : Prisma.JsonNull
         }
+      });
+
+      await recordAudit({
+        environment,
+        userId: actor.userId,
+        role: actor.role,
+        action: "create_application",
+        entityType: "inapp_application",
+        entityId: created.id,
+        afterValue: created
       });
 
       return reply.code(201).send({
@@ -704,6 +1129,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
 
     const parsed = inAppPlacementCreateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -722,6 +1151,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
             : Prisma.JsonNull,
           defaultTtlSeconds: parsed.data.defaultTtlSeconds
         }
+      });
+
+      await recordAudit({
+        environment,
+        userId: actor.userId,
+        role: actor.role,
+        action: "create_placement",
+        entityType: "inapp_placement",
+        entityId: created.id,
+        afterValue: created
       });
 
       return reply.code(201).send({
@@ -756,6 +1195,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
 
     const parsed = inAppTemplateCreateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -775,6 +1218,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           name: parsed.data.name,
           schemaJson: toInputJson(parsed.data.schemaJson)
         }
+      });
+
+      await recordAudit({
+        environment,
+        userId: actor.userId,
+        role: actor.role,
+        action: "create_template",
+        entityType: "inapp_template",
+        entityId: created.id,
+        afterValue: created
       });
 
       return reply.code(201).send({
@@ -851,6 +1304,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
   app.post("/v1/inapp/campaigns", { preHandler: requireWriteAuth }, async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
       return;
     }
 
@@ -933,6 +1390,23 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         }
       });
 
+      await createCampaignVersionSnapshot({
+        campaignId: created.id,
+        environment,
+        authorUserId: actor.userId,
+        reason: "create"
+      });
+
+      await recordAudit({
+        environment,
+        userId: actor.userId,
+        role: actor.role,
+        action: "create_campaign",
+        entityType: "inapp_campaign",
+        entityId: created.id,
+        afterValue: makeCampaignSnapshot(created)
+      });
+
       return reply.code(201).send({
         item: serializeCampaign(created),
         validation
@@ -950,6 +1424,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
     if (!params.success) {
@@ -965,6 +1443,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       where: {
         id: params.data.id,
         environment
+      },
+      include: {
+        variants: true
       }
     });
     if (!existing) {
@@ -1063,6 +1544,24 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       });
     });
 
+    await createCampaignVersionSnapshot({
+      campaignId: updated.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "update"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "update_campaign",
+      entityType: "inapp_campaign",
+      entityId: updated.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(updated)
+    });
+
     return {
       item: serializeCampaign(updated),
       validation
@@ -1072,6 +1571,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
   app.post("/v1/inapp/campaigns/:id/activate", { preHandler: requireWriteAuth }, async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.APPROVER]);
+    if (!actor) {
       return;
     }
 
@@ -1084,6 +1587,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       where: {
         id: params.data.id,
         environment
+      },
+      include: {
+        variants: true
       }
     });
 
@@ -1097,11 +1603,31 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       },
       data: {
         status: InAppCampaignStatus.ACTIVE,
+        submittedAt: null,
+        lastReviewComment: null,
         activatedAt: now()
       },
       include: {
         variants: true
       }
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: activated.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "activate"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "activate_campaign",
+      entityType: "inapp_campaign",
+      entityId: activated.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(activated)
     });
 
     return {
@@ -1114,6 +1640,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const actor = await ensureRole(request, reply, [InAppUserRole.APPROVER]);
+    if (!actor) {
+      return;
+    }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
     if (!params.success) {
@@ -1124,6 +1654,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       where: {
         id: params.data.id,
         environment
+      },
+      include: {
+        variants: true
       }
     });
 
@@ -1143,8 +1676,530 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       }
     });
 
+    await createCampaignVersionSnapshot({
+      campaignId: archived.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "archive"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "archive_campaign",
+      entityType: "inapp_campaign",
+      entityId: archived.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(archived)
+    });
+
     return {
       item: serializeCampaign(archived)
+    };
+  });
+
+  app.post("/v1/inapp/campaigns/:id/submit-for-approval", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const existing = await prisma.inAppCampaign.findFirst({
+      where: { id: params.data.id, environment },
+      include: { variants: true }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const updated = await prisma.inAppCampaign.update({
+      where: { id: params.data.id },
+      data: {
+        status: InAppCampaignStatus.PENDING_APPROVAL,
+        submittedAt: now(),
+        lastReviewComment: body.data.comment ?? null
+      },
+      include: { variants: true }
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: updated.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "submit_for_approval"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "submit_for_approval",
+      entityType: "inapp_campaign",
+      entityId: updated.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(updated),
+      meta: {
+        comment: body.data.comment ?? null
+      }
+    });
+
+    return {
+      item: serializeCampaign(updated)
+    };
+  });
+
+  app.post("/v1/inapp/campaigns/:id/approve-and-activate", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.APPROVER]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const existing = await prisma.inAppCampaign.findFirst({
+      where: { id: params.data.id, environment },
+      include: { variants: true }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const updated = await prisma.inAppCampaign.update({
+      where: { id: params.data.id },
+      data: {
+        status: InAppCampaignStatus.ACTIVE,
+        submittedAt: null,
+        activatedAt: now(),
+        lastReviewComment: body.data.comment ?? null
+      },
+      include: { variants: true }
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: updated.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "approve_and_activate"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "approve_and_activate",
+      entityType: "inapp_campaign",
+      entityId: updated.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(updated),
+      meta: {
+        comment: body.data.comment ?? null
+      }
+    });
+
+    return {
+      item: serializeCampaign(updated)
+    };
+  });
+
+  app.post("/v1/inapp/campaigns/:id/reject-to-draft", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.APPROVER]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const existing = await prisma.inAppCampaign.findFirst({
+      where: { id: params.data.id, environment },
+      include: { variants: true }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const updated = await prisma.inAppCampaign.update({
+      where: { id: params.data.id },
+      data: {
+        status: InAppCampaignStatus.DRAFT,
+        submittedAt: null,
+        lastReviewComment: body.data.comment ?? null
+      },
+      include: { variants: true }
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: updated.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "reject_to_draft"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "reject_to_draft",
+      entityType: "inapp_campaign",
+      entityId: updated.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(updated),
+      meta: {
+        comment: body.data.comment ?? null
+      }
+    });
+
+    return {
+      item: serializeCampaign(updated)
+    };
+  });
+
+  app.post("/v1/inapp/campaigns/:id/rollback", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.APPROVER]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    const body = inAppCampaignRollbackBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const existing = await prisma.inAppCampaign.findFirst({
+      where: { id: params.data.id, environment },
+      include: { variants: true }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const version = await prisma.inAppCampaignVersion.findFirst({
+      where: {
+        environment,
+        campaignKey: existing.key,
+        version: body.data.version
+      }
+    });
+    if (!version) {
+      return buildResponseError(reply, 404, "Campaign version not found");
+    }
+
+    const snapshot = version.snapshotJson as unknown as CampaignSnapshot;
+    if (!snapshot?.campaign || !Array.isArray(snapshot.variants)) {
+      return buildResponseError(reply, 400, "Invalid campaign snapshot");
+    }
+
+    const rolledBack = await prisma.$transaction(async (tx) => {
+      await tx.inAppCampaign.update({
+        where: { id: existing.id },
+        data: {
+          key: snapshot.campaign.key,
+          name: snapshot.campaign.name,
+          description: snapshot.campaign.description,
+          status: InAppCampaignStatus.ACTIVE,
+          appKey: snapshot.campaign.appKey,
+          placementKey: snapshot.campaign.placementKey,
+          templateKey: snapshot.campaign.templateKey,
+          priority: snapshot.campaign.priority,
+          ttlSeconds: snapshot.campaign.ttlSeconds,
+          startAt: snapshot.campaign.startAt ? new Date(snapshot.campaign.startAt) : null,
+          endAt: snapshot.campaign.endAt ? new Date(snapshot.campaign.endAt) : null,
+          holdoutEnabled: snapshot.campaign.holdoutEnabled,
+          holdoutPercentage: snapshot.campaign.holdoutPercentage,
+          holdoutSalt: snapshot.campaign.holdoutSalt,
+          capsPerProfilePerDay: snapshot.campaign.capsPerProfilePerDay,
+          capsPerProfilePerWeek: snapshot.campaign.capsPerProfilePerWeek,
+          eligibilityAudiencesAny: toInputJson(snapshot.campaign.eligibilityAudiencesAny),
+          tokenBindingsJson: toInputJson(snapshot.campaign.tokenBindingsJson),
+          submittedAt: null,
+          lastReviewComment: `Rollback to version ${body.data.version}`,
+          activatedAt: now()
+        }
+      });
+
+      await tx.inAppCampaignVariant.deleteMany({
+        where: { campaignId: existing.id }
+      });
+      await tx.inAppCampaignVariant.createMany({
+        data: snapshot.variants.map((variant) => ({
+          campaignId: existing.id,
+          variantKey: variant.variantKey,
+          weight: variant.weight,
+          contentJson: toInputJson(variant.contentJson)
+        }))
+      });
+
+      return tx.inAppCampaign.findFirstOrThrow({
+        where: { id: existing.id },
+        include: { variants: true }
+      });
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: rolledBack.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: `rollback_to_${body.data.version}`
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "rollback_campaign",
+      entityType: "inapp_campaign",
+      entityId: rolledBack.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(rolledBack),
+      meta: {
+        rollbackVersion: body.data.version
+      }
+    });
+
+    return {
+      item: serializeCampaign(rolledBack)
+    };
+  });
+
+  app.post("/v1/inapp/campaigns/:id/promote", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.ADMIN]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    const body = inAppCampaignPromoteBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const source = await prisma.inAppCampaign.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      },
+      include: { variants: true }
+    });
+    if (!source) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const targetEnv = body.data.targetEnvironment;
+    const existingTarget = await prisma.inAppCampaign.findFirst({
+      where: {
+        environment: targetEnv,
+        key: source.key
+      }
+    });
+
+    const promoted = await prisma.$transaction(async (tx) => {
+      const targetCampaign = existingTarget
+        ? await tx.inAppCampaign.update({
+            where: { id: existingTarget.id },
+            data: {
+              name: source.name,
+              description: source.description,
+              status: InAppCampaignStatus.DRAFT,
+              appKey: source.appKey,
+              placementKey: source.placementKey,
+              templateKey: source.templateKey,
+              priority: source.priority,
+              ttlSeconds: source.ttlSeconds,
+              startAt: source.startAt,
+              endAt: source.endAt,
+              holdoutEnabled: source.holdoutEnabled,
+              holdoutPercentage: source.holdoutPercentage,
+              holdoutSalt: source.holdoutSalt,
+              capsPerProfilePerDay: source.capsPerProfilePerDay,
+              capsPerProfilePerWeek: source.capsPerProfilePerWeek,
+              eligibilityAudiencesAny: source.eligibilityAudiencesAny ?? Prisma.JsonNull,
+              tokenBindingsJson: source.tokenBindingsJson ?? Prisma.JsonNull,
+              submittedAt: null,
+              activatedAt: null,
+              lastReviewComment: `Promoted from ${environment}`
+            }
+          })
+        : await tx.inAppCampaign.create({
+            data: {
+              environment: targetEnv,
+              key: source.key,
+              name: source.name,
+              description: source.description,
+              status: InAppCampaignStatus.DRAFT,
+              appKey: source.appKey,
+              placementKey: source.placementKey,
+              templateKey: source.templateKey,
+              priority: source.priority,
+              ttlSeconds: source.ttlSeconds,
+              startAt: source.startAt,
+              endAt: source.endAt,
+              holdoutEnabled: source.holdoutEnabled,
+              holdoutPercentage: source.holdoutPercentage,
+              holdoutSalt: source.holdoutSalt,
+              capsPerProfilePerDay: source.capsPerProfilePerDay,
+              capsPerProfilePerWeek: source.capsPerProfilePerWeek,
+              eligibilityAudiencesAny: source.eligibilityAudiencesAny ?? Prisma.JsonNull,
+              tokenBindingsJson: source.tokenBindingsJson ?? Prisma.JsonNull,
+              lastReviewComment: `Promoted from ${environment}`
+            }
+          });
+
+      await tx.inAppCampaignVariant.deleteMany({
+        where: { campaignId: targetCampaign.id }
+      });
+      await tx.inAppCampaignVariant.createMany({
+        data: source.variants.map((variant) => ({
+          campaignId: targetCampaign.id,
+          variantKey: variant.variantKey,
+          weight: variant.weight,
+          contentJson: variant.contentJson as Prisma.InputJsonValue
+        }))
+      });
+
+      return tx.inAppCampaign.findFirstOrThrow({
+        where: {
+          id: targetCampaign.id
+        },
+        include: { variants: true }
+      });
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: promoted.id,
+      environment: targetEnv,
+      authorUserId: actor.userId,
+      reason: `promote_from_${environment}`
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "promote_campaign",
+      entityType: "inapp_campaign",
+      entityId: source.id,
+      beforeValue: makeCampaignSnapshot(source),
+      afterValue: makeCampaignSnapshot(promoted),
+      meta: {
+        targetEnvironment: targetEnv
+      }
+    });
+
+    return {
+      item: serializeCampaign(promoted)
+    };
+  });
+
+  app.get("/v1/inapp/campaigns/:id/versions", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    }
+
+    const campaign = await prisma.inAppCampaign.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!campaign) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const versions = await prisma.inAppCampaignVersion.findMany({
+      where: {
+        environment,
+        campaignKey: campaign.key
+      },
+      orderBy: { version: "desc" }
+    });
+
+    return {
+      items: versions.map((version) => ({
+        id: version.id,
+        campaignId: version.campaignId,
+        campaignKey: version.campaignKey,
+        environment: version.environment,
+        version: version.version,
+        authorUserId: version.authorUserId,
+        reason: version.reason,
+        createdAt: version.createdAt.toISOString(),
+        snapshotJson: version.snapshotJson
+      }))
+    };
+  });
+
+  app.get("/v1/inapp/campaigns/:id/audit", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    const query = z.object({ limit: z.coerce.number().int().positive().max(500).optional() }).safeParse(request.query);
+    if (!params.success || !query.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const logs = await prisma.inAppAuditLog.findMany({
+      where: {
+        environment,
+        entityType: "inapp_campaign",
+        entityId: params.data.id
+      },
+      orderBy: { createdAt: "desc" },
+      take: query.data.limit ?? 100
+    });
+
+    return {
+      items: logs.map((log) => ({
+        id: log.id,
+        userId: log.userId,
+        userRole: log.userRole,
+        action: log.action,
+        beforeHash: log.beforeHash,
+        afterHash: log.afterHash,
+        meta: log.metaJson,
+        createdAt: log.createdAt.toISOString()
+      }))
     };
   });
 
@@ -1224,6 +2279,352 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     };
   });
 
+  app.post("/v1/inapp/events", { preHandler: requireDecideAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = inAppEventsBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const requestId = createRequestId(request);
+    const timestamp = parsed.data.ts ? new Date(parsed.data.ts) : now();
+    if (Number.isNaN(timestamp.getTime())) {
+      return buildResponseError(reply, 400, "Invalid ts value");
+    }
+
+    await prisma.inAppEvent.create({
+      data: {
+        environment,
+        eventType: parsed.data.eventType,
+        ts: timestamp,
+        appKey: parsed.data.appKey,
+        placement: parsed.data.placement,
+        campaignKey: parsed.data.tracking.campaign_id,
+        variantKey: parsed.data.tracking.variant_id,
+        messageId: parsed.data.tracking.message_id,
+        profileId: parsed.data.profileId ?? null,
+        lookupAttribute: parsed.data.lookup?.attribute ?? null,
+        lookupValueHash: parsed.data.lookup ? hashSha256(parsed.data.lookup.value) : null,
+        contextJson: parsed.data.context ? toInputJson(redactSensitiveFields(parsed.data.context)) : Prisma.JsonNull
+      }
+    });
+
+    request.log.info(
+      {
+        correlationId: requestId,
+        environment,
+        eventType: parsed.data.eventType,
+        appKey: parsed.data.appKey,
+        placement: parsed.data.placement,
+        campaignKey: parsed.data.tracking.campaign_id,
+        variantKey: parsed.data.tracking.variant_id
+      },
+      "In-app event ingested"
+    );
+
+    return {
+      status: "ok"
+    };
+  });
+
+  app.get("/v1/inapp/events", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = z
+      .object({
+        campaignKey: z.string().optional(),
+        messageId: z.string().optional(),
+        profileId: z.string().optional(),
+        from: z.string().datetime().optional(),
+        to: z.string().datetime().optional(),
+        limit: z.coerce.number().int().positive().max(500).optional()
+      })
+      .safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const { from, to } = parseDateRange(parsed.data);
+    const items = await prisma.inAppEvent.findMany({
+      where: {
+        environment,
+        ...(parsed.data.campaignKey ? { campaignKey: parsed.data.campaignKey } : {}),
+        ...(parsed.data.messageId ? { messageId: parsed.data.messageId } : {}),
+        ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+        ...(from || to
+          ? {
+              ts: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {})
+              }
+            }
+          : {})
+      },
+      orderBy: { ts: "desc" },
+      take: parsed.data.limit ?? 200
+    });
+
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        environment: item.environment,
+        eventType: item.eventType,
+        ts: item.ts.toISOString(),
+        appKey: item.appKey,
+        placement: item.placement,
+        campaignKey: item.campaignKey,
+        variantKey: item.variantKey,
+        messageId: item.messageId,
+        profileId: item.profileId,
+        lookupAttribute: item.lookupAttribute,
+        lookupValueHash: item.lookupValueHash,
+        context: item.contextJson
+      }))
+    };
+  });
+
+  app.get("/v1/inapp/reports/overview", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = inAppReportQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const { from, to } = parseDateRange(parsed.data);
+    const events = await prisma.inAppEvent.findMany({
+      where: {
+        environment,
+        ...(parsed.data.appKey ? { appKey: parsed.data.appKey } : {}),
+        ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
+        ...(parsed.data.campaignKey ? { campaignKey: parsed.data.campaignKey } : {}),
+        ...(from || to
+          ? {
+              ts: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {})
+              }
+            }
+          : {})
+      },
+      select: {
+        eventType: true,
+        campaignKey: true,
+        variantKey: true,
+        placement: true,
+        profileId: true,
+        lookupValueHash: true
+      }
+    });
+
+    const grouped = new Map<
+      string,
+      { campaignKey: string; variantKey: string; placement: string; impressions: number; clicks: number; dismiss: number }
+    >();
+    const uniqueReach = new Set<string>();
+    let impressions = 0;
+    let clicks = 0;
+
+    for (const event of events) {
+      const key = `${event.campaignKey}:${event.variantKey}:${event.placement}`;
+      const current = grouped.get(key) ?? {
+        campaignKey: event.campaignKey,
+        variantKey: event.variantKey,
+        placement: event.placement,
+        impressions: 0,
+        clicks: 0,
+        dismiss: 0
+      };
+
+      if (event.eventType === InAppEventType.IMPRESSION) {
+        current.impressions += 1;
+        impressions += 1;
+      }
+      if (event.eventType === InAppEventType.CLICK) {
+        current.clicks += 1;
+        clicks += 1;
+      }
+      if (event.eventType === InAppEventType.DISMISS) {
+        current.dismiss += 1;
+      }
+
+      grouped.set(key, current);
+      if (event.profileId) {
+        uniqueReach.add(`p:${event.profileId}`);
+      } else if (event.lookupValueHash) {
+        uniqueReach.add(`l:${event.lookupValueHash}`);
+      }
+    }
+
+    const groups = [...grouped.values()].map((group) => {
+      const ctr = group.impressions > 0 ? group.clicks / group.impressions : 0;
+      const interval = wilsonInterval(group.clicks, group.impressions);
+      return {
+        ...group,
+        ctr,
+        ctr_ci_low: interval?.low ?? null,
+        ctr_ci_high: interval?.high ?? null
+      };
+    });
+
+    return {
+      from: from?.toISOString() ?? null,
+      to: to?.toISOString() ?? null,
+      impressions,
+      clicks,
+      ctr: impressions > 0 ? clicks / impressions : 0,
+      uniqueProfilesReached: uniqueReach.size,
+      groups
+    };
+  });
+
+  app.get("/v1/inapp/reports/campaign/:key", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = inAppCampaignKeyParamsSchema.safeParse(request.params);
+    const query = inAppReportQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const { from, to } = parseDateRange(query.data);
+    const events = await prisma.inAppEvent.findMany({
+      where: {
+        environment,
+        campaignKey: params.data.key,
+        ...(from || to
+          ? {
+              ts: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {})
+              }
+            }
+          : {})
+      },
+      select: {
+        eventType: true,
+        variantKey: true,
+        ts: true
+      },
+      orderBy: { ts: "asc" }
+    });
+
+    const buckets = new Map<string, Map<string, { impressions: number; clicks: number; ctr: number }>>();
+    for (const event of events) {
+      const bucket = dayBucket(event.ts);
+      const variants = buckets.get(bucket) ?? new Map<string, { impressions: number; clicks: number; ctr: number }>();
+      const current = variants.get(event.variantKey) ?? { impressions: 0, clicks: 0, ctr: 0 };
+      if (event.eventType === InAppEventType.IMPRESSION) {
+        current.impressions += 1;
+      }
+      if (event.eventType === InAppEventType.CLICK) {
+        current.clicks += 1;
+      }
+      current.ctr = current.impressions > 0 ? current.clicks / current.impressions : 0;
+      variants.set(event.variantKey, current);
+      buckets.set(bucket, variants);
+    }
+
+    return {
+      campaignKey: params.data.key,
+      from: from?.toISOString() ?? null,
+      to: to?.toISOString() ?? null,
+      series: [...buckets.entries()].map(([bucket, variants]) => ({
+        date: bucket,
+        variants: [...variants.entries()].map(([variantKey, stats]) => ({
+          variantKey,
+          impressions: stats.impressions,
+          clicks: stats.clicks,
+          ctr: stats.ctr
+        }))
+      }))
+    };
+  });
+
+  app.get("/v1/inapp/reports/export.csv", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = inAppReportQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+
+    const { from, to } = parseDateRange(query.data);
+    const events = await prisma.inAppEvent.findMany({
+      where: {
+        environment,
+        ...(query.data.campaignKey ? { campaignKey: query.data.campaignKey } : {}),
+        ...(query.data.appKey ? { appKey: query.data.appKey } : {}),
+        ...(query.data.placement ? { placement: query.data.placement } : {}),
+        ...(from || to
+          ? {
+              ts: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {})
+              }
+            }
+          : {})
+      },
+      select: {
+        eventType: true,
+        campaignKey: true,
+        variantKey: true,
+        placement: true
+      }
+    });
+
+    const grouped = new Map<string, { campaignKey: string; variantKey: string; placement: string; impressions: number; clicks: number; dismiss: number }>();
+    for (const event of events) {
+      const key = `${event.campaignKey}:${event.variantKey}:${event.placement}`;
+      const current = grouped.get(key) ?? {
+        campaignKey: event.campaignKey,
+        variantKey: event.variantKey,
+        placement: event.placement,
+        impressions: 0,
+        clicks: 0,
+        dismiss: 0
+      };
+      if (event.eventType === InAppEventType.IMPRESSION) current.impressions += 1;
+      if (event.eventType === InAppEventType.CLICK) current.clicks += 1;
+      if (event.eventType === InAppEventType.DISMISS) current.dismiss += 1;
+      grouped.set(key, current);
+    }
+
+    const csvRows = [...grouped.values()].map((row) => {
+      const ctr = row.impressions > 0 ? row.clicks / row.impressions : 0;
+      const interval = wilsonInterval(row.clicks, row.impressions);
+      return {
+        campaignKey: row.campaignKey,
+        variantKey: row.variantKey,
+        placement: row.placement,
+        impressions: row.impressions,
+        clicks: row.clicks,
+        dismiss: row.dismiss,
+        ctr,
+        ctr_ci_low: interval?.low ?? null,
+        ctr_ci_high: interval?.high ?? null
+      };
+    });
+
+    reply.header("Content-Type", "text/csv");
+    return toCsv(csvRows);
+  });
+
   app.post("/v1/inapp/decide", { preHandler: requireDecideAuth }, async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -1236,8 +2637,41 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const requestId = createRequestId(request);
+    const startedAtMs = Date.now();
     const nowDate = now();
     const debugEnabled = Boolean(parsed.data.debug);
+
+    let wbsMs = 0;
+    let dbMs = 0;
+    let engineMs = 0;
+
+    const withDbMs = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        dbMs += Date.now() - started;
+      }
+    };
+
+    const withEngineMs = async <T>(fn: () => Promise<T> | T): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        engineMs += Date.now() - started;
+      }
+    };
+
+    const withWbsMs = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        wbsMs += Date.now() - started;
+      }
+    };
+
     const contextNow = (() => {
       const candidate = parsed.data.context?.now;
       if (typeof candidate === "string") {
@@ -1249,147 +2683,379 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return nowDate;
     })();
 
-    const debugInfo: Record<string, unknown> = {
-      reasons: [] as Array<{ code: string; detail?: string }>
+    const reasons: Array<{ code: string; detail?: string }> = [];
+    const appendReason = (code: string, detail?: string) => {
+      reasons.push({ code, detail });
     };
 
-    const appendReason = (code: string, detail?: string) => {
-      const currentReasons = (debugInfo.reasons as Array<{ code: string; detail?: string }>) ?? [];
-      currentReasons.push({ code, detail });
-      debugInfo.reasons = currentReasons;
+    const apiKeyHeader = request.headers["x-api-key"];
+    const apiKey = typeof apiKeyHeader === "string" && apiKeyHeader.trim().length > 0 ? apiKeyHeader.trim() : "anonymous";
+
+    const apiRate = perApiKeyLimiter.check({
+      key: `${environment}:${apiKey}`,
+      limit: INAPP_RATE_PER_API_KEY,
+      windowMs: INAPP_RATE_WINDOW_MS
+    });
+    if (!apiRate.allowed) {
+      reply.code(429);
+      return {
+        error: "Rate limit exceeded",
+        details: {
+          correlationId: requestId,
+          retryAfterMs: apiRate.retryAfterMs
+        }
+      };
+    }
+
+    const appRate = perAppKeyLimiter.check({
+      key: `${environment}:${parsed.data.appKey}`,
+      limit: INAPP_RATE_PER_APP_KEY,
+      windowMs: INAPP_RATE_WINDOW_MS
+    });
+    if (!appRate.allowed) {
+      reply.code(429);
+      return {
+        error: "Rate limit exceeded",
+        details: {
+          correlationId: requestId,
+          retryAfterMs: appRate.retryAfterMs
+        }
+      };
+    }
+
+    const [activeCampaigns, placement] = await withDbMs(() =>
+      Promise.all([
+        prisma.inAppCampaign.findMany({
+          where: {
+            environment,
+            appKey: parsed.data.appKey,
+            placementKey: parsed.data.placement,
+            status: InAppCampaignStatus.ACTIVE
+          },
+          include: {
+            variants: true
+          },
+          orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
+        }),
+        prisma.inAppPlacement.findFirst({
+          where: {
+            environment,
+            key: parsed.data.placement
+          }
+        })
+      ])
+    );
+
+    const campaignSetHash = hashSha256(
+      stableStringify(
+        activeCampaigns.map((campaign) => ({
+          key: campaign.key,
+          updatedAt: campaign.updatedAt.toISOString(),
+          activatedAt: campaign.activatedAt?.toISOString() ?? null,
+          priority: campaign.priority,
+          ttlSeconds: campaign.ttlSeconds,
+          templateKey: campaign.templateKey,
+          variants: campaign.variants
+            .map((variant) => ({
+              variantKey: variant.variantKey,
+              weight: variant.weight,
+              updatedAt: variant.updatedAt.toISOString()
+            }))
+            .sort((a, b) => a.variantKey.localeCompare(b.variantKey))
+        }))
+      )
+    );
+    const cacheEligible = activeCampaigns.every(
+      (campaign) => !campaign.capsPerProfilePerDay && !campaign.capsPerProfilePerWeek
+    );
+
+    const profileSeed = parsed.data.profileId
+      ? `profile:${parsed.data.profileId}`
+      : `lookup:${parsed.data.lookup?.attribute ?? ""}:${parsed.data.lookup?.value ?? ""}`;
+    const profileKeyHash = hashSha256(profileSeed);
+    const cacheKey = `inapp:${environment}:${parsed.data.appKey}:${parsed.data.placement}:${profileKeyHash}:${campaignSetHash}`;
+
+    let cacheHit = false;
+    let cacheExpiresAt: string | null = null;
+
+    const profileIdForLogFallback = parsed.data.profileId
+      ? parsed.data.profileId
+      : `lookup:${parsed.data.lookup?.attribute ?? "unknown"}:${hashSha256(parsed.data.lookup?.value ?? "unknown")}`;
+
+    const buildDebugPayload = (extra?: Record<string, unknown>) => {
+      if (!debugEnabled) {
+        return undefined;
+      }
+      return redactSensitiveFields({
+        ...extra,
+        reasons,
+        cache: {
+          hit: cacheEligible ? cacheHit : false,
+          key: cacheEligible ? cacheKey : "",
+          expiresAt: cacheExpiresAt
+        }
+      }) as Record<string, unknown>;
     };
+
+    const upsertDecisionCache = async (response: InAppDecideResponse, referenceNow: Date) => {
+      const expiresAt = computeCacheExpiry(referenceNow, response.ttl_seconds);
+      cacheExpiresAt = expiresAt.toISOString();
+      await withDbMs(() =>
+        prisma.inAppDecisionCache.upsert({
+          where: {
+            environment_cacheKey: {
+              environment,
+              cacheKey
+            }
+          },
+          update: {
+            responseJson: toInputJson(response),
+            expiresAt
+          },
+          create: {
+            environment,
+            cacheKey,
+            responseJson: toInputJson(response),
+            expiresAt
+          }
+        })
+      );
+    };
+
+    const finalizeResponse = async (input: {
+      response: InAppDecideResponse;
+      profileIdForLog: string;
+      campaignKey: string | null;
+      templateKey: string | null;
+      variantKey: string | null;
+      debugExtra?: Record<string, unknown>;
+      skipCacheWrite?: boolean;
+      recordImpression?: {
+        campaignKey: string;
+        profileId: string;
+        messageId: string;
+        timestamp: Date;
+      };
+    }) => {
+      const debugPayload = buildDebugPayload(input.debugExtra);
+      const responseWithDebug = withOptionalDebug(input.response, debugEnabled, debugPayload);
+      const responseForCache = {
+        ...responseWithDebug,
+        payload: stripDebugPayload(responseWithDebug.payload)
+      } satisfies InAppDecideResponse;
+
+      if (!input.skipCacheWrite && cacheEligible && responseForCache.ttl_seconds > 0) {
+        await upsertDecisionCache(responseForCache, contextNow);
+      }
+
+      const totalMs = Date.now() - startedAtMs;
+      const reasonsForLog = reasons.length > 0 ? reasons : [{ code: input.response.show ? "CAMPAIGN_SHOWN" : "NO_MATCH" }];
+      const replayInputForLog = (() => {
+        const sanitized = (redactSensitiveFields(parsed.data) as Record<string, unknown>) ?? {};
+        if (parsed.data.lookup) {
+          sanitized.lookup = {
+            attribute: parsed.data.lookup.attribute,
+            value: "[REDACTED]"
+          };
+        }
+        return sanitized;
+      })();
+
+      await withDbMs(() =>
+        prisma.$transaction(async (tx) => {
+          if (input.recordImpression) {
+            await tx.inAppImpression.create({
+              data: {
+                environment,
+                campaignKey: input.recordImpression.campaignKey,
+                profileId: input.recordImpression.profileId,
+                messageId: input.recordImpression.messageId,
+                timestamp: input.recordImpression.timestamp
+              }
+            });
+          }
+
+          await tx.inAppDecisionLog.create({
+            data: {
+              environment,
+              campaignKey: input.campaignKey,
+              profileId: input.profileIdForLog,
+              placement: parsed.data.placement,
+              templateKey: input.templateKey,
+              variantKey: input.variantKey,
+              shown: input.response.show,
+              reasonsJson: toInputJson(reasonsForLog),
+              payloadJson: toInputJson(responseForCache.payload),
+              replayInputJson: toInputJson(replayInputForLog),
+              correlationId: requestId,
+              wbsMs,
+              dbMs,
+              engineMs,
+              totalMs
+            }
+          });
+        })
+      );
+
+      request.log.info(
+        {
+          correlationId: requestId,
+          environment,
+          appKey: parsed.data.appKey,
+          placement: parsed.data.placement,
+          shown: input.response.show,
+          campaignKey: input.campaignKey,
+          variantKey: input.variantKey,
+          cacheHit,
+          wbs_ms: wbsMs,
+          db_ms: dbMs,
+          engine_ms: engineMs,
+          total_ms: totalMs
+        },
+        "In-app decide completed"
+      );
+
+      return responseWithDebug;
+    };
+
+    const cached = cacheEligible
+      ? await withDbMs(() =>
+          prisma.inAppDecisionCache.findUnique({
+            where: {
+              environment_cacheKey: {
+                environment,
+                cacheKey
+              }
+            }
+          })
+        )
+      : null;
+
+    if (cached && cached.expiresAt.getTime() > nowDate.getTime()) {
+      cacheHit = true;
+      cacheExpiresAt = cached.expiresAt.toISOString();
+      appendReason("CACHE_HIT");
+
+      const cachedResponse = cached.responseJson as unknown as InAppDecideResponse;
+      return finalizeResponse({
+        response: {
+          show: Boolean(cachedResponse.show),
+          placement: String(cachedResponse.placement ?? parsed.data.placement),
+          templateId: String(cachedResponse.templateId ?? "none"),
+          ttl_seconds: Number(cachedResponse.ttl_seconds ?? 0),
+          tracking: {
+            campaign_id: String(cachedResponse.tracking?.campaign_id ?? ""),
+            message_id: String(cachedResponse.tracking?.message_id ?? ""),
+            variant_id: String(cachedResponse.tracking?.variant_id ?? "")
+          },
+          payload: isObject(cachedResponse.payload) ? cachedResponse.payload : {}
+        },
+        profileIdForLog: profileIdForLogFallback,
+        campaignKey: cachedResponse.tracking?.campaign_id ? String(cachedResponse.tracking.campaign_id) : null,
+        templateKey: cachedResponse.templateId && cachedResponse.templateId !== "none" ? String(cachedResponse.templateId) : null,
+        variantKey: cachedResponse.tracking?.variant_id ? String(cachedResponse.tracking.variant_id) : null,
+        skipCacheWrite: true
+      });
+    }
+
+    if (cached && cached.expiresAt.getTime() <= nowDate.getTime()) {
+      await withDbMs(() =>
+        prisma.inAppDecisionCache.delete({
+          where: {
+            environment_cacheKey: {
+              environment,
+              cacheKey
+            }
+          }
+        })
+      ).catch(() => undefined);
+    }
 
     let profile: EngineProfile;
     let lookupTrace: Record<string, unknown> | undefined;
 
     if (parsed.data.lookup) {
       const [activeWbsInstance, activeWbsMapping] = await Promise.all([
-        fetchActiveWbsInstance(environment),
-        fetchActiveWbsMapping(environment)
+        withDbMs(() => fetchActiveWbsInstance(environment)),
+        withDbMs(() => fetchActiveWbsMapping(environment))
       ]);
 
       if (!activeWbsInstance) {
-        appendReason("WBS_INSTANCE_NOT_CONFIGURED", `No active WBS instance for environment ${environment}`);
-        const response = buildNoShowResponse({
-          placement: parsed.data.placement,
-          debug: debugEnabled ? redactSensitiveFields(debugInfo) as Record<string, unknown> : undefined
+        appendReason("WBS_INSTANCE_NOT_CONFIGURED");
+        return finalizeResponse({
+          response: buildNoShowResponse({
+            placement: parsed.data.placement
+          }),
+          profileIdForLog: profileIdForLogFallback,
+          campaignKey: null,
+          templateKey: null,
+          variantKey: null
         });
-
-        await prisma.inAppDecisionLog.create({
-          data: {
-            environment,
-            campaignKey: null,
-            profileId: parsed.data.lookup.value,
-            placement: parsed.data.placement,
-            templateKey: null,
-            variantKey: null,
-            shown: false,
-            reasonsJson: toInputJson(debugInfo.reasons),
-            payloadJson: toInputJson(response.payload),
-            replayInputJson: toInputJson(parsed.data),
-            correlationId: requestId
-          }
-        });
-
-        return response;
       }
 
       if (!activeWbsMapping) {
-        appendReason("WBS_MAPPING_NOT_CONFIGURED", `No active WBS mapping for environment ${environment}`);
-        const response = buildNoShowResponse({
-          placement: parsed.data.placement,
-          debug: debugEnabled ? redactSensitiveFields(debugInfo) as Record<string, unknown> : undefined
+        appendReason("WBS_MAPPING_NOT_CONFIGURED");
+        return finalizeResponse({
+          response: buildNoShowResponse({
+            placement: parsed.data.placement
+          }),
+          profileIdForLog: profileIdForLogFallback,
+          campaignKey: null,
+          templateKey: null,
+          variantKey: null
         });
-
-        await prisma.inAppDecisionLog.create({
-          data: {
-            environment,
-            campaignKey: null,
-            profileId: parsed.data.lookup.value,
-            placement: parsed.data.placement,
-            templateKey: null,
-            variantKey: null,
-            shown: false,
-            reasonsJson: toInputJson(debugInfo.reasons),
-            payloadJson: toInputJson(response.payload),
-            replayInputJson: toInputJson(parsed.data),
-            correlationId: requestId
-          }
-        });
-
-        return response;
       }
 
+      const timeoutMs = Math.max(100, INAPP_WBS_TIMEOUT_MS);
       let rawLookup: WbsLookupResponse;
       try {
-        rawLookup = await wbsAdapter.lookup(
-          {
-            baseUrl: activeWbsInstance.baseUrl,
-            attributeParamName: activeWbsInstance.attributeParamName,
-            valueParamName: activeWbsInstance.valueParamName,
-            segmentParamName: activeWbsInstance.segmentParamName,
-            includeSegment: activeWbsInstance.includeSegment,
-            defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
-            timeoutMs: activeWbsInstance.timeoutMs
-          },
-          parsed.data.lookup
+        rawLookup = await withWbsMs(() =>
+          withTimeout(
+            wbsAdapter.lookup(
+              {
+                baseUrl: activeWbsInstance.baseUrl,
+                attributeParamName: activeWbsInstance.attributeParamName,
+                valueParamName: activeWbsInstance.valueParamName,
+                segmentParamName: activeWbsInstance.segmentParamName,
+                includeSegment: activeWbsInstance.includeSegment,
+                defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
+                timeoutMs: Math.min(activeWbsInstance.timeoutMs, timeoutMs)
+              },
+              parsed.data.lookup as { attribute: string; value: string }
+            ),
+            timeoutMs,
+            "WBS_LOOKUP_TIMEOUT"
+          )
         );
       } catch (error) {
-        appendReason("WBS_LOOKUP_FAILED", String(error));
-        const response = buildNoShowResponse({
-          placement: parsed.data.placement,
-          debug: debugEnabled
-            ? (redactSensitiveFields({
-                ...debugInfo,
-                wbsLookupError: String(error)
-              }) as Record<string, unknown>)
-            : undefined
-        });
-
-        await prisma.inAppDecisionLog.create({
-          data: {
-            environment,
-            campaignKey: null,
-            profileId: parsed.data.lookup.value,
-            placement: parsed.data.placement,
-            templateKey: null,
-            variantKey: null,
-            shown: false,
-            reasonsJson: toInputJson(debugInfo.reasons),
-            payloadJson: toInputJson(response.payload),
-            replayInputJson: toInputJson(parsed.data),
-            correlationId: requestId
+        const errorMessage = String(error);
+        appendReason(errorMessage.includes("WBS_LOOKUP_TIMEOUT") ? "WBS_LOOKUP_TIMEOUT" : "WBS_LOOKUP_FAILED", errorMessage);
+        return finalizeResponse({
+          response: buildNoShowResponse({
+            placement: parsed.data.placement
+          }),
+          profileIdForLog: profileIdForLogFallback,
+          campaignKey: null,
+          templateKey: null,
+          variantKey: null,
+          debugExtra: {
+            lookupError: errorMessage
           }
         });
-
-        return response;
       }
 
       const parsedMapping = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
       if (!parsedMapping.success) {
         appendReason("WBS_MAPPING_INVALID", parsedMapping.error.issues.map((issue) => issue.message).join("; "));
-        const response = buildNoShowResponse({
-          placement: parsed.data.placement,
-          debug: debugEnabled ? (redactSensitiveFields(debugInfo) as Record<string, unknown>) : undefined
+        return finalizeResponse({
+          response: buildNoShowResponse({
+            placement: parsed.data.placement
+          }),
+          profileIdForLog: profileIdForLogFallback,
+          campaignKey: null,
+          templateKey: null,
+          variantKey: null
         });
-
-        await prisma.inAppDecisionLog.create({
-          data: {
-            environment,
-            campaignKey: null,
-            profileId: parsed.data.lookup.value,
-            placement: parsed.data.placement,
-            templateKey: null,
-            variantKey: null,
-            shown: false,
-            reasonsJson: toInputJson(debugInfo.reasons),
-            payloadJson: toInputJson(response.payload),
-            replayInputJson: toInputJson(parsed.data),
-            correlationId: requestId
-          }
-        });
-
-        return response;
       }
 
       const mapped = mapWbsLookupToProfile({
@@ -1410,113 +3076,69 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         profile = await meiro.getProfile(parsed.data.profileId as string);
       } catch (error) {
         appendReason("MEIRO_PROFILE_FETCH_FAILED", String(error));
-        const response = buildNoShowResponse({
-          placement: parsed.data.placement,
-          debug: debugEnabled ? (redactSensitiveFields(debugInfo) as Record<string, unknown>) : undefined
+        return finalizeResponse({
+          response: buildNoShowResponse({
+            placement: parsed.data.placement
+          }),
+          profileIdForLog: profileIdForLogFallback,
+          campaignKey: null,
+          templateKey: null,
+          variantKey: null
         });
-
-        await prisma.inAppDecisionLog.create({
-          data: {
-            environment,
-            campaignKey: null,
-            profileId: parsed.data.profileId as string,
-            placement: parsed.data.placement,
-            templateKey: null,
-            variantKey: null,
-            shown: false,
-            reasonsJson: toInputJson(debugInfo.reasons),
-            payloadJson: toInputJson(response.payload),
-            replayInputJson: toInputJson(parsed.data),
-            correlationId: requestId
-          }
-        });
-
-        return response;
       }
     }
 
-    const suppressionDecision = await prisma.decisionVersion.findFirst({
-      where: {
-        status: "ACTIVE",
-        decision: {
-          key: "global_suppression",
-          environment
-        }
-      },
-      include: {
-        decision: true
-      },
-      orderBy: { version: "desc" }
-    });
+    const suppressionDecision = await withDbMs(() =>
+      prisma.decisionVersion.findFirst({
+        where: {
+          status: "ACTIVE",
+          decision: {
+            key: "global_suppression",
+            environment
+          }
+        },
+        include: {
+          decision: true
+        },
+        orderBy: { version: "desc" }
+      })
+    );
 
     if (suppressionDecision) {
       const parsedDefinition = DecisionDefinitionSchema.safeParse(suppressionDecision.definitionJson);
       if (parsedDefinition.success) {
-        const suppressionResult = evaluateDecision({
-          definition: parsedDefinition.data,
-          profile,
-          context: {
-            now: contextNow.toISOString(),
-            channel: typeof parsed.data.context?.channel === "string" ? parsed.data.context.channel : undefined,
-            device: typeof parsed.data.context?.device === "string" ? parsed.data.context.device : undefined,
-            locale: typeof parsed.data.context?.locale === "string" ? parsed.data.context.locale : undefined,
-            requestId
-          },
-          debug: debugEnabled
-        });
+        const suppressionResult = await withEngineMs(() =>
+          evaluateDecision({
+            definition: parsedDefinition.data,
+            profile,
+            context: {
+              now: contextNow.toISOString(),
+              channel: typeof parsed.data.context?.channel === "string" ? parsed.data.context.channel : undefined,
+              device: typeof parsed.data.context?.device === "string" ? parsed.data.context.device : undefined,
+              locale: typeof parsed.data.context?.locale === "string" ? parsed.data.context.locale : undefined,
+              requestId
+            },
+            debug: debugEnabled
+          })
+        );
 
         if (suppressionResult.actionType === "suppress") {
           appendReason("GLOBAL_SUPPRESSION");
-          const response = buildNoShowResponse({
-            placement: parsed.data.placement,
-            debug: debugEnabled
-              ? (redactSensitiveFields({
-                  ...debugInfo,
-                  suppressionTrace: suppressionResult.trace
-                }) as Record<string, unknown>)
-              : undefined
-          });
-
-          await prisma.inAppDecisionLog.create({
-            data: {
-              environment,
-              campaignKey: null,
-              profileId: profile.profileId,
-              placement: parsed.data.placement,
-              templateKey: null,
-              variantKey: null,
-              shown: false,
-              reasonsJson: toInputJson(debugInfo.reasons),
-              payloadJson: toInputJson(response.payload),
-              replayInputJson: toInputJson(parsed.data),
-              correlationId: requestId
+          return finalizeResponse({
+            response: buildNoShowResponse({
+              placement: parsed.data.placement
+            }),
+            profileIdForLog: profile.profileId,
+            campaignKey: null,
+            templateKey: null,
+            variantKey: null,
+            debugExtra: {
+              suppressionTrace: suppressionResult.trace
             }
           });
-
-          return response;
         }
       }
     }
-
-    const activeCampaigns = await prisma.inAppCampaign.findMany({
-      where: {
-        environment,
-        appKey: parsed.data.appKey,
-        placementKey: parsed.data.placement,
-        status: InAppCampaignStatus.ACTIVE
-      },
-      include: {
-        variants: true
-      },
-      orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
-    });
-
-    const placement = await prisma.inAppPlacement.findFirst({
-      where: {
-        environment,
-        key: parsed.data.placement
-      }
-    });
 
     const campaignChecks: Array<{
       campaignKey: string;
@@ -1533,9 +3155,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     const window7d = new Date(contextNow);
     window7d.setTime(window7d.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    let selectedCampaign:
-      | (typeof activeCampaigns)[number]
-      | null = null;
+    let selectedCampaign: (typeof activeCampaigns)[number] | null = null;
 
     for (const campaign of activeCampaigns) {
       if (!campaignPassesSchedule(campaign, contextNow)) {
@@ -1574,32 +3194,34 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         }
       }
 
-      const [dayCount, weekCount] = await Promise.all([
-        campaign.capsPerProfilePerDay
-          ? prisma.inAppImpression.count({
-              where: {
-                environment,
-                campaignKey: campaign.key,
-                profileId: profile.profileId,
-                timestamp: {
-                  gte: window24h
+      const [dayCount, weekCount] = await withDbMs(() =>
+        Promise.all([
+          campaign.capsPerProfilePerDay
+            ? prisma.inAppImpression.count({
+                where: {
+                  environment,
+                  campaignKey: campaign.key,
+                  profileId: profile.profileId,
+                  timestamp: {
+                    gte: window24h
+                  }
                 }
-              }
-            })
-          : Promise.resolve(0),
-        campaign.capsPerProfilePerWeek
-          ? prisma.inAppImpression.count({
-              where: {
-                environment,
-                campaignKey: campaign.key,
-                profileId: profile.profileId,
-                timestamp: {
-                  gte: window7d
+              })
+            : Promise.resolve(0),
+          campaign.capsPerProfilePerWeek
+            ? prisma.inAppImpression.count({
+                where: {
+                  environment,
+                  campaignKey: campaign.key,
+                  profileId: profile.profileId,
+                  timestamp: {
+                    gte: window7d
+                  }
                 }
-              }
-            })
-          : Promise.resolve(0)
-      ]);
+              })
+            : Promise.resolve(0)
+        ])
+      );
 
       if (campaign.capsPerProfilePerDay && dayCount >= campaign.capsPerProfilePerDay) {
         campaignChecks.push({
@@ -1638,123 +3260,93 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
 
     if (!selectedCampaign) {
       appendReason("NO_ACTIVE_CAMPAIGN");
-      const response = buildNoShowResponse({
-        placement: parsed.data.placement,
-        debug: debugEnabled
-          ? (redactSensitiveFields({
-              ...debugInfo,
-              profile: {
-                profileId: profile.profileId,
-                audiences: profile.audiences
-              },
-              campaignChecks,
-              lookup: lookupTrace
-            }) as Record<string, unknown>)
-          : undefined
-      });
-
-      await prisma.inAppDecisionLog.create({
-        data: {
-          environment,
-          campaignKey: null,
-          profileId: profile.profileId,
-          placement: parsed.data.placement,
-          templateKey: null,
-          variantKey: null,
-          shown: false,
-          reasonsJson: toInputJson(debugInfo.reasons),
-          payloadJson: toInputJson(response.payload),
-          replayInputJson: toInputJson(parsed.data),
-          correlationId: requestId
+      return finalizeResponse({
+        response: buildNoShowResponse({
+          placement: parsed.data.placement
+        }),
+        profileIdForLog: profile.profileId,
+        campaignKey: null,
+        templateKey: null,
+        variantKey: null,
+        debugExtra: {
+          profile: {
+            profileId: profile.profileId,
+            audiences: profile.audiences
+          },
+          campaignChecks,
+          lookup: lookupTrace
         }
       });
-
-      return response;
     }
 
-    const selectedTemplate = await prisma.inAppTemplate.findFirst({
-      where: {
-        environment,
-        key: selectedCampaign.templateKey
-      }
-    });
+    const selectedTemplate = await withDbMs(() =>
+      prisma.inAppTemplate.findFirst({
+        where: {
+          environment,
+          key: selectedCampaign.templateKey
+        }
+      })
+    );
 
     if (!selectedTemplate) {
       appendReason("TEMPLATE_NOT_FOUND", `Template '${selectedCampaign.templateKey}' is missing`);
-      const response = buildNoShowResponse({
-        placement: parsed.data.placement,
-        debug: debugEnabled ? (redactSensitiveFields(debugInfo) as Record<string, unknown>) : undefined
+      return finalizeResponse({
+        response: buildNoShowResponse({
+          placement: parsed.data.placement
+        }),
+        profileIdForLog: profile.profileId,
+        campaignKey: selectedCampaign.key,
+        templateKey: selectedCampaign.templateKey,
+        variantKey: null
       });
-
-      await prisma.inAppDecisionLog.create({
-        data: {
-          environment,
-          campaignKey: selectedCampaign.key,
-          profileId: profile.profileId,
-          placement: parsed.data.placement,
-          templateKey: selectedCampaign.templateKey,
-          variantKey: null,
-          shown: false,
-          reasonsJson: toInputJson(debugInfo.reasons),
-          payloadJson: toInputJson(response.payload),
-          replayInputJson: toInputJson(parsed.data),
-          correlationId: requestId
-        }
-      });
-
-      return response;
     }
 
     const { values: tokenBindings, errors: tokenBindingErrors } = parseTokenBindings(selectedCampaign.tokenBindingsJson);
-    for (const error of tokenBindingErrors) {
-      appendReason("TOKEN_BINDING_INVALID", error);
+    if (tokenBindingErrors.length > 0) {
+      appendReason("TOKEN_BINDING_WARNINGS", tokenBindingErrors.join("; "));
     }
 
     const tokenValues: Record<string, unknown> = {};
-    for (const [token, binding] of Object.entries(tokenBindings)) {
-      let tokenValue = getValueByPath(profile.attributes, binding.sourcePath);
-      for (const transform of binding.transforms) {
-        tokenValue = applyTransform(tokenValue, transform);
+    await withEngineMs(async () => {
+      for (const [token, binding] of Object.entries(tokenBindings)) {
+        let tokenValue = getValueByPath(profile.attributes, binding.sourcePath);
+        for (const transform of binding.transforms) {
+          tokenValue = applyTransform(tokenValue, transform);
+        }
+        tokenValues[token] = tokenValue;
       }
-      tokenValues[token] = tokenValue;
-    }
-
-    const variantSelection = selectVariant({
-      profileId: profile.profileId,
-      campaignKey: selectedCampaign.key,
-      salt: selectedCampaign.holdoutSalt,
-      variants: selectedCampaign.variants
     });
+
+    const variantSelection = await withEngineMs(() =>
+      selectVariant({
+        profileId: profile.profileId,
+        campaignKey: selectedCampaign.key,
+        salt: selectedCampaign.holdoutSalt,
+        variants: selectedCampaign.variants
+      })
+    );
 
     if (!variantSelection.variant) {
       appendReason("VARIANT_NOT_FOUND");
-      const response = buildNoShowResponse({
-        placement: parsed.data.placement,
-        debug: debugEnabled ? (redactSensitiveFields(debugInfo) as Record<string, unknown>) : undefined
+      return finalizeResponse({
+        response: buildNoShowResponse({
+          placement: parsed.data.placement
+        }),
+        profileIdForLog: profile.profileId,
+        campaignKey: selectedCampaign.key,
+        templateKey: selectedCampaign.templateKey,
+        variantKey: null
       });
-
-      await prisma.inAppDecisionLog.create({
-        data: {
-          environment,
-          campaignKey: selectedCampaign.key,
-          profileId: profile.profileId,
-          placement: parsed.data.placement,
-          templateKey: selectedCampaign.templateKey,
-          variantKey: null,
-          shown: false,
-          reasonsJson: toInputJson(debugInfo.reasons),
-          payloadJson: toInputJson(response.payload),
-          replayInputJson: toInputJson(parsed.data),
-          correlationId: requestId
-        }
-      });
-
-      return response;
     }
 
     const selectedVariant = variantSelection.variant;
-    const renderedPayload = renderTemplateValue(selectedVariant.contentJson, tokenValues);
-    const ttlSeconds = selectedCampaign.ttlSeconds > 0 ? selectedCampaign.ttlSeconds : placement?.defaultTtlSeconds ?? 3600;
+    const renderedPayload = await withEngineMs(() => renderTemplateValue(selectedVariant.contentJson, tokenValues));
+    const ttlSeconds =
+      selectedCampaign.ttlSeconds > 0
+        ? selectedCampaign.ttlSeconds
+        : placement?.defaultTtlSeconds && placement.defaultTtlSeconds > 0
+          ? placement.defaultTtlSeconds
+          : 3600;
     const messageWindow = Math.floor(contextNow.getTime() / (Math.max(1, ttlSeconds) * 1000));
     const messageId = `msg_${selectedCampaign.key}_${selectedVariant.variantKey}_${messageWindow}`;
 
@@ -1762,9 +3354,33 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       ? (renderedPayload as Record<string, unknown>)
       : { value: renderedPayload };
 
-    if (debugEnabled) {
-      responsePayload.debug = redactSensitiveFields({
-        requestId,
+    const response: InAppDecideResponse = {
+      show: true,
+      placement: parsed.data.placement,
+      templateId: selectedCampaign.templateKey,
+      ttl_seconds: ttlSeconds,
+      tracking: {
+        campaign_id: selectedCampaign.key,
+        message_id: messageId,
+        variant_id: selectedVariant.variantKey
+      },
+      payload: responsePayload
+    };
+
+    appendReason("CAMPAIGN_SHOWN");
+    return finalizeResponse({
+      response,
+      profileIdForLog: profile.profileId,
+      campaignKey: selectedCampaign.key,
+      templateKey: selectedCampaign.templateKey,
+      variantKey: selectedVariant.variantKey,
+      recordImpression: {
+        campaignKey: selectedCampaign.key,
+        profileId: profile.profileId,
+        messageId,
+        timestamp: contextNow
+      },
+      debugExtra: {
         profile: {
           profileId: profile.profileId,
           audiences: profile.audiences
@@ -1783,64 +3399,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         tokenPreview: tokenValues,
         campaignChecks,
         lookup: lookupTrace
-      });
-    }
-
-    const response: InAppDecideResponse = {
-      show: true,
-      placement: parsed.data.placement,
-      templateId: selectedCampaign.templateKey,
-      ttl_seconds: ttlSeconds,
-      tracking: {
-        campaign_id: selectedCampaign.key,
-        message_id: messageId,
-        variant_id: selectedVariant.variantKey
-      },
-      payload: responsePayload
-    };
-
-    const payloadForLog = { ...responsePayload };
-    if ("debug" in payloadForLog) {
-      delete payloadForLog.debug;
-    }
-
-    await prisma.$transaction(async (tx) => {
-      await tx.inAppImpression.create({
-        data: {
-          environment,
-          campaignKey: selectedCampaign.key,
-          profileId: profile.profileId,
-          messageId,
-          timestamp: contextNow
-        }
-      });
-
-      await tx.inAppDecisionLog.create({
-        data: {
-          environment,
-          campaignKey: selectedCampaign.key,
-          profileId: profile.profileId,
-          placement: parsed.data.placement,
-          templateKey: selectedCampaign.templateKey,
-          variantKey: selectedVariant.variantKey,
-          shown: true,
-          reasonsJson: toInputJson(
-            tokenBindingErrors.length > 0
-              ? [
-                  {
-                    code: "TOKEN_BINDING_WARNINGS",
-                    detail: tokenBindingErrors.join("; ")
-                  }
-                ]
-              : [{ code: "CAMPAIGN_SHOWN" }]
-          ),
-          payloadJson: toInputJson(payloadForLog),
-          replayInputJson: toInputJson(parsed.data),
-          correlationId: requestId
-        }
-      });
+      }
     });
-
-    return response;
   });
 };

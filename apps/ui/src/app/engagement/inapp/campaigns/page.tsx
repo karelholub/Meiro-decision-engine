@@ -14,7 +14,7 @@ export default function InAppCampaignsPage() {
 
   const [filterAppKey, setFilterAppKey] = useState("");
   const [filterPlacementKey, setFilterPlacementKey] = useState("");
-  const [filterStatus, setFilterStatus] = useState<"" | "DRAFT" | "ACTIVE" | "ARCHIVED">("");
+  const [filterStatus, setFilterStatus] = useState<"" | "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED">("");
 
   const [showCreate, setShowCreate] = useState(false);
   const [createKey, setCreateKey] = useState("demo_home_top");
@@ -116,11 +116,12 @@ export default function InAppCampaignsPage() {
           Status
           <select
             value={filterStatus}
-            onChange={(event) => setFilterStatus(event.target.value as "" | "DRAFT" | "ACTIVE" | "ARCHIVED")}
+            onChange={(event) => setFilterStatus(event.target.value as "" | "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED")}
             className="rounded-md border border-stone-300 px-2 py-1"
           >
             <option value="">All</option>
             <option value="DRAFT">DRAFT</option>
+            <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
             <option value="ACTIVE">ACTIVE</option>
             <option value="ARCHIVED">ARCHIVED</option>
           </select>

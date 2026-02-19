@@ -35,8 +35,22 @@ enum WbsProfileIdStrategy {
 
 enum InAppCampaignStatus {
   DRAFT
+  PENDING_APPROVAL
   ACTIVE
   ARCHIVED
+}
+
+enum InAppEventType {
+  IMPRESSION
+  CLICK
+  DISMISS
+}
+
+enum InAppUserRole {
+  VIEWER
+  EDITOR
+  APPROVER
+  ADMIN
 }
 
 model Decision {
@@ -66,6 +80,52 @@ model DecisionVersion {
 
   @@unique([decisionId, version])
   @@index([decisionId, status])
+}
+
+model DecisionStack {
+  id             String         @id @default(uuid())
+  environment    Environment    @default(DEV)
+  key            String
+  name           String
+  description    String?        @default("")
+  status         DecisionStatus
+  version        Int
+  definitionJson Json
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  activatedAt    DateTime?
+
+  @@unique([environment, key, version])
+  @@index([environment, key, status])
+  @@index([environment, status, updatedAt])
+  @@map("decision_stacks")
+}
+
+model DecisionStackLog {
+  id               String      @id @default(uuid())
+  environment      Environment @default(DEV)
+  requestId        String
+  stackKey         String
+  version          Int
+  profileId        String
+  lookupAttribute  String?
+  lookupValueHash  String?
+  timestamp        DateTime    @default(now())
+  finalActionType  String
+  finalReasonsJson Json
+  stepsJson        Json
+  payloadJson      Json
+  debugJson        Json?
+  replayInputJson  Json?
+  correlationId    String
+  totalMs          Int
+
+  @@index([environment, stackKey, timestamp])
+  @@index([environment, profileId, timestamp])
+  @@index([environment, stackKey, profileId, timestamp])
+  @@index([requestId])
+  @@index([correlationId])
+  @@map("decision_stack_logs")
 }
 
 model DecisionLog {
@@ -204,10 +264,13 @@ model InAppCampaign {
   capsPerProfilePerWeek Int?
   eligibilityAudiencesAny Json?
   tokenBindingsJson     Json?
+  submittedAt           DateTime?
+  lastReviewComment     String?
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
   activatedAt           DateTime?
   variants              InAppCampaignVariant[]
+  versions              InAppCampaignVersion[]
 
   @@unique([environment, key])
   @@index([environment, appKey, placementKey, status])
@@ -257,6 +320,10 @@ model InAppDecisionLog {
   payloadJson   Json?
   replayInputJson Json?
   correlationId String
+  wbsMs         Int?
+  dbMs          Int?
+  engineMs      Int?
+  totalMs       Int?
   createdAt     DateTime    @default(now())
 
   @@index([environment, createdAt])
@@ -264,4 +331,89 @@ model InAppDecisionLog {
   @@index([environment, campaignKey, createdAt])
   @@index([correlationId])
   @@map("inapp_decision_logs")
+}
+
+model InAppDecisionCache {
+  id           String      @id @default(uuid())
+  environment  Environment @default(DEV)
+  cacheKey     String
+  responseJson Json
+  expiresAt    DateTime
+  createdAt    DateTime    @default(now())
+
+  @@unique([environment, cacheKey])
+  @@index([environment, expiresAt])
+  @@map("inapp_decision_cache")
+}
+
+model InAppEvent {
+  id              String        @id @default(uuid())
+  environment     Environment   @default(DEV)
+  eventType       InAppEventType
+  ts              DateTime      @default(now())
+  appKey          String
+  placement       String
+  campaignKey     String
+  variantKey      String
+  messageId       String
+  profileId       String?
+  lookupAttribute String?
+  lookupValueHash String?
+  contextJson     Json?
+  createdAt       DateTime      @default(now())
+
+  @@index([environment, campaignKey, ts])
+  @@index([environment, messageId])
+  @@index([environment, appKey, placement, ts])
+  @@map("inapp_events")
+}
+
+model InAppUser {
+  id        String      @id
+  role      InAppUserRole @default(VIEWER)
+  name      String?
+  email     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  isActive  Boolean     @default(true)
+
+  @@index([role, isActive])
+  @@map("inapp_users")
+}
+
+model InAppCampaignVersion {
+  id            String      @id @default(uuid())
+  campaignId    String
+  campaignKey   String
+  environment   Environment @default(DEV)
+  version       Int
+  snapshotJson  Json
+  authorUserId  String
+  reason        String?
+  createdAt     DateTime    @default(now())
+  campaign      InAppCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([environment, campaignKey, version])
+  @@index([campaignId, createdAt])
+  @@index([environment, campaignKey, createdAt])
+  @@map("inapp_campaign_versions")
+}
+
+model InAppAuditLog {
+  id          String      @id @default(uuid())
+  environment Environment @default(DEV)
+  userId      String
+  userRole    InAppUserRole
+  action      String
+  entityType  String
+  entityId    String
+  beforeHash  String?
+  afterHash   String?
+  metaJson    Json?
+  createdAt   DateTime    @default(now())
+
+  @@index([environment, entityType, entityId, createdAt])
+  @@index([environment, userId, createdAt])
+  @@index([action, createdAt])
+  @@map("inapp_audit_logs")
 }

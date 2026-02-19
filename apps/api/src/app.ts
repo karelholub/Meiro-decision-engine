@@ -1,16 +1,21 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import { Environment, Prisma, PrismaClient } from "@prisma/client";
 import {
   DecisionDefinitionSchema,
+  DecisionStackDefinitionSchema,
   createDefaultDecisionDefinition,
+  createDefaultDecisionStackDefinition,
   formatDecisionDefinition,
+  formatDecisionStackDefinition,
   validateDecisionDefinition,
+  validateDecisionStackDefinition,
   type DecisionDefinition,
+  type DecisionStackDefinition,
   type DecisionStatus
 } from "@decisioning/dsl";
-import { evaluateDecision, type EngineContext, type EngineProfile } from "@decisioning/engine";
+import { evaluateDecision, evaluateStack, type EngineContext, type EngineProfile } from "@decisioning/engine";
 import {
   WbsMeiroAdapter,
   buildWbsLookupRequest,
@@ -48,6 +53,7 @@ export interface BuildAppDeps {
   wbsAdapter?: WbsLookupAdapter;
   config?: AppConfig;
   now?: () => Date;
+  stackNowMs?: () => number;
   policyHook?: PolicyHook;
   rankerHook?: RankerHook;
 }
@@ -128,9 +134,10 @@ const decisionListQuerySchema = z.object({
 });
 
 const logsQuerySchema = z.object({
-  type: z.enum(["decision", "inapp"]).optional(),
+  type: z.enum(["decision", "inapp", "stack"]).optional(),
   decisionId: z.string().uuid().optional(),
   campaignKey: z.string().optional(),
+  stackKey: z.string().optional(),
   placement: z.string().optional(),
   profileId: z.string().optional(),
   from: z.string().datetime().optional(),
@@ -145,9 +152,67 @@ const logByIdParamsSchema = z.object({
 });
 
 const logByIdQuerySchema = z.object({
-  type: z.enum(["decision", "inapp"]).optional(),
+  type: z.enum(["decision", "inapp", "stack"]).optional(),
   includeTrace: z.coerce.boolean().optional()
 });
+
+const stackListQuerySchema = z.object({
+  status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
+  q: z.string().optional(),
+  page: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().max(200).optional()
+});
+
+const createStackBodySchema = z.object({
+  key: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  definition: z.unknown().optional()
+});
+
+const updateStackDraftBodySchema = z.object({
+  definition: z.unknown()
+});
+
+const validateStackBodySchema = z
+  .object({
+    definition: z.unknown().optional()
+  })
+  .optional();
+
+const stackByIdParamsSchema = z.object({
+  id: z.string().uuid()
+});
+
+const duplicateStackFromActiveQuerySchema = z.object({
+  key: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional()
+});
+
+const decideStackBodySchema = z
+  .object({
+    stackKey: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    profileId: z.string().min(1).optional(),
+    lookup: z
+      .object({
+        attribute: z.string().min(1),
+        value: z.string().min(1)
+      })
+      .optional(),
+    context: z
+      .object({
+        now: z.string().datetime().optional(),
+        channel: z.string().optional(),
+        device: z.string().optional(),
+        locale: z.string().optional(),
+        requestId: z.string().optional(),
+        sessionId: z.string().optional()
+      })
+      .optional(),
+    debug: z.boolean().optional()
+  })
+  .refine((value) => Boolean(value.profileId || value.lookup), {
+    message: "profileId or lookup is required"
+  });
 
 const reportQuerySchema = z.object({
   from: z.string().datetime().optional(),
@@ -219,8 +284,16 @@ const buildResponseError = (reply: FastifyReply, statusCode: number, error: stri
   return reply.code(statusCode).send({ error, details });
 };
 
+const hashSha256 = (value: string): string => {
+  return createHash("sha256").update(value).digest("hex");
+};
+
 const parseDefinition = (json: unknown): DecisionDefinition => {
   return DecisionDefinitionSchema.parse(json);
+};
+
+const parseStackDefinition = (json: unknown): DecisionStackDefinition => {
+  return DecisionStackDefinitionSchema.parse(json);
 };
 
 const toInputJson = (value: unknown): Prisma.InputJsonValue => {
@@ -316,6 +389,16 @@ const sanitizeDebugTraceForLog = (trace: unknown): unknown => {
   }
 
   const next = { ...(trace as Record<string, unknown>) };
+  if (isPlainObject(next.integration)) {
+    const sanitizedIntegration = { ...(next.integration as Record<string, unknown>) };
+    delete sanitizedIntegration.rawWbsResponse;
+    delete sanitizedIntegration.resolvedProfile;
+    if (Object.keys(sanitizedIntegration).length === 0) {
+      delete next.integration;
+    } else {
+      next.integration = sanitizedIntegration;
+    }
+  }
   delete next.rawWbsResponse;
   return next;
 };
@@ -452,6 +535,20 @@ interface CachedDecisionVersion {
   };
 }
 
+interface CachedStackVersion {
+  id: string;
+  environment: Environment;
+  key: string;
+  name: string;
+  description: string | null;
+  status: DecisionStatus;
+  version: number;
+  definitionJson: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+  activatedAt: Date | null;
+}
+
 class TtlCache<T> {
   private readonly entries = new Map<string, { value: T; expiresAt: number }>();
 
@@ -531,6 +628,36 @@ const patchDefinition = (
   });
 };
 
+const patchStackDefinition = (
+  base: DecisionStackDefinition,
+  updates: DecisionStackDefinition,
+  status: DecisionStatus,
+  timestamp: string
+): DecisionStackDefinition => {
+  return DecisionStackDefinitionSchema.parse({
+    ...updates,
+    id: base.id,
+    key: base.key,
+    version: base.version,
+    status,
+    createdAt: base.createdAt,
+    updatedAt: timestamp,
+    activatedAt: status === "ACTIVE" ? timestamp : status === "ARCHIVED" ? base.activatedAt ?? null : null,
+    steps: updates.steps.map((step) => ({
+      ...step,
+      enabled: step.enabled ?? true,
+      stopOnMatch: step.stopOnMatch ?? false,
+      stopOnActionTypes:
+        step.stopOnActionTypes && step.stopOnActionTypes.length > 0 ? step.stopOnActionTypes : ["suppress"],
+      continueOnNoMatch: step.continueOnNoMatch ?? true
+    })),
+    limits: {
+      maxSteps: Math.min(20, updates.limits.maxSteps),
+      maxTotalMs: updates.limits.maxTotalMs
+    }
+  });
+};
+
 interface DecisionValidationMetrics {
   ruleCount: number;
   hasElse: boolean;
@@ -541,6 +668,18 @@ interface DecisionValidationMetrics {
 interface DecisionSemanticAnalysis {
   warnings: string[];
   metrics: DecisionValidationMetrics;
+}
+
+interface StackValidationMetrics {
+  stepCount: number;
+  enabledStepCount: number;
+  usesWhenConditions: boolean;
+  mayShortCircuit: boolean;
+}
+
+interface StackSemanticAnalysis {
+  warnings: string[];
+  metrics: StackValidationMetrics;
 }
 
 const analyzeDecisionSemantics = (definition: DecisionDefinition): DecisionSemanticAnalysis => {
@@ -592,6 +731,42 @@ const analyzeDecisionSemantics = (definition: DecisionDefinition): DecisionSeman
       hasElse: definition.flow.rules.some((rule) => Boolean(rule.else)),
       usesHoldout: definition.holdout.enabled && definition.holdout.percentage > 0,
       usesCaps: Boolean(definition.caps.perProfilePerDay || definition.caps.perProfilePerWeek)
+    }
+  };
+};
+
+const analyzeStackSemantics = (definition: DecisionStackDefinition): StackSemanticAnalysis => {
+  const warnings: string[] = [];
+  const stepIds = new Set<string>();
+
+  for (const step of definition.steps) {
+    if (stepIds.has(step.id)) {
+      warnings.push(`Duplicate step id: ${step.id}`);
+    }
+    stepIds.add(step.id);
+
+    if (step.when && !step.when.left.startsWith("exports.") && !step.when.left.startsWith("context.")) {
+      warnings.push(`Step ${step.id} has invalid when.left reference.`);
+    }
+  }
+
+  if (definition.limits.maxSteps > 20) {
+    warnings.push("maxSteps exceeds hard cap 20 and will be clamped.");
+  }
+
+  if (definition.steps.filter((step) => step.enabled).length === 0) {
+    warnings.push("No enabled steps configured.");
+  }
+
+  return {
+    warnings,
+    metrics: {
+      stepCount: definition.steps.length,
+      enabledStepCount: definition.steps.filter((step) => step.enabled).length,
+      usesWhenConditions: definition.steps.some((step) => Boolean(step.when)),
+      mayShortCircuit: definition.steps.some(
+        (step) => step.stopOnMatch || step.stopOnActionTypes.length > 0 || !step.continueOnNoMatch
+      )
     }
   };
 };
@@ -700,10 +875,12 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   const wbsAdapter = deps.wbsAdapter ?? new WbsMeiroAdapter();
   const profileCache = new ProfileCache(PROFILE_CACHE_MAX_ITEMS, PROFILE_CACHE_TTL_MS);
   const activeDecisionCache = new TtlCache<CachedDecisionVersion>(10_000);
+  const activeStackCache = new TtlCache<CachedStackVersion>(10_000);
   const wbsInstanceCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsInstance.findFirst>>>(10_000);
   const wbsMappingCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsMapping.findFirst>>>(10_000);
 
   const now = deps.now ?? (() => new Date());
+  const stackNowMs = deps.stackNowMs;
 
   const fetchActiveDecision = async (input: {
     environment: Environment;
@@ -759,6 +936,38 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       return;
     }
     activeDecisionCache.clear(`${environment}:`);
+  };
+
+  const fetchActiveStack = async (input: { environment: Environment; stackKey: string }) => {
+    const cacheKey = `${input.environment}:key:${input.stackKey}`;
+    const cached = activeStackCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const found = await prisma.decisionStack.findFirst({
+      where: {
+        environment: input.environment,
+        key: input.stackKey,
+        status: "ACTIVE"
+      },
+      orderBy: { version: "desc" }
+    });
+
+    if (found) {
+      activeStackCache.set(cacheKey, found as CachedStackVersion);
+      activeStackCache.set(`${input.environment}:id:${found.id}`, found as CachedStackVersion);
+    }
+
+    return found;
+  };
+
+  const clearStackCaches = (environment?: Environment) => {
+    if (!environment) {
+      activeStackCache.clear();
+      return;
+    }
+    activeStackCache.clear(`${environment}:`);
   };
 
   const fetchActiveWbsInstance = async (environment: Environment) => {
@@ -1692,6 +1901,798 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     };
   });
 
+  app.get("/v1/stacks", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = stackListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const page = parsed.data.page ?? 1;
+    const limit = parsed.data.limit ?? 50;
+    const where = {
+      environment,
+      ...(parsed.data.status ? { status: parsed.data.status } : {}),
+      ...(parsed.data.q
+        ? {
+            OR: [
+              { key: { contains: parsed.data.q, mode: "insensitive" } },
+              { name: { contains: parsed.data.q, mode: "insensitive" } }
+            ]
+          }
+        : {})
+    } satisfies Prisma.DecisionStackWhereInput;
+
+    const [total, items] = await Promise.all([
+      prisma.decisionStack.count({ where }),
+      prisma.decisionStack.findMany({
+        where,
+        orderBy: [{ updatedAt: "desc" }],
+        skip: (page - 1) * limit,
+        take: limit
+      })
+    ]);
+
+    return {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      items: items.map((item) => ({
+        stackId: item.id,
+        key: item.key,
+        environment: item.environment,
+        name: item.name,
+        description: item.description ?? "",
+        version: item.version,
+        status: item.status,
+        updatedAt: item.updatedAt.toISOString(),
+        activatedAt: item.activatedAt?.toISOString() ?? null
+      }))
+    };
+  });
+
+  app.post("/v1/stacks", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = createStackBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const existing = await prisma.decisionStack.findMany({
+      where: {
+        environment,
+        key: parsed.data.key
+      },
+      orderBy: { version: "desc" }
+    });
+    const existingDraft = existing.find((item) => item.status === "DRAFT");
+    if (existingDraft) {
+      return buildResponseError(reply, 409, "Stack already has a draft version");
+    }
+
+    const stackId = randomUUID();
+    const nextVersion = (existing[0]?.version ?? 0) + 1;
+    const nowIso = now().toISOString();
+
+    let definition: DecisionStackDefinition;
+    try {
+      definition = parsed.data.definition
+        ? DecisionStackDefinitionSchema.parse({
+            ...parsed.data.definition,
+            id: stackId,
+            key: parsed.data.key,
+            name: parsed.data.name,
+            description: parsed.data.description ?? "",
+            version: nextVersion,
+            status: "DRAFT",
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            activatedAt: null
+          })
+        : createDefaultDecisionStackDefinition({
+            id: stackId,
+            key: parsed.data.key,
+            name: parsed.data.name,
+            description: parsed.data.description ?? "",
+            version: nextVersion,
+            status: "DRAFT"
+          });
+    } catch (error) {
+      return buildResponseError(reply, 400, "Stack definition is invalid", String(error));
+    }
+
+    const created = await prisma.decisionStack.create({
+      data: {
+        id: stackId,
+        environment,
+        key: parsed.data.key,
+        name: parsed.data.name,
+        description: parsed.data.description ?? "",
+        version: nextVersion,
+        status: "DRAFT",
+        definitionJson: toInputJson(definition),
+        updatedAt: new Date(definition.updatedAt)
+      }
+    });
+
+    clearStackCaches(environment);
+
+    return reply.code(201).send({
+      stackId: created.id,
+      versionId: created.id,
+      version: created.version,
+      status: created.status,
+      definition
+    });
+  });
+
+  app.get("/v1/stacks/:id", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = stackByIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid stack id");
+    }
+
+    const target = await prisma.decisionStack.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!target) {
+      return buildResponseError(reply, 404, "Stack not found");
+    }
+
+    const versions = await prisma.decisionStack.findMany({
+      where: {
+        environment,
+        key: target.key
+      },
+      orderBy: { version: "desc" }
+    });
+
+    return {
+      stackId: target.id,
+      key: target.key,
+      environment: target.environment,
+      name: target.name,
+      description: target.description ?? "",
+      versions: versions.map((version) => ({
+        versionId: version.id,
+        version: version.version,
+        status: version.status,
+        definition: parseStackDefinition(version.definitionJson),
+        updatedAt: version.updatedAt.toISOString(),
+        activatedAt: version.activatedAt?.toISOString() ?? null
+      }))
+    };
+  });
+
+  app.put("/v1/stacks/:id", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = stackByIdParamsSchema.safeParse(request.params);
+    const body = updateStackDraftBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const draft = await prisma.decisionStack.findFirst({
+      where: {
+        id: params.data.id,
+        environment,
+        status: "DRAFT"
+      }
+    });
+    if (!draft) {
+      return buildResponseError(reply, 409, "No editable DRAFT version");
+    }
+
+    const nowIso = now().toISOString();
+    let incoming: DecisionStackDefinition;
+    try {
+      incoming = DecisionStackDefinitionSchema.parse(body.data.definition);
+    } catch (error) {
+      return buildResponseError(reply, 400, "Stack definition is invalid", String(error));
+    }
+
+    const currentDefinition = parseStackDefinition(draft.definitionJson);
+    const patchedDefinition = patchStackDefinition(currentDefinition, incoming, "DRAFT", nowIso);
+
+    const updated = await prisma.decisionStack.update({
+      where: { id: draft.id },
+      data: {
+        name: patchedDefinition.name,
+        description: patchedDefinition.description,
+        definitionJson: toInputJson(patchedDefinition),
+        updatedAt: new Date(nowIso)
+      }
+    });
+
+    clearStackCaches(environment);
+
+    return {
+      stackId: updated.id,
+      versionId: updated.id,
+      version: updated.version,
+      status: updated.status,
+      definition: patchedDefinition
+    };
+  });
+
+  app.post("/v1/stacks/:id/validate", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = stackByIdParamsSchema.safeParse(request.params);
+    const body = validateStackBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const row = await prisma.decisionStack.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!row) {
+      return buildResponseError(reply, 404, "Stack not found");
+    }
+
+    const targetDefinition = body.data?.definition ?? row.definitionJson;
+    const validation = validateDecisionStackDefinition(targetDefinition);
+    if (!validation.valid || !validation.data) {
+      return {
+        valid: false,
+        errors: validation.errors,
+        warnings: validation.warnings,
+        metrics: {
+          stepCount: 0,
+          enabledStepCount: 0,
+          usesWhenConditions: false,
+          mayShortCircuit: false
+        },
+        formatted: null
+      };
+    }
+
+    const semantic = analyzeStackSemantics(validation.data);
+    const referencedKeys = [...new Set(validation.data.steps.map((step) => step.decisionKey))];
+    const existingDecisionKeys = new Set(
+      (
+        await prisma.decision.findMany({
+          where: {
+            environment,
+            key: { in: referencedKeys }
+          },
+          select: { key: true }
+        })
+      ).map((item) => item.key)
+    );
+    const unknownWarnings = referencedKeys
+      .filter((key) => !existingDecisionKeys.has(key))
+      .map((key) => `Decision key '${key}' is not found in ${environment}.`);
+
+    return {
+      valid: true,
+      errors: [],
+      warnings: [...validation.warnings, ...semantic.warnings, ...unknownWarnings],
+      metrics: semantic.metrics,
+      formatted: formatDecisionStackDefinition(validation.data)
+    };
+  });
+
+  app.post("/v1/stacks/:id/activate", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = stackByIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid stack id");
+    }
+
+    const nowIso = now().toISOString();
+    const activated = await prisma.$transaction(async (tx) => {
+      const target = await tx.decisionStack.findFirst({
+        where: {
+          id: params.data.id,
+          environment
+        }
+      });
+      if (!target) {
+        return null;
+      }
+
+      const draft = await tx.decisionStack.findFirst({
+        where: {
+          environment,
+          key: target.key,
+          status: "DRAFT"
+        },
+        orderBy: { version: "desc" }
+      });
+      if (!draft) {
+        return null;
+      }
+
+      const activeRows = await tx.decisionStack.findMany({
+        where: {
+          environment,
+          key: target.key,
+          status: "ACTIVE"
+        }
+      });
+
+      for (const activeRow of activeRows) {
+        const activeDefinition = parseStackDefinition(activeRow.definitionJson);
+        const archivedDefinition = patchStackDefinition(activeDefinition, activeDefinition, "ARCHIVED", nowIso);
+        await tx.decisionStack.update({
+          where: { id: activeRow.id },
+          data: {
+            status: "ARCHIVED",
+            definitionJson: toInputJson(archivedDefinition),
+            updatedAt: new Date(nowIso)
+          }
+        });
+      }
+
+      const draftDefinition = parseStackDefinition(draft.definitionJson);
+      const activeDefinition = patchStackDefinition(draftDefinition, draftDefinition, "ACTIVE", nowIso);
+      return tx.decisionStack.update({
+        where: { id: draft.id },
+        data: {
+          status: "ACTIVE",
+          name: activeDefinition.name,
+          description: activeDefinition.description,
+          definitionJson: toInputJson(activeDefinition),
+          activatedAt: new Date(nowIso),
+          updatedAt: new Date(nowIso)
+        }
+      });
+    });
+
+    if (!activated) {
+      return buildResponseError(reply, 404, "No draft version to activate");
+    }
+
+    clearStackCaches(environment);
+
+    return {
+      stackId: activated.id,
+      versionId: activated.id,
+      version: activated.version,
+      status: activated.status,
+      activatedAt: activated.activatedAt?.toISOString() ?? null,
+      definition: parseStackDefinition(activated.definitionJson)
+    };
+  });
+
+  app.post("/v1/stacks/:id/archive", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = stackByIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid stack id");
+    }
+
+    const target = await prisma.decisionStack.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!target) {
+      return buildResponseError(reply, 404, "Stack not found");
+    }
+
+    const active = await prisma.decisionStack.findFirst({
+      where: {
+        environment,
+        key: target.key,
+        status: "ACTIVE"
+      },
+      orderBy: { version: "desc" }
+    });
+    const draft = await prisma.decisionStack.findFirst({
+      where: {
+        environment,
+        key: target.key,
+        status: "DRAFT"
+      },
+      orderBy: { version: "desc" }
+    });
+    const current = active ?? draft;
+    if (!current) {
+      return buildResponseError(reply, 404, "No active or draft version to archive");
+    }
+
+    const nowIso = now().toISOString();
+    const currentDefinition = parseStackDefinition(current.definitionJson);
+    const archivedDefinition = patchStackDefinition(currentDefinition, currentDefinition, "ARCHIVED", nowIso);
+
+    const archived = await prisma.decisionStack.update({
+      where: { id: current.id },
+      data: {
+        status: "ARCHIVED",
+        definitionJson: toInputJson(archivedDefinition),
+        updatedAt: new Date(nowIso)
+      }
+    });
+
+    clearStackCaches(environment);
+
+    return {
+      stackId: archived.id,
+      versionId: archived.id,
+      version: archived.version,
+      status: archived.status
+    };
+  });
+
+  app.post("/v1/stacks/:id/duplicate-from-active", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = stackByIdParamsSchema.safeParse(request.params);
+    const query = duplicateStackFromActiveQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const row = await prisma.decisionStack.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!row) {
+      return buildResponseError(reply, 404, "Stack not found");
+    }
+    const stackKey = query.data.key ?? row.key;
+
+    const [active, draft, latest] = await Promise.all([
+      prisma.decisionStack.findFirst({
+        where: {
+          environment,
+          key: stackKey,
+          status: "ACTIVE"
+        },
+        orderBy: { version: "desc" }
+      }),
+      prisma.decisionStack.findFirst({
+        where: {
+          environment,
+          key: stackKey,
+          status: "DRAFT"
+        }
+      }),
+      prisma.decisionStack.findFirst({
+        where: {
+          environment,
+          key: stackKey
+        },
+        orderBy: { version: "desc" }
+      })
+    ]);
+
+    if (draft) {
+      return buildResponseError(reply, 409, "Stack already has a draft version");
+    }
+    if (!active) {
+      return buildResponseError(reply, 409, "No ACTIVE version to duplicate");
+    }
+
+    const nowIso = now().toISOString();
+    const nextVersion = (latest?.version ?? active.version) + 1;
+    const activeDefinition = parseStackDefinition(active.definitionJson);
+    const draftId = randomUUID();
+    const duplicatedDefinition = DecisionStackDefinitionSchema.parse({
+      ...activeDefinition,
+      id: draftId,
+      version: nextVersion,
+      status: "DRAFT",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      activatedAt: null
+    });
+
+    const duplicated = await prisma.decisionStack.create({
+      data: {
+        id: draftId,
+        environment,
+        key: active.key,
+        name: active.name,
+        description: active.description,
+        version: nextVersion,
+        status: "DRAFT",
+        definitionJson: toInputJson(duplicatedDefinition),
+        updatedAt: new Date(nowIso)
+      }
+    });
+
+    clearStackCaches(environment);
+
+    return reply.code(201).send({
+      stackId: duplicated.id,
+      versionId: duplicated.id,
+      version: duplicated.version,
+      status: duplicated.status
+    });
+  });
+
+  app.post("/v1/decide/stack", { preHandler: requireDecideAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = decideStackBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const requestId = parsed.data.context?.requestId ?? createRequestId(request);
+    const correlationId =
+      typeof request.headers["x-correlation-id"] === "string" && request.headers["x-correlation-id"].length > 0
+        ? request.headers["x-correlation-id"]
+        : requestId;
+    const contextNow = parseDateOrNow(parsed.data.context?.now, now);
+
+    const activeStack = await fetchActiveStack({
+      environment,
+      stackKey: parsed.data.stackKey
+    });
+    if (!activeStack) {
+      return buildResponseError(reply, 404, "Active stack not found");
+    }
+
+    let stackDefinition: DecisionStackDefinition;
+    try {
+      stackDefinition = parseStackDefinition(activeStack.definitionJson);
+    } catch (error) {
+      return buildResponseError(reply, 500, "Active stack definition is invalid", String(error));
+    }
+
+    let profile: EngineProfile;
+    let lookupSummary: Record<string, unknown> | undefined;
+    let lookupValueHash: string | null = null;
+    let lookupAttribute: string | null = null;
+
+    if (parsed.data.lookup) {
+      const activeWbsInstance = await fetchActiveWbsInstance(environment);
+      if (!activeWbsInstance) {
+        return buildResponseError(reply, 409, "WBS instance is not configured");
+      }
+      const activeWbsMapping = await fetchActiveWbsMapping(environment);
+      if (!activeWbsMapping) {
+        return buildResponseError(reply, 409, "WBS mapping is not configured");
+      }
+
+      lookupValueHash = hashSha256(parsed.data.lookup.value);
+      lookupAttribute = parsed.data.lookup.attribute;
+
+      let rawLookup: WbsLookupResponse;
+      try {
+        rawLookup = await wbsAdapter.lookup(
+          {
+            baseUrl: activeWbsInstance.baseUrl,
+            attributeParamName: activeWbsInstance.attributeParamName,
+            valueParamName: activeWbsInstance.valueParamName,
+            segmentParamName: activeWbsInstance.segmentParamName,
+            includeSegment: activeWbsInstance.includeSegment,
+            defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
+            timeoutMs: activeWbsInstance.timeoutMs
+          },
+          parsed.data.lookup
+        );
+      } catch (error) {
+        return buildResponseError(reply, 502, "WBS lookup failed", String(error));
+      }
+
+      const mappingConfig = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
+      if (!mappingConfig.success) {
+        return buildResponseError(reply, 500, "WBS mapping is invalid", mappingConfig.error.flatten());
+      }
+
+      const mapped = mapWbsLookupToProfile({
+        raw: rawLookup,
+        lookup: parsed.data.lookup,
+        profileIdStrategy: activeWbsMapping.profileIdStrategy,
+        profileIdAttributeKey: activeWbsMapping.profileIdAttributeKey,
+        mapping: mappingConfig.data
+      });
+      profile = mapped.profile;
+      lookupSummary = parsed.data.debug
+        ? {
+            mappingSummary: mapped.summary,
+            rawWbsResponse: redactSensitiveFields(rawLookup)
+          }
+        : undefined;
+    } else {
+      const targetProfileId = parsed.data.profileId as string;
+      const cacheKey = `${environment}:${targetProfileId}`;
+      const cachedProfile = profileCache.get(cacheKey);
+      if (cachedProfile) {
+        profile = cachedProfile;
+      } else {
+        try {
+          profile = await meiro.getProfile(targetProfileId);
+          profileCache.set(cacheKey, profile);
+        } catch (error) {
+          return buildResponseError(reply, 502, "Profile fetch failed", String(error));
+        }
+      }
+    }
+
+    const decisionKeys = [...new Set(stackDefinition.steps.map((step) => step.decisionKey))];
+    const activeDecisions = await prisma.decisionVersion.findMany({
+      where: {
+        status: "ACTIVE",
+        decision: {
+          environment,
+          key: {
+            in: decisionKeys
+          }
+        }
+      },
+      include: {
+        decision: true
+      },
+      orderBy: [{ decisionId: "asc" }, { version: "desc" }]
+    });
+
+    const decisionsByKey: Record<string, DecisionDefinition> = {};
+    const decisionIdByKey: Record<string, string> = {};
+    for (const row of activeDecisions) {
+      if (!decisionsByKey[row.decision.key]) {
+        decisionsByKey[row.decision.key] = parseDefinition(row.definitionJson);
+        decisionIdByKey[row.decision.key] = row.decisionId;
+      }
+    }
+
+    const dayStart = new Date(contextNow);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const weekStart = getWeekStart(contextNow);
+    const historyByDecisionKey: Record<string, { perProfilePerDay: number; perProfilePerWeek: number }> = {};
+    await Promise.all(
+      Object.entries(decisionIdByKey).map(async ([decisionKey, decisionId]) => {
+        const [perDay, perWeek] = await Promise.all([
+          prisma.decisionLog.count({
+            where: {
+              decisionId,
+              profileId: profile.profileId,
+              outcome: "ELIGIBLE",
+              timestamp: {
+                gte: dayStart
+              }
+            }
+          }),
+          prisma.decisionLog.count({
+            where: {
+              decisionId,
+              profileId: profile.profileId,
+              outcome: "ELIGIBLE",
+              timestamp: {
+                gte: weekStart
+              }
+            }
+          })
+        ]);
+        historyByDecisionKey[decisionKey] = {
+          perProfilePerDay: perDay,
+          perProfilePerWeek: perWeek
+        };
+      })
+    );
+
+    const stackResult = evaluateStack({
+      stack: stackDefinition,
+      profile,
+      context: {
+        now: contextNow.toISOString(),
+        ...parsed.data.context,
+        requestId
+      },
+      decisionsByKey,
+      historyByDecisionKey,
+      debug: Boolean(parsed.data.debug),
+      nowMs: stackNowMs
+    });
+
+    const response = {
+      final: {
+        actionType: stackResult.final.actionType,
+        payload: stackResult.final.payload
+      },
+      steps: stackResult.steps.map((step) => ({
+        decisionKey: step.decisionKey,
+        matched: step.matched,
+        actionType: step.actionType,
+        reasonCodes: step.reasonCodes,
+        stop: step.stop,
+        ms: step.ms,
+        ruleId: step.ruleId,
+        ran: step.ran,
+        skippedReason: step.skippedReason
+      })),
+      trace: {
+        correlationId,
+        stackKey: stackDefinition.key,
+        version: stackDefinition.version,
+        totalMs: stackResult.meta.totalMs
+      },
+      ...(parsed.data.debug
+        ? {
+            debug: {
+              exports: stackResult.exports ?? {},
+              profileSummary: redactSensitiveFields({
+                profileId: profile.profileId,
+                attributes: profile.attributes,
+                audiences: profile.audiences,
+                consents: profile.consents ?? []
+              }),
+              ...(lookupSummary ? { lookup: lookupSummary } : {})
+            }
+          }
+        : {})
+    };
+
+    await prisma.decisionStackLog.create({
+      data: {
+        environment,
+        requestId,
+        stackKey: stackDefinition.key,
+        version: stackDefinition.version,
+        profileId: profile.profileId,
+        lookupAttribute,
+        lookupValueHash,
+        timestamp: contextNow,
+        finalActionType: stackResult.final.actionType,
+        finalReasonsJson: toInputJson(stackResult.final.reasonCodes ?? []),
+        stepsJson: toInputJson(redactSensitiveFields(stackResult.steps)),
+        payloadJson: toInputJson(redactSensitiveFields(stackResult.final.payload)),
+        debugJson: parsed.data.debug ? toInputJson(redactSensitiveFields(response.debug ?? {})) : undefined,
+        replayInputJson: toInputJson({
+          stackKey: stackDefinition.key,
+          profileId: profile.profileId,
+          lookupAttribute: parsed.data.lookup?.attribute,
+          lookupValueHash: parsed.data.lookup ? hashSha256(parsed.data.lookup.value) : undefined,
+          context: parsed.data.context
+        }),
+        correlationId,
+        totalMs: stackResult.meta.totalMs
+      }
+    });
+
+    return response;
+  });
+
   app.post("/v1/simulate", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -2086,6 +3087,14 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
     const responseReasons = [...finalResult.reasons];
     const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
+    if (parsed.data.debug) {
+      integrationTrace.resolvedProfile = redactSensitiveFields({
+        profileId: profile.profileId,
+        attributes: profile.attributes,
+        audiences: profile.audiences,
+        consents: profile.consents ?? []
+      });
+    }
 
     if (finalResult.outcome !== "ERROR" && decisionDefinition.writeback?.enabled) {
       try {
@@ -2350,6 +3359,58 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     const includeTrace = parsed.data.includeTrace ?? false;
     const logType = parsed.data.type ?? "decision";
 
+    if (logType === "stack") {
+      const where = {
+        environment,
+        ...(parsed.data.stackKey ? { stackKey: parsed.data.stackKey } : {}),
+        ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+        ...(parsed.data.from || parsed.data.to
+          ? {
+              timestamp: {
+                ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
+                ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
+              }
+            }
+          : {})
+      } satisfies Prisma.DecisionStackLogWhereInput;
+
+      const [total, logs] = await Promise.all([
+        prisma.decisionStackLog.count({ where }),
+        prisma.decisionStackLog.findMany({
+          where,
+          orderBy: { timestamp: "desc" },
+          skip: (page - 1) * limit,
+          take: limit
+        })
+      ]);
+
+      return {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        items: logs.map((log) => {
+          const reasonCodes = Array.isArray(log.finalReasonsJson) ? log.finalReasonsJson : [];
+          return {
+            id: log.id,
+            logType: "stack",
+            requestId: log.requestId,
+            decisionId: log.stackKey,
+            stackKey: log.stackKey,
+            version: log.version,
+            profileId: log.profileId,
+            timestamp: log.timestamp.toISOString(),
+            actionType: log.finalActionType,
+            outcome: "STACK_RUN",
+            reasons: reasonCodes.map((code) => ({ code: String(code) })),
+            latencyMs: log.totalMs,
+            replayAvailable: log.replayInputJson !== null,
+            trace: includeTrace ? log.stepsJson : undefined
+          };
+        })
+      };
+    }
+
     if (logType === "inapp") {
       const where = {
         environment,
@@ -2392,7 +3453,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           actionType: log.shown ? "message" : "noop",
           outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
           reasons: log.reasonsJson,
-          latencyMs: 0,
+          latencyMs: log.totalMs ?? 0,
           replayAvailable: log.replayInputJson !== null,
           trace: includeTrace ? log.payloadJson : undefined
         }))
@@ -2461,6 +3522,40 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const logType = query.data.type ?? "decision";
+    if (logType === "stack") {
+      const log = await prisma.decisionStackLog.findFirst({
+        where: {
+          id: params.data.id,
+          environment
+        }
+      });
+
+      if (!log) {
+        return buildResponseError(reply, 404, "Log not found");
+      }
+
+      const reasonCodes = Array.isArray(log.finalReasonsJson) ? log.finalReasonsJson : [];
+      return {
+        item: {
+          id: log.id,
+          logType: "stack",
+          requestId: log.requestId,
+          decisionId: log.stackKey,
+          stackKey: log.stackKey,
+          version: log.version,
+          profileId: log.profileId,
+          timestamp: log.timestamp.toISOString(),
+          actionType: log.finalActionType,
+          payload: (log.payloadJson ?? {}) as Record<string, unknown>,
+          outcome: "STACK_RUN",
+          reasons: reasonCodes.map((code) => ({ code: String(code) })),
+          latencyMs: log.totalMs,
+          trace: query.data.includeTrace ? log.stepsJson : undefined,
+          replayInput: (log.replayInputJson ?? null) as Record<string, unknown> | null
+        }
+      };
+    }
+
     if (logType === "inapp") {
       const log = await prisma.inAppDecisionLog.findFirst({
         where: {
@@ -2486,7 +3581,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           payload: (log.payloadJson ?? {}) as Record<string, unknown>,
           outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
           reasons: log.reasonsJson,
-          latencyMs: 0,
+          latencyMs: log.totalMs ?? 0,
           trace: query.data.includeTrace ? log.payloadJson : undefined,
           replayInput: (log.replayInputJson ?? null) as Record<string, unknown> | null
         }
@@ -2541,6 +3636,51 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const logType = parsed.data.type ?? "decision";
+    if (logType === "stack") {
+      const logs = await prisma.decisionStackLog.findMany({
+        where: {
+          environment,
+          ...(parsed.data.stackKey ? { stackKey: parsed.data.stackKey } : {}),
+          ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+          ...(parsed.data.from || parsed.data.to
+            ? {
+                timestamp: {
+                  ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
+                  ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
+                }
+              }
+            : {})
+        },
+        orderBy: { timestamp: "desc" },
+        take: parsed.data.limit ?? 1000
+      });
+
+      reply.header("Content-Type", "application/x-ndjson");
+
+      const body = logs
+        .map((log) =>
+          JSON.stringify({
+            id: log.id,
+            logType: "stack",
+            requestId: log.requestId,
+            stackKey: log.stackKey,
+            version: log.version,
+            profileId: log.profileId,
+            timestamp: log.timestamp.toISOString(),
+            actionType: log.finalActionType,
+            reasonCodes: log.finalReasonsJson,
+            payload: log.payloadJson,
+            steps: log.stepsJson,
+            replayInput: log.replayInputJson,
+            totalMs: log.totalMs,
+            correlationId: log.correlationId
+          })
+        )
+        .join("\n");
+
+      return `${body}\n`;
+    }
+
     if (logType === "inapp") {
       const logs = await prisma.inAppDecisionLog.findMany({
         where: {

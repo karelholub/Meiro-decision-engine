@@ -143,6 +143,82 @@ export const DecisionDefinitionSchema = z.object({
 });
 export type DecisionDefinition = z.infer<typeof DecisionDefinitionSchema>;
 
+export const StackWhenSchema = z
+  .object({
+    op: z.enum(["eq", "neq", "exists"]),
+    left: z.string().min(1),
+    right: z.string().optional()
+  })
+  .superRefine((value, ctx) => {
+    if (!value.left.startsWith("exports.") && !value.left.startsWith("context.")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "when.left must start with exports. or context."
+      });
+    }
+    if ((value.op === "eq" || value.op === "neq") && (value.right === undefined || value.right.trim() === "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "when.right is required for eq and neq operators"
+      });
+    }
+  });
+export type StackWhen = z.infer<typeof StackWhenSchema>;
+
+export const StackFinalOutputModeSchema = z.enum(["FIRST_NON_NOOP", "LAST_MATCH", "EXPLICIT"]);
+export type StackFinalOutputMode = z.infer<typeof StackFinalOutputModeSchema>;
+
+export const StackLimitsSchema = z.object({
+  maxSteps: z.number().int().positive().max(20).default(10),
+  maxTotalMs: z.number().int().positive().max(5000).default(250)
+});
+export type StackLimits = z.infer<typeof StackLimitsSchema>;
+
+export const DecisionStackStepSchema = z.object({
+  id: z.string().min(1),
+  decisionKey: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  enabled: z.boolean().default(true),
+  stopOnMatch: z.boolean().default(false),
+  stopOnActionTypes: z.array(ActionTypeSchema).default(["suppress"]),
+  continueOnNoMatch: z.boolean().default(true),
+  when: StackWhenSchema.optional(),
+  label: z.string().optional(),
+  description: z.string().optional()
+});
+export type DecisionStackStep = z.infer<typeof DecisionStackStepSchema>;
+
+export const DecisionStackDefinitionSchema = z.object({
+  id: z.string().uuid(),
+  key: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+  name: z.string().min(1),
+  description: z.string().default(""),
+  status: DecisionStatusSchema,
+  version: z.number().int().positive(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  activatedAt: z.string().datetime().nullable().optional(),
+  limits: StackLimitsSchema.default({
+    maxSteps: 10,
+    maxTotalMs: 250
+  }),
+  steps: z.array(DecisionStackStepSchema).min(1).max(20),
+  finalOutputMode: StackFinalOutputModeSchema.default("FIRST_NON_NOOP"),
+  outputs: z
+    .object({
+      default: DecisionOutputSchema.default({
+        actionType: "noop",
+        payload: {}
+      })
+    })
+    .default({
+      default: {
+        actionType: "noop",
+        payload: {}
+      }
+    })
+});
+export type DecisionStackDefinition = z.infer<typeof DecisionStackDefinitionSchema>;
+
 const newId = () => {
   if (typeof globalThis.crypto !== "undefined" && "randomUUID" in globalThis.crypto) {
     return globalThis.crypto.randomUUID();
@@ -212,6 +288,58 @@ export const createDefaultDecisionDefinition = ({
   };
 };
 
+export interface CreateStackDefinitionInput {
+  id: string;
+  key: string;
+  name: string;
+  description?: string;
+  version: number;
+  status?: DecisionStatus;
+}
+
+export const createDefaultDecisionStackDefinition = ({
+  id,
+  key,
+  name,
+  description,
+  version,
+  status = "DRAFT"
+}: CreateStackDefinitionInput): DecisionStackDefinition => {
+  const now = new Date().toISOString();
+  return {
+    id,
+    key,
+    name,
+    description: description ?? "",
+    status,
+    version,
+    createdAt: now,
+    updatedAt: now,
+    activatedAt: status === "ACTIVE" ? now : null,
+    limits: {
+      maxSteps: 10,
+      maxTotalMs: 250
+    },
+    steps: [
+      {
+        id: "step-1",
+        decisionKey: "global_suppression",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: ["suppress"],
+        continueOnNoMatch: true
+      }
+    ],
+    finalOutputMode: "FIRST_NON_NOOP",
+    outputs: {
+      default: {
+        actionType: "noop",
+        payload: {}
+      }
+    }
+  };
+};
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
@@ -254,7 +382,57 @@ export const validateDecisionDefinition = (input: unknown): ValidationResult => 
   };
 };
 
+export interface StackValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  data?: DecisionStackDefinition;
+}
+
+export const validateDecisionStackDefinition = (input: unknown): StackValidationResult => {
+  const parsed = DecisionStackDefinitionSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      valid: false,
+      errors: parsed.error.issues.map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`),
+      warnings: []
+    };
+  }
+
+  const definition = parsed.data;
+  const warnings: string[] = [];
+  const stepIds = new Set<string>();
+  const enabledStepCount = definition.steps.filter((step) => step.enabled).length;
+
+  if (enabledStepCount === 0) {
+    warnings.push("No enabled steps configured.");
+  }
+
+  if (definition.steps.length >= 20) {
+    warnings.push("Stack is at hard step cap (20).");
+  }
+
+  for (const step of definition.steps) {
+    if (stepIds.has(step.id)) {
+      warnings.push(`Duplicate step id: ${step.id}`);
+    }
+    stepIds.add(step.id);
+  }
+
+  return {
+    valid: true,
+    errors: [],
+    warnings,
+    data: definition
+  };
+};
+
 export const formatDecisionDefinition = (input: unknown): string => {
   const parsed = DecisionDefinitionSchema.parse(input);
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+};
+
+export const formatDecisionStackDefinition = (input: unknown): string => {
+  const parsed = DecisionStackDefinitionSchema.parse(input);
   return `${JSON.stringify(parsed, null, 2)}\n`;
 };

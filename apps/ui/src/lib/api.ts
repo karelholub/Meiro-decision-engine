@@ -3,11 +3,20 @@ import type {
   ActivationPreviewResponse,
   DecisionDetailsResponse,
   DecisionReportResponse,
+  DecisionStackDetailsResponse,
+  DecisionStackValidationResponse,
+  DecisionStackVersionSummary,
   DecisionValidationResponse,
   DecisionVersionSummary,
+  DecideStackResponse,
   InAppApplication,
+  InAppAuditLog,
   InAppCampaign,
+  InAppCampaignReport,
+  InAppCampaignVersion,
   InAppDecideResponse,
+  InAppEvent,
+  InAppOverviewReport,
   InAppPlacement,
   InAppTemplate,
   LogDetailsResponse,
@@ -53,6 +62,35 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return json as T;
+}
+
+export async function apiFetchText(path: string, init?: RequestInit): Promise<string> {
+  const headers = new Headers(init?.headers ?? {});
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const shouldAttachWriteKey = method !== "GET";
+  if (shouldAttachWriteKey && API_KEY) {
+    headers.set("X-API-KEY", API_KEY);
+  }
+  headers.set("X-ENV", getEnvironment());
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers,
+    cache: "no-store"
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    let json: { error?: string; details?: unknown } | undefined;
+    try {
+      json = text ? (JSON.parse(text) as { error?: string; details?: unknown }) : undefined;
+    } catch {
+      json = undefined;
+    }
+    throw new ApiError(json?.error ?? "Request failed", response.status, json?.details);
+  }
+
+  return text;
 }
 
 export const toQuery = (params: Record<string, string | number | boolean | undefined | null>) => {
@@ -134,8 +172,9 @@ export const apiClient = {
     }),
   logs: {
     list: (params: {
-      type?: "decision" | "inapp";
+      type?: "decision" | "stack" | "inapp";
       decisionId?: string;
+      stackKey?: string;
       campaignKey?: string;
       placement?: string;
       profileId?: string;
@@ -145,9 +184,40 @@ export const apiClient = {
       limit?: number;
       includeTrace?: boolean;
     }) => apiFetch<LogsQueryResponse>(`/v1/logs${toQuery(params)}`),
-    get: (id: string, includeTrace = false, type: "decision" | "inapp" = "decision") =>
+    get: (id: string, includeTrace = false, type: "decision" | "stack" | "inapp" = "decision") =>
       apiFetch<LogDetailsResponse>(`/v1/logs/${id}${toQuery({ includeTrace: includeTrace ? 1 : 0, type })}`)
   },
+  stacks: {
+    list: (params: { status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; q?: string; page?: number; limit?: number } = {}) =>
+      apiFetch<{ items: DecisionStackVersionSummary[]; page: number; limit: number; total: number; totalPages: number }>(
+        `/v1/stacks${toQuery(params)}`
+      ),
+    get: (stackId: string) => apiFetch<DecisionStackDetailsResponse>(`/v1/stacks/${stackId}`),
+    create: (input: { key: string; name: string; description?: string; definition?: Record<string, unknown> }) =>
+      apiFetch<{ stackId: string; versionId: string }>(`/v1/stacks`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
+    updateDraft: (stackId: string, definition: Record<string, unknown>) =>
+      apiFetch<{ definition: Record<string, unknown> }>(`/v1/stacks/${stackId}`, {
+        method: "PUT",
+        body: JSON.stringify({ definition })
+      }),
+    validate: (stackId: string, definition?: Record<string, unknown>) =>
+      apiFetch<DecisionStackValidationResponse>(`/v1/stacks/${stackId}/validate`, {
+        method: "POST",
+        body: JSON.stringify(definition ? { definition } : {})
+      }),
+    activate: (stackId: string) => apiFetch(`/v1/stacks/${stackId}/activate`, { method: "POST" }),
+    archive: (stackId: string) => apiFetch(`/v1/stacks/${stackId}/archive`, { method: "POST" }),
+    duplicateFromActive: (stackId: string, key?: string) =>
+      apiFetch(`/v1/stacks/${stackId}/duplicate-from-active${toQuery({ key })}`, { method: "POST" })
+  },
+  decideStack: (input: Record<string, unknown>) =>
+    apiFetch<DecideStackResponse>(`/v1/decide/stack`, {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
   inapp: {
     apps: {
       list: () => apiFetch<{ items: InAppApplication[] }>(`/v1/inapp/apps`),
@@ -185,7 +255,7 @@ export const apiClient = {
         })
     },
     campaigns: {
-      list: (params: { appKey?: string; placementKey?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED" } = {}) =>
+      list: (params: { appKey?: string; placementKey?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED" } = {}) =>
         apiFetch<{ items: InAppCampaign[] }>(`/v1/inapp/campaigns${toQuery(params)}`),
       get: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}`),
       create: (input: Record<string, unknown>) =>
@@ -206,6 +276,33 @@ export const apiClient = {
         ),
       activate: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/activate`, { method: "POST" }),
       archive: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/archive`, { method: "POST" }),
+      submitForApproval: (id: string, comment?: string) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/submit-for-approval`, {
+          method: "POST",
+          body: JSON.stringify(comment ? { comment } : {})
+        }),
+      approveAndActivate: (id: string, comment?: string) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/approve-and-activate`, {
+          method: "POST",
+          body: JSON.stringify(comment ? { comment } : {})
+        }),
+      rejectToDraft: (id: string, comment?: string) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/reject-to-draft`, {
+          method: "POST",
+          body: JSON.stringify(comment ? { comment } : {})
+        }),
+      rollback: (id: string, version: number) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/rollback`, {
+          method: "POST",
+          body: JSON.stringify({ version })
+        }),
+      promote: (id: string, targetEnvironment: "DEV" | "STAGE" | "PROD") =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/promote`, {
+          method: "POST",
+          body: JSON.stringify({ targetEnvironment })
+        }),
+      versions: (id: string) => apiFetch<{ items: InAppCampaignVersion[] }>(`/v1/inapp/campaigns/${id}/versions`),
+      audit: (id: string, limit = 100) => apiFetch<{ items: InAppAuditLog[] }>(`/v1/inapp/campaigns/${id}/audit${toQuery({ limit })}`),
       validate: (input: Record<string, unknown>) =>
         apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; requiredFields?: string[] }>(
           `/v1/inapp/validate/campaign`,
@@ -219,7 +316,24 @@ export const apiClient = {
       apiFetch<InAppDecideResponse>(`/v1/inapp/decide`, {
         method: "POST",
         body: JSON.stringify(input)
-      })
+      }),
+    events: {
+      ingest: (input: Record<string, unknown>) =>
+        apiFetch<{ status: "ok" }>(`/v1/inapp/events`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      list: (params: { campaignKey?: string; messageId?: string; profileId?: string; from?: string; to?: string; limit?: number } = {}) =>
+        apiFetch<{ items: InAppEvent[] }>(`/v1/inapp/events${toQuery(params)}`)
+    },
+    reports: {
+      overview: (params: { from?: string; to?: string; appKey?: string; placement?: string; campaignKey?: string } = {}) =>
+        apiFetch<InAppOverviewReport>(`/v1/inapp/reports/overview${toQuery(params)}`),
+      campaign: (campaignKey: string, params: { from?: string; to?: string } = {}) =>
+        apiFetch<InAppCampaignReport>(`/v1/inapp/reports/campaign/${campaignKey}${toQuery(params)}`),
+      exportCsv: (params: { from?: string; to?: string; appKey?: string; placement?: string; campaignKey?: string } = {}) =>
+        apiFetchText(`/v1/inapp/reports/export.csv${toQuery(params)}`)
+    }
   },
   settings: {
     getWbs: () => apiFetch<{ item: WbsInstanceSettings | null }>(`/v1/settings/wbs`),

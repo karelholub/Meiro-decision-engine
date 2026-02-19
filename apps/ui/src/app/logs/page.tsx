@@ -8,8 +8,9 @@ import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../l
 
 export default function LogsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
-  const [logType, setLogType] = useState<"decision" | "inapp">("decision");
+  const [logType, setLogType] = useState<"decision" | "stack" | "inapp">("decision");
   const [decisionId, setDecisionId] = useState("");
+  const [stackKey, setStackKey] = useState("");
   const [campaignKey, setCampaignKey] = useState("");
   const [placement, setPlacement] = useState("");
   const [profileId, setProfileId] = useState("");
@@ -33,6 +34,7 @@ export default function LogsPage() {
       const response = await apiClient.logs.list({
         type: logType,
         decisionId: logType === "decision" ? decisionId || undefined : undefined,
+        stackKey: logType === "stack" ? stackKey || undefined : undefined,
         campaignKey: logType === "inapp" ? campaignKey || undefined : undefined,
         placement: logType === "inapp" ? placement || undefined : undefined,
         profileId: profileId || undefined,
@@ -92,12 +94,13 @@ export default function LogsPage() {
           <select
             value={logType}
             onChange={(event) => {
-              setLogType(event.target.value as "decision" | "inapp");
+              setLogType(event.target.value as "decision" | "stack" | "inapp");
               setPage(1);
             }}
             className="rounded-md border border-stone-300 px-2 py-1"
           >
             <option value="decision">decision</option>
+            <option value="stack">stack</option>
             <option value="inapp">inapp</option>
           </select>
         </label>
@@ -108,6 +111,15 @@ export default function LogsPage() {
             <input
               value={decisionId}
               onChange={(event) => setDecisionId(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            />
+          </label>
+        ) : logType === "stack" ? (
+          <label className="flex flex-col gap-1 text-sm lg:col-span-2">
+            Stack key
+            <input
+              value={stackKey}
+              onChange={(event) => setStackKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
             />
           </label>
@@ -180,7 +192,9 @@ export default function LogsPage() {
           <thead>
             <tr className="text-left text-stone-600">
               <th className="border-b border-stone-200 px-3 py-2">Time</th>
-              <th className="border-b border-stone-200 px-3 py-2">{logType === "decision" ? "Decision" : "Campaign"}</th>
+              <th className="border-b border-stone-200 px-3 py-2">
+                {logType === "decision" ? "Decision" : logType === "stack" ? "Stack" : "Campaign"}
+              </th>
               <th className="border-b border-stone-200 px-3 py-2">Profile</th>
               <th className="border-b border-stone-200 px-3 py-2">Outcome</th>
               <th className="border-b border-stone-200 px-3 py-2">Action</th>
@@ -194,7 +208,7 @@ export default function LogsPage() {
               <Fragment key={item.id}>
                 <tr key={item.id}>
                   <td className="border-b border-stone-100 px-3 py-2">{new Date(item.timestamp).toLocaleString()}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.decisionId}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.stackKey ?? item.decisionId}</td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.profileId}</td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.outcome}</td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.actionType}</td>

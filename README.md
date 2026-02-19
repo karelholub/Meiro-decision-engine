@@ -39,7 +39,9 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - WBS instance settings API + UI (base URL, query param names, timeout, segment toggle)
 - WBS mapping API + UI (returned_attributes -> attributes/audiences/consents)
 - In-App Messaging module (Applications, Placements, Templates, Campaigns + variants)
-- `/v1/inapp/decide` runtime endpoint with deterministic varianting, holdout, caps, token rendering, and tracking payload
+- `/v1/inapp/decide` runtime endpoint with deterministic varianting, holdout, caps, token rendering, tracking payload, cache, timeout fallback, and rate limiting
+- In-App measurement ingest (`IMPRESSION`, `CLICK`, `DISMISS`) and reporting APIs (overview, campaign series, CSV export)
+- In-App governance workflow (RBAC roles, approval actions, campaign versions, audit log, rollback, env promotion)
 - DSL validation + formatting with Zod
 - Deterministic engine:
   - eligibility checks (audiences, attributes, consent)
@@ -70,9 +72,21 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `GET/POST/PUT /v1/inapp/campaigns`
   - `POST /v1/inapp/campaigns/:id/activate`
   - `POST /v1/inapp/campaigns/:id/archive`
+  - `POST /v1/inapp/campaigns/:id/submit-for-approval`
+  - `POST /v1/inapp/campaigns/:id/approve-and-activate`
+  - `POST /v1/inapp/campaigns/:id/reject-to-draft`
+  - `POST /v1/inapp/campaigns/:id/rollback`
+  - `POST /v1/inapp/campaigns/:id/promote`
+  - `GET /v1/inapp/campaigns/:id/versions`
+  - `GET /v1/inapp/campaigns/:id/audit`
   - `POST /v1/inapp/validate/template`
   - `POST /v1/inapp/validate/campaign`
   - `POST /v1/inapp/decide`
+  - `POST /v1/inapp/events`
+  - `GET /v1/inapp/events`
+  - `GET /v1/inapp/reports/overview`
+  - `GET /v1/inapp/reports/campaign/:key`
+  - `GET /v1/inapp/reports/export.csv`
   - paginated logs list + log details + NDJSON export
   - `GET /v1/logs/:id` for payload/trace/replay input
   - environment selection via `X-ENV` header (defaults to `DEV`)
@@ -103,6 +117,11 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `InAppCampaignVariant` (`inapp_campaign_variants`)
 - `InAppImpression` (`inapp_impressions`)
 - `InAppDecisionLog` (`inapp_decision_logs`)
+- `InAppDecisionCache` (`inapp_decision_cache`)
+- `InAppEvent` (`inapp_events`)
+- `InAppUser` (`inapp_users`)
+- `InAppCampaignVersion` (`inapp_campaign_versions`)
+- `InAppAuditLog` (`inapp_audit_logs`)
 
 Migration is included at:
 - `apps/api/prisma/migrations/202602190001_init/migration.sql`
@@ -111,6 +130,7 @@ Migration is included at:
 - `apps/api/prisma/migrations/202602190004_wbs_settings_mapping/migration.sql`
 - `apps/api/prisma/migrations/202602190005_log_replay_and_indexes/migration.sql`
 - `apps/api/prisma/migrations/202602191700_inapp_mvp/migration.sql`
+- `apps/api/prisma/migrations/202602191900_inapp_v2_hardening/migration.sql`
 
 ## Environment Variables
 
@@ -133,6 +153,10 @@ Important values:
 - `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
 - `NEXT_PUBLIC_API_BASE_URL`
 - `NEXT_PUBLIC_API_KEY`
+- `INAPP_RATE_LIMIT_WINDOW_MS` (default `60000`)
+- `INAPP_RATE_LIMIT_PER_API_KEY` (default `240`)
+- `INAPP_RATE_LIMIT_PER_APP_KEY` (default `360`)
+- `INAPP_WBS_TIMEOUT_MS` (default `800`)
 
 ## Local Setup (pnpm)
 
@@ -174,6 +198,15 @@ BENCH_ITERATIONS=1000 pnpm bench:decide
 ```bash
 docker compose up --build
 ```
+
+Recommended incremental builds:
+
+```bash
+docker compose build api ui
+docker compose up -d
+```
+
+The Dockerfiles are multi-stage and use BuildKit cache mounts for the pnpm store. To verify layer reuse, rebuild after a source-only change and confirm `pnpm fetch` / `pnpm install` layers are reported as `CACHED`.
 
 Services:
 
@@ -235,6 +268,51 @@ Defined in:
     - `churn -> web_churn_risk_score|takeFirst`
     - `spend -> web_total_spend|takeFirst`
     - `recommended_product -> web_product_recommended2|parseJsonIfString|takeFirst`
+
+## In-App v2 Usage
+
+### Runtime decision
+
+```bash
+curl -X POST "http://localhost:3001/v1/inapp/decide" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -H "X-API-KEY: local-write-key" \
+  -d '{
+    "appKey": "meiro_store",
+    "placement": "home_top",
+    "lookup": { "attribute": "email", "value": "alex@example.com" },
+    "context": { "channel": "mobile" },
+    "debug": true
+  }'
+```
+
+### Event ingest
+
+```bash
+curl -X POST "http://localhost:3001/v1/inapp/events" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -H "X-API-KEY: local-write-key" \
+  -d '{
+    "eventType": "IMPRESSION",
+    "appKey": "meiro_store",
+    "placement": "home_top",
+    "tracking": {
+      "campaign_id": "demo_home_top",
+      "message_id": "msg_demo_home_top_A_483672",
+      "variant_id": "A"
+    },
+    "lookup": { "attribute": "email", "value": "alex@example.com" }
+  }'
+```
+
+### Mobile integration notes
+
+1. Call `POST /v1/inapp/decide` on placement render (for example, app home top slot).
+2. Route by `templateId` in app code to your local rendering component.
+3. Render `payload` fields directly from the contract.
+4. Track `IMPRESSION`, `CLICK`, `DISMISS` with `POST /v1/inapp/events` using `tracking` IDs returned by decide.
 
 ## Example Decision DSL JSON
 
