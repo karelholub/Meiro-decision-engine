@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { DecisionVersionSummary, DecideStackResponse, InAppDecideResponse } from "@decisioning/shared";
-import { apiClient } from "../../lib/api";
+import type { DecisionStackVersionSummary, DecisionVersionSummary, DecideStackResponse, InAppDecideResponse } from "@decisioning/shared";
+import { ApiError, apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
 type SimulationProfile = {
@@ -87,6 +87,7 @@ export default function SimulatePage() {
   const [simulatorType, setSimulatorType] = useState<"decision" | "stack" | "inapp">("decision");
 
   const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
+  const [stacks, setStacks] = useState<DecisionStackVersionSummary[]>([]);
   const [decisionId, setDecisionId] = useState("");
   const [decisionKey, setDecisionKey] = useState("");
   const [version, setVersion] = useState("");
@@ -171,12 +172,18 @@ export default function SimulatePage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const response = await apiClient.decisions.list({ status: "ACTIVE", limit: 100, page: 1 });
-        setDecisions(response.items);
-        setDecisionId((current) => current || response.items[0]?.decisionId || "");
-        setDecisionKey((current) => current || response.items[0]?.key || "");
+        const [decisionResponse, stackResponse] = await Promise.all([
+          apiClient.decisions.list({ status: "ACTIVE", limit: 100, page: 1 }),
+          apiClient.stacks.list({ status: "ACTIVE", limit: 100, page: 1 })
+        ]);
+
+        setDecisions(decisionResponse.items);
+        setStacks(stackResponse.items);
+        setDecisionId((current) => current || decisionResponse.items[0]?.decisionId || "");
+        setDecisionKey((current) => current || decisionResponse.items[0]?.key || "");
+        setStackKey((current) => current || stackResponse.items[0]?.key || "");
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : "Failed to load active decisions");
+        setError(loadError instanceof Error ? loadError.message : "Failed to load simulator resources");
       }
     };
 
@@ -188,6 +195,24 @@ export default function SimulatePage() {
       setProfileJson(pretty(selectedSavedProfile));
     }
   }, [profileInputMode, selectedSavedProfile]);
+
+  useEffect(() => {
+    if (!stackKey.trim()) {
+      if (stacks[0]?.key) {
+        setStackKey(stacks[0].key);
+      }
+      return;
+    }
+
+    if (stacks.length === 0) {
+      return;
+    }
+
+    const existsInActiveList = stacks.some((item) => item.key === stackKey.trim());
+    if (!existsInActiveList && stacks[0]?.key) {
+      setStackKey(stacks[0].key);
+    }
+  }, [stackKey, stacks]);
 
   useEffect(() => {
     if (savedProfiles.some((profile) => profile.profileId === savedProfileId)) {
@@ -338,8 +363,20 @@ export default function SimulatePage() {
         setPreviousDecisionResult(decisionResult);
         setDecisionResult(next);
       } else if (simulatorType === "stack") {
+        const normalizedStackKey = stackKey.trim();
+        if (!normalizedStackKey) {
+          setError("Stack key is required.");
+          return;
+        }
+
+        const knownActiveStack = stacks.some((item) => item.key === normalizedStackKey);
+        if (stacks.length > 0 && !knownActiveStack) {
+          setError(`Stack '${normalizedStackKey}' is not active in ${environment}. Select an active key from the list.`);
+          return;
+        }
+
         const next = await apiClient.decideStack({
-          stackKey: stackKey || undefined,
+          stackKey: normalizedStackKey,
           profileId: stackLookupMode === "profileId" ? stackProfileId : undefined,
           lookup: stackLookupMode === "lookup" ? { attribute: stackLookupAttribute, value: stackLookupValue } : undefined,
           context: {
@@ -368,7 +405,13 @@ export default function SimulatePage() {
         setInAppResult(next);
       }
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "Execution failed");
+      if (runError instanceof ApiError && runError.status === 404 && simulatorType === "stack") {
+        setError(
+          `Active stack not found in ${environment}. Use stack key (not stack id) and ensure it is ACTIVE in this environment.`
+        );
+      } else {
+        setError(runError instanceof Error ? runError.message : "Execution failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -565,13 +608,22 @@ export default function SimulatePage() {
         ) : simulatorType === "stack" ? (
           <>
             <label className="flex flex-col gap-1 text-sm">
-              Stack key
+              Stack key (ACTIVE)
               <input
+                list="active-stack-keys"
                 value={stackKey}
                 onChange={(event) => setStackKey(event.target.value)}
                 className="rounded-md border border-stone-300 px-2 py-1"
+                placeholder="stack_key"
               />
             </label>
+            <datalist id="active-stack-keys">
+              {stacks.map((stack) => (
+                <option key={stack.stackId} value={stack.key}>
+                  {stack.name}
+                </option>
+              ))}
+            </datalist>
             <label className="flex flex-col gap-1 text-sm">
               Lookup mode
               <select
@@ -613,6 +665,11 @@ export default function SimulatePage() {
                 </label>
               </>
             )}
+            <p className="md:col-span-2 lg:col-span-3 text-xs text-stone-600">
+              {stacks.length > 0
+                ? `Loaded ${stacks.length} active stack key(s) for ${environment}. Use stack key, not stack id.`
+                : `No active stacks found in ${environment}. Activate a stack first.`}
+            </p>
           </>
         ) : (
           <>

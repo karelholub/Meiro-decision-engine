@@ -12,6 +12,8 @@ const coreNavItems = [
   { href: "/stacks", label: "Decision Stacks" },
   { href: "/simulate", label: "Simulator" },
   { href: "/logs", label: "Logs" },
+  { href: "/docs", label: "Help & Docs" },
+  { href: "/settings/app", label: "App Settings" },
   { href: "/settings/wbs", label: "WBS Settings" },
   { href: "/settings/wbs-mapping", label: "WBS Mapping" }
 ];

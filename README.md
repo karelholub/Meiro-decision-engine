@@ -153,6 +153,7 @@ Important values:
 - `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
 - `NEXT_PUBLIC_API_BASE_URL`
 - `NEXT_PUBLIC_API_KEY`
+- `NEXT_PUBLIC_DECISION_WIZARD_V1` (`true` in dev by default; set to `false` to force Advanced JSON editing)
 - `INAPP_RATE_LIMIT_WINDOW_MS` (default `60000`)
 - `INAPP_RATE_LIMIT_PER_API_KEY` (default `240`)
 - `INAPP_RATE_LIMIT_PER_APP_KEY` (default `360`)
@@ -183,6 +184,7 @@ pnpm --filter @decisioning/ui dev
 
 Playwright smoke spec is provided at:
 - `apps/ui/e2e/inapp.smoke.playwright.js`
+- `apps/ui/e2e/decision-wizard.happy.playwright.js`
 - `apps/ui/playwright.config.js`
 
 Performance sanity benchmark:
@@ -708,17 +710,19 @@ Response contract:
 2. Select environment (`DEV`/`STAGE`/`PROD`) from header
 3. Go to `Decisions` and choose `Create Draft (Wizard)` or `Create Draft (JSON)`
 4. Open `Decision Details` (`/decisions/[id]`) then `Open Editor`
-5. Validate + Save (autosave enabled for drafts)
-6. Use `Preview Impact` and activate
-7. Open `Engagement` pages:
+5. In the Decision Builder Wizard, configure `Template -> Basics -> Eligibility -> Rules -> Guardrails -> Fallback -> Test & Activate`
+6. Validate + Save (autosave enabled for drafts)
+7. Activate from the editor header or `Test & Activate` checklist
+8. Open `Engagement` pages:
    - `/engagement/inapp/apps`
    - `/engagement/inapp/placements`
    - `/engagement/inapp/templates`
    - `/engagement/inapp/campaigns`
-8. Edit campaign, validate, save, activate, then test in `Simulator` (`/simulate` -> `In-App`)
-9. Open `Logs`, switch `type=inapp`, and use `Replay` to hydrate simulator from stored inputs
-10. Open `WBS Settings` and run `Test Connection`
-11. Open `WBS Mapping` and run `Test Mapping`
+9. Edit campaign, validate, save, activate, then test in `Simulator` (`/simulate` -> `In-App`)
+10. Open `Logs`, switch `type=inapp`, and use `Replay` to hydrate simulator from stored inputs
+11. Open `WBS Settings` and run `Test Connection`
+12. Open `WBS Mapping` and run `Test Mapping`
+13. Open `App Settings` (`/settings/app`) to force-enable/disable Decision Builder Wizard globally in UI
 
 ## Notes for Enterprise Evolution
 
