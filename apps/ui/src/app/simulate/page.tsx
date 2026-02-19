@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { DecisionVersionSummary } from "@decisioning/shared";
+import type { DecisionVersionSummary, InAppDecideResponse } from "@decisioning/shared";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
@@ -35,7 +35,7 @@ const defaultSavedProfile =
     consents: []
   } as const);
 
-type RunResult = {
+type DecisionRunResult = {
   outcome: string;
   reasons: Array<{ code: string; detail?: string }>;
   selectedRuleId?: string;
@@ -48,6 +48,8 @@ const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
 export default function SimulatePage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
+  const [simulatorType, setSimulatorType] = useState<"decision" | "inapp">("decision");
+
   const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
   const [decisionId, setDecisionId] = useState("");
   const [decisionKey, setDecisionKey] = useState("");
@@ -63,8 +65,18 @@ export default function SimulatePage() {
   const [lookupAttribute, setLookupAttribute] = useState("email");
   const [lookupValue, setLookupValue] = useState("alex@example.com");
 
-  const [result, setResult] = useState<RunResult | null>(null);
-  const [previousResult, setPreviousResult] = useState<RunResult | null>(null);
+  const [inAppAppKey, setInAppAppKey] = useState("meiro_store");
+  const [inAppPlacement, setInAppPlacement] = useState("home_top");
+  const [inAppLookupMode, setInAppLookupMode] = useState<"profileId" | "lookup">("profileId");
+  const [inAppProfileId, setInAppProfileId] = useState("p-1001");
+  const [inAppLookupAttribute, setInAppLookupAttribute] = useState("email");
+  const [inAppLookupValue, setInAppLookupValue] = useState("alex@example.com");
+
+  const [decisionResult, setDecisionResult] = useState<DecisionRunResult | null>(null);
+  const [previousDecisionResult, setPreviousDecisionResult] = useState<DecisionRunResult | null>(null);
+  const [inAppResult, setInAppResult] = useState<InAppDecideResponse | null>(null);
+  const [previousInAppResult, setPreviousInAppResult] = useState<InAppDecideResponse | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,18 +112,22 @@ export default function SimulatePage() {
   }, [profileInputMode, selectedSavedProfile]);
 
   useEffect(() => {
-    const logId = new URLSearchParams(window.location.search).get("logId");
+    const search = new URLSearchParams(window.location.search);
+    const logId = search.get("logId");
+    const logType = search.get("logType") === "inapp" ? "inapp" : "decision";
     if (!logId) {
       return;
     }
 
     const hydrateFromReplay = async () => {
       try {
-        const response = await apiClient.logs.get(logId, true);
+        const response = await apiClient.logs.get(logId, true, logType);
         const replay = response.item?.replayInput as
           | {
               decisionId?: string;
               decisionKey?: string;
+              appKey?: string;
+              placement?: string;
               profileId?: string;
               lookup?: { attribute: string; value: string };
             }
@@ -121,6 +137,26 @@ export default function SimulatePage() {
           return;
         }
 
+        if (logType === "inapp" || replay.appKey || replay.placement) {
+          setSimulatorType("inapp");
+          if (replay.appKey) {
+            setInAppAppKey(replay.appKey);
+          }
+          if (replay.placement) {
+            setInAppPlacement(replay.placement);
+          }
+          if (replay.lookup) {
+            setInAppLookupMode("lookup");
+            setInAppLookupAttribute(replay.lookup.attribute);
+            setInAppLookupValue(replay.lookup.value);
+          } else if (replay.profileId) {
+            setInAppLookupMode("profileId");
+            setInAppProfileId(replay.profileId);
+          }
+          return;
+        }
+
+        setSimulatorType("decision");
         if (replay.decisionId) {
           setDecisionId(replay.decisionId);
         }
@@ -149,37 +185,56 @@ export default function SimulatePage() {
   const run = async () => {
     setLoading(true);
     setError(null);
-    try {
-      let next: RunResult;
 
-      if (executionMode === "simulate") {
-        const profile =
-          profileInputMode === "saved" ? selectedSavedProfile : (JSON.parse(profileJson) as Record<string, unknown>);
-        next = await apiClient.simulate({
-          decisionId,
-          version: version.trim() ? Number(version) : undefined,
-          profile,
-          context: {
-            now: new Date().toISOString(),
-            channel: "web"
-          }
-        });
+    try {
+      if (simulatorType === "decision") {
+        let next: DecisionRunResult;
+
+        if (executionMode === "simulate") {
+          const profile =
+            profileInputMode === "saved" ? selectedSavedProfile : (JSON.parse(profileJson) as Record<string, unknown>);
+
+          next = await apiClient.simulate({
+            decisionId,
+            version: version.trim() ? Number(version) : undefined,
+            profile,
+            context: {
+              now: new Date().toISOString(),
+              channel: "web"
+            }
+          });
+        } else {
+          next = await apiClient.decide({
+            decisionId: decisionId || undefined,
+            decisionKey: decisionKey || undefined,
+            profileId: decideLookupMode === "profileId" ? profileId : undefined,
+            lookup: decideLookupMode === "lookup" ? { attribute: lookupAttribute, value: lookupValue } : undefined,
+            context: {
+              now: new Date().toISOString(),
+              channel: "web"
+            },
+            debug: true
+          });
+        }
+
+        setPreviousDecisionResult(decisionResult);
+        setDecisionResult(next);
       } else {
-        next = await apiClient.decide({
-          decisionId: decisionId || undefined,
-          decisionKey: decisionKey || undefined,
-          profileId: decideLookupMode === "profileId" ? profileId : undefined,
-          lookup: decideLookupMode === "lookup" ? { attribute: lookupAttribute, value: lookupValue } : undefined,
+        const next = await apiClient.inapp.decide({
+          appKey: inAppAppKey,
+          placement: inAppPlacement,
+          profileId: inAppLookupMode === "profileId" ? inAppProfileId : undefined,
+          lookup: inAppLookupMode === "lookup" ? { attribute: inAppLookupAttribute, value: inAppLookupValue } : undefined,
           context: {
             now: new Date().toISOString(),
             channel: "web"
           },
           debug: true
         });
-      }
 
-      setPreviousResult(result);
-      setResult(next);
+        setPreviousInAppResult(inAppResult);
+        setInAppResult(next);
+      }
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Execution failed");
     } finally {
@@ -188,121 +243,205 @@ export default function SimulatePage() {
   };
 
   const reasonDiff = useMemo(() => {
-    if (!previousResult || !result) {
+    if (!previousDecisionResult || !decisionResult) {
       return null;
     }
 
-    const previousCodes = new Set(previousResult.reasons.map((reason) => reason.code));
-    const currentCodes = new Set(result.reasons.map((reason) => reason.code));
+    const previousCodes = new Set(previousDecisionResult.reasons.map((reason) => reason.code));
+    const currentCodes = new Set(decisionResult.reasons.map((reason) => reason.code));
     const added = [...currentCodes].filter((code) => !previousCodes.has(code));
     const removed = [...previousCodes].filter((code) => !currentCodes.has(code));
     return { added, removed };
-  }, [previousResult, result]);
+  }, [previousDecisionResult, decisionResult]);
+
+  const copyJson = async (value: unknown) => {
+    try {
+      await navigator.clipboard.writeText(pretty(value));
+    } catch {
+      // ignore clipboard failure
+    }
+  };
 
   return (
     <section className="space-y-4">
       <header className="panel p-4">
         <h2 className="text-xl font-semibold">Simulator</h2>
         <p className="text-sm text-stone-700">
-          Compare before/after runs using the same decision input. Environment: <strong>{environment}</strong>
+          Decision simulation and in-app runtime preview in <strong>{environment}</strong>
         </p>
       </header>
 
       <div className="panel grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">
-          Execution mode
+          Simulator mode
           <select
-            value={executionMode}
-            onChange={(event) => setExecutionMode(event.target.value as "simulate" | "decide")}
+            value={simulatorType}
+            onChange={(event) => setSimulatorType(event.target.value as "decision" | "inapp")}
             className="rounded-md border border-stone-300 px-2 py-1"
           >
-            <option value="simulate">Simulate (inline profile)</option>
-            <option value="decide">Decide API (profileId/WBS lookup)</option>
+            <option value="decision">Decision</option>
+            <option value="inapp">In-App</option>
           </select>
         </label>
 
-        {executionMode === "simulate" ? (
-          <label className="flex flex-col gap-1 text-sm">
-            Decision ID
-            <select
-              value={decisionId}
-              onChange={(event) => {
-                const selected = decisions.find((item) => item.decisionId === event.target.value);
-                setDecisionId(event.target.value);
-                if (selected) {
-                  setDecisionKey(selected.key);
-                }
-              }}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            >
-              {decisions.map((item) => (
-                <option key={item.versionId} value={item.decisionId}>
-                  {item.name} ({item.key})
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <label className="flex flex-col gap-1 text-sm">
-            Decision key
-            <input
-              value={decisionKey}
-              onChange={(event) => setDecisionKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-              placeholder="cart_recovery"
-            />
-          </label>
-        )}
-
-        <label className="flex flex-col gap-1 text-sm">
-          Version (simulate only)
-          <input
-            value={version}
-            onChange={(event) => setVersion(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-            placeholder="active when empty"
-            disabled={executionMode !== "simulate"}
-          />
-        </label>
-
-        {executionMode === "simulate" ? (
+        {simulatorType === "decision" ? (
           <>
             <label className="flex flex-col gap-1 text-sm">
-              Profile input
+              Execution mode
               <select
-                value={profileInputMode}
-                onChange={(event) => setProfileInputMode(event.target.value as "saved" | "json")}
+                value={executionMode}
+                onChange={(event) => setExecutionMode(event.target.value as "simulate" | "decide")}
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
-                <option value="saved">Saved profiles</option>
-                <option value="json">Paste JSON</option>
+                <option value="simulate">Simulate (inline profile)</option>
+                <option value="decide">Decide API (profileId/WBS lookup)</option>
               </select>
             </label>
 
-            {profileInputMode === "saved" ? (
+            {executionMode === "simulate" ? (
               <label className="flex flex-col gap-1 text-sm">
-                Saved profile
+                Decision ID
                 <select
-                  value={savedProfileId}
-                  onChange={(event) => setSavedProfileId(event.target.value)}
+                  value={decisionId}
+                  onChange={(event) => {
+                    const selected = decisions.find((item) => item.decisionId === event.target.value);
+                    setDecisionId(event.target.value);
+                    if (selected) {
+                      setDecisionKey(selected.key);
+                    }
+                  }}
                   className="rounded-md border border-stone-300 px-2 py-1"
                 >
-                  {savedProfiles.map((profile) => (
-                    <option key={profile.profileId} value={profile.profileId}>
-                      {profile.profileId}
+                  {decisions.map((item) => (
+                    <option key={item.versionId} value={item.decisionId}>
+                      {item.name} ({item.key})
                     </option>
                   ))}
                 </select>
               </label>
-            ) : null}
+            ) : (
+              <label className="flex flex-col gap-1 text-sm">
+                Decision key
+                <input
+                  value={decisionKey}
+                  onChange={(event) => setDecisionKey(event.target.value)}
+                  className="rounded-md border border-stone-300 px-2 py-1"
+                  placeholder="cart_recovery"
+                />
+              </label>
+            )}
+
+            <label className="flex flex-col gap-1 text-sm">
+              Version (simulate only)
+              <input
+                value={version}
+                onChange={(event) => setVersion(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                placeholder="active when empty"
+                disabled={executionMode !== "simulate"}
+              />
+            </label>
+
+            {executionMode === "simulate" ? (
+              <>
+                <label className="flex flex-col gap-1 text-sm">
+                  Profile input
+                  <select
+                    value={profileInputMode}
+                    onChange={(event) => setProfileInputMode(event.target.value as "saved" | "json")}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  >
+                    <option value="saved">Saved profiles</option>
+                    <option value="json">Paste JSON</option>
+                  </select>
+                </label>
+
+                {profileInputMode === "saved" ? (
+                  <label className="flex flex-col gap-1 text-sm">
+                    Saved profile
+                    <select
+                      value={savedProfileId}
+                      onChange={(event) => setSavedProfileId(event.target.value)}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                    >
+                      {savedProfiles.map((profile) => (
+                        <option key={profile.profileId} value={profile.profileId}>
+                          {profile.profileId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <label className="flex flex-col gap-1 text-sm">
+                  Lookup mode
+                  <select
+                    value={decideLookupMode}
+                    onChange={(event) => setDecideLookupMode(event.target.value as "profileId" | "lookup")}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  >
+                    <option value="profileId">profileId</option>
+                    <option value="lookup">WBS lookup</option>
+                  </select>
+                </label>
+
+                {decideLookupMode === "profileId" ? (
+                  <label className="flex flex-col gap-1 text-sm">
+                    profileId
+                    <input
+                      value={profileId}
+                      onChange={(event) => setProfileId(event.target.value)}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                    />
+                  </label>
+                ) : (
+                  <>
+                    <label className="flex flex-col gap-1 text-sm">
+                      Lookup attribute
+                      <input
+                        value={lookupAttribute}
+                        onChange={(event) => setLookupAttribute(event.target.value)}
+                        className="rounded-md border border-stone-300 px-2 py-1"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      Lookup value
+                      <input
+                        value={lookupValue}
+                        onChange={(event) => setLookupValue(event.target.value)}
+                        className="rounded-md border border-stone-300 px-2 py-1"
+                      />
+                    </label>
+                  </>
+                )}
+              </>
+            )}
           </>
         ) : (
           <>
             <label className="flex flex-col gap-1 text-sm">
+              App Key
+              <input
+                value={inAppAppKey}
+                onChange={(event) => setInAppAppKey(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Placement
+              <input
+                value={inAppPlacement}
+                onChange={(event) => setInAppPlacement(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
               Lookup mode
               <select
-                value={decideLookupMode}
-                onChange={(event) => setDecideLookupMode(event.target.value as "profileId" | "lookup")}
+                value={inAppLookupMode}
+                onChange={(event) => setInAppLookupMode(event.target.value as "profileId" | "lookup")}
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
                 <option value="profileId">profileId</option>
@@ -310,12 +449,12 @@ export default function SimulatePage() {
               </select>
             </label>
 
-            {decideLookupMode === "profileId" ? (
+            {inAppLookupMode === "profileId" ? (
               <label className="flex flex-col gap-1 text-sm">
                 profileId
                 <input
-                  value={profileId}
-                  onChange={(event) => setProfileId(event.target.value)}
+                  value={inAppProfileId}
+                  onChange={(event) => setInAppProfileId(event.target.value)}
                   className="rounded-md border border-stone-300 px-2 py-1"
                 />
               </label>
@@ -324,16 +463,16 @@ export default function SimulatePage() {
                 <label className="flex flex-col gap-1 text-sm">
                   Lookup attribute
                   <input
-                    value={lookupAttribute}
-                    onChange={(event) => setLookupAttribute(event.target.value)}
+                    value={inAppLookupAttribute}
+                    onChange={(event) => setInAppLookupAttribute(event.target.value)}
                     className="rounded-md border border-stone-300 px-2 py-1"
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   Lookup value
                   <input
-                    value={lookupValue}
-                    onChange={(event) => setLookupValue(event.target.value)}
+                    value={inAppLookupValue}
+                    onChange={(event) => setInAppLookupValue(event.target.value)}
                     className="rounded-md border border-stone-300 px-2 py-1"
                   />
                 </label>
@@ -343,7 +482,7 @@ export default function SimulatePage() {
         )}
       </div>
 
-      {executionMode === "simulate" && profileInputMode === "json" ? (
+      {simulatorType === "decision" && executionMode === "simulate" && profileInputMode === "json" ? (
         <div className="panel p-4">
           <label className="flex flex-col gap-1 text-sm">
             Profile JSON
@@ -365,77 +504,135 @@ export default function SimulatePage() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <article className="panel space-y-2 p-4 text-sm">
-          <h3 className="font-semibold">Current run</h3>
-          {!result ? <p className="text-stone-600">No run yet.</p> : null}
-          {result ? (
-            <>
-              <p>
-                <strong>Outcome:</strong> {result.outcome}
-              </p>
-              <p>
-                <strong>Action:</strong> {result.actionType ?? "n/a"}
-              </p>
-              <p>
-                <strong>Selected rule:</strong> {result.selectedRuleId ?? "none"}
-              </p>
-              <p>
-                <strong>Reasons:</strong> {result.reasons.map((reason) => reason.code).join(", ")}
-              </p>
-              <details>
-                <summary className="cursor-pointer font-medium">Payload</summary>
-                <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-                  {pretty(result.payload)}
-                </pre>
-              </details>
-              <details>
-                <summary className="cursor-pointer font-medium">Trace</summary>
-                <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-                  {pretty(result.trace)}
-                </pre>
-              </details>
-            </>
-          ) : null}
-        </article>
+      {simulatorType === "decision" ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <article className="panel space-y-2 p-4 text-sm">
+            <h3 className="font-semibold">Current run</h3>
+            {!decisionResult ? <p className="text-stone-600">No run yet.</p> : null}
+            {decisionResult ? (
+              <>
+                <p>
+                  <strong>Outcome:</strong> {decisionResult.outcome}
+                </p>
+                <p>
+                  <strong>Action:</strong> {decisionResult.actionType ?? "n/a"}
+                </p>
+                <p>
+                  <strong>Selected rule:</strong> {decisionResult.selectedRuleId ?? "none"}
+                </p>
+                <p>
+                  <strong>Reasons:</strong> {decisionResult.reasons.map((reason) => reason.code).join(", ")}
+                </p>
+                <details>
+                  <summary className="cursor-pointer font-medium">Payload</summary>
+                  <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                    {pretty(decisionResult.payload)}
+                  </pre>
+                </details>
+                <details>
+                  <summary className="cursor-pointer font-medium">Trace</summary>
+                  <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                    {pretty(decisionResult.trace)}
+                  </pre>
+                </details>
+              </>
+            ) : null}
+          </article>
 
-        <article className="panel space-y-2 p-4 text-sm">
-          <h3 className="font-semibold">Previous run (compare)</h3>
-          {!previousResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
-          {previousResult ? (
-            <>
-              <p>
-                <strong>Outcome:</strong> {previousResult.outcome}
-              </p>
-              <p>
-                <strong>Action:</strong> {previousResult.actionType ?? "n/a"}
-              </p>
-              <p>
-                <strong>Selected rule:</strong> {previousResult.selectedRuleId ?? "none"}
-              </p>
-              <p>
-                <strong>Reasons:</strong> {previousResult.reasons.map((reason) => reason.code).join(", ")}
-              </p>
-              <details>
-                <summary className="cursor-pointer font-medium">Payload</summary>
-                <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-                  {pretty(previousResult.payload)}
-                </pre>
-              </details>
-            </>
-          ) : null}
+          <article className="panel space-y-2 p-4 text-sm">
+            <h3 className="font-semibold">Previous run (compare)</h3>
+            {!previousDecisionResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
+            {previousDecisionResult ? (
+              <>
+                <p>
+                  <strong>Outcome:</strong> {previousDecisionResult.outcome}
+                </p>
+                <p>
+                  <strong>Action:</strong> {previousDecisionResult.actionType ?? "n/a"}
+                </p>
+                <p>
+                  <strong>Selected rule:</strong> {previousDecisionResult.selectedRuleId ?? "none"}
+                </p>
+                <p>
+                  <strong>Reasons:</strong> {previousDecisionResult.reasons.map((reason) => reason.code).join(", ")}
+                </p>
+                <details>
+                  <summary className="cursor-pointer font-medium">Payload</summary>
+                  <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                    {pretty(previousDecisionResult.payload)}
+                  </pre>
+                </details>
+              </>
+            ) : null}
 
-          {reasonDiff ? (
-            <div className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-              <p>
-                <strong>Reason diff:</strong>
-              </p>
-              <p>Added: {reasonDiff.added.length ? reasonDiff.added.join(", ") : "none"}</p>
-              <p>Removed: {reasonDiff.removed.length ? reasonDiff.removed.join(", ") : "none"}</p>
-            </div>
-          ) : null}
-        </article>
-      </div>
+            {reasonDiff ? (
+              <div className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                <p>
+                  <strong>Reason diff:</strong>
+                </p>
+                <p>Added: {reasonDiff.added.length ? reasonDiff.added.join(", ") : "none"}</p>
+                <p>Removed: {reasonDiff.removed.length ? reasonDiff.removed.join(", ") : "none"}</p>
+              </div>
+            ) : null}
+          </article>
+        </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <article className="panel space-y-2 p-4 text-sm">
+            <h3 className="font-semibold">Current In-App response</h3>
+            {!inAppResult ? <p className="text-stone-600">No run yet.</p> : null}
+            {inAppResult ? (
+              <>
+                <p>
+                  <strong>Show:</strong> {inAppResult.show ? "true" : "false"}
+                </p>
+                <p>
+                  <strong>Placement:</strong> {inAppResult.placement}
+                </p>
+                <p>
+                  <strong>Template:</strong> {inAppResult.templateId}
+                </p>
+                <p>
+                  <strong>Tracking:</strong> {inAppResult.tracking.campaign_id || "none"} / {inAppResult.tracking.variant_id || "none"}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(inAppResult)}>
+                    Copy JSON
+                  </button>
+                </div>
+                <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{pretty(inAppResult)}</pre>
+              </>
+            ) : null}
+          </article>
+
+          <article className="panel space-y-2 p-4 text-sm">
+            <h3 className="font-semibold">Previous In-App response</h3>
+            {!previousInAppResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
+            {previousInAppResult ? (
+              <>
+                <p>
+                  <strong>Show:</strong> {previousInAppResult.show ? "true" : "false"}
+                </p>
+                <p>
+                  <strong>Template:</strong> {previousInAppResult.templateId}
+                </p>
+                <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  {pretty(previousInAppResult)}
+                </pre>
+              </>
+            ) : null}
+
+            {inAppResult?.payload?.debug ? (
+              <>
+                <p className="font-semibold">Debug</p>
+                <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  {pretty(inAppResult.payload.debug)}
+                </pre>
+              </>
+            ) : null}
+          </article>
+        </div>
+      )}
     </section>
   );
 }

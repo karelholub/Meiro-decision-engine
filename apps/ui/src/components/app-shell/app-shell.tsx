@@ -11,6 +11,10 @@ const navItems = [
   { href: "/decisions", label: "Decisions" },
   { href: "/simulate", label: "Simulator" },
   { href: "/logs", label: "Logs" },
+  { href: "/engagement/inapp/apps", label: "Engagement: Apps" },
+  { href: "/engagement/inapp/placements", label: "Engagement: Placements" },
+  { href: "/engagement/inapp/templates", label: "Engagement: Templates" },
+  { href: "/engagement/inapp/campaigns", label: "Engagement: Campaigns" },
   { href: "/settings/wbs", label: "WBS Settings" },
   { href: "/settings/wbs-mapping", label: "WBS Mapping" }
 ];

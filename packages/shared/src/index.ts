@@ -96,6 +96,7 @@ export interface DecisionDetailsResponse {
 
 export interface LogsQueryResponseItem {
   id: string;
+  logType?: "decision" | "inapp";
   requestId: string;
   decisionId: string;
   version: number;
@@ -120,6 +121,7 @@ export interface LogsQueryResponse {
 export interface LogDetailsResponse {
   item: {
     id: string;
+    logType?: "decision" | "inapp";
     requestId: string;
     decisionId: string;
     version: number;
@@ -134,6 +136,8 @@ export interface LogDetailsResponse {
     replayInput?: {
       decisionId?: string;
       decisionKey?: string;
+      appKey?: string;
+      placement?: string;
       profileId?: string;
       lookup?: {
         attribute: string;
@@ -225,4 +229,97 @@ export interface WbsMappingSettings {
   profileIdAttributeKey?: string | null;
   mappingJson: WbsMappingJson;
   updatedAt: string;
+}
+
+export interface InAppApplication {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  platforms: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppPlacement {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  description: string | null;
+  allowedTemplateKeys: string[];
+  defaultTtlSeconds: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppTemplate {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  schemaJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppCampaignVariant {
+  id: string;
+  variantKey: string;
+  weight: number;
+  contentJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppCampaign {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  appKey: string;
+  placementKey: string;
+  templateKey: string;
+  priority: number;
+  ttlSeconds: number;
+  startAt: string | null;
+  endAt: string | null;
+  holdoutEnabled: boolean;
+  holdoutPercentage: number;
+  holdoutSalt: string;
+  capsPerProfilePerDay: number | null;
+  capsPerProfilePerWeek: number | null;
+  eligibilityAudiencesAny: string[];
+  tokenBindingsJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt: string | null;
+  variants: InAppCampaignVariant[];
+}
+
+export interface InAppDecideRequest {
+  appKey: string;
+  placement: string;
+  profileId?: string;
+  lookup?: {
+    attribute: string;
+    value: string;
+  };
+  context?: Record<string, unknown>;
+  debug?: boolean;
+}
+
+export interface InAppDecideResponse {
+  show: boolean;
+  placement: string;
+  templateId: string;
+  ttl_seconds: number;
+  tracking: {
+    campaign_id: string;
+    message_id: string;
+    variant_id: string;
+  };
+  payload: Record<string, unknown>;
 }

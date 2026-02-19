@@ -1,4 +1,4 @@
-import { Environment, Prisma, PrismaClient, WbsProfileIdStrategy } from "@prisma/client";
+import { Environment, InAppCampaignStatus, Prisma, PrismaClient, WbsProfileIdStrategy } from "@prisma/client";
 import { createDefaultDecisionDefinition, type DecisionDefinition } from "@decisioning/dsl";
 import type { MeiroProfile } from "@decisioning/meiro";
 import { type WbsMappingConfig } from "@decisioning/wbs-mapping";
@@ -297,6 +297,155 @@ const upsertWbsMapping = async () => {
   });
 };
 
+const inAppTemplateSchema = {
+  type: "object",
+  required: ["title", "subtitle", "cta", "image", "deeplink"],
+  properties: {
+    title: { type: "string" },
+    subtitle: { type: "string" },
+    cta: { type: "string" },
+    image: { type: "string" },
+    deeplink: { type: "string" }
+  }
+};
+
+const upsertInAppMvpSeed = async () => {
+  await prisma.inAppApplication.upsert({
+    where: {
+      environment_key: {
+        environment: Environment.DEV,
+        key: "meiro_store"
+      }
+    },
+    update: {
+      name: "Meiro Store",
+      platforms: toInputJson(["web", "ios", "android"])
+    },
+    create: {
+      environment: Environment.DEV,
+      key: "meiro_store",
+      name: "Meiro Store",
+      platforms: toInputJson(["web", "ios", "android"])
+    }
+  });
+
+  await prisma.inAppTemplate.upsert({
+    where: {
+      environment_key: {
+        environment: Environment.DEV,
+        key: "banner_v1"
+      }
+    },
+    update: {
+      name: "Banner v1",
+      schemaJson: toInputJson(inAppTemplateSchema)
+    },
+    create: {
+      environment: Environment.DEV,
+      key: "banner_v1",
+      name: "Banner v1",
+      schemaJson: toInputJson(inAppTemplateSchema)
+    }
+  });
+
+  await prisma.inAppPlacement.upsert({
+    where: {
+      environment_key: {
+        environment: Environment.DEV,
+        key: "home_top"
+      }
+    },
+    update: {
+      name: "Home Top",
+      description: "Primary banner placement at top of home feed.",
+      allowedTemplateKeys: toInputJson(["banner_v1"]),
+      defaultTtlSeconds: 3600
+    },
+    create: {
+      environment: Environment.DEV,
+      key: "home_top",
+      name: "Home Top",
+      description: "Primary banner placement at top of home feed.",
+      allowedTemplateKeys: toInputJson(["banner_v1"]),
+      defaultTtlSeconds: 3600
+    }
+  });
+
+  const campaign = await prisma.inAppCampaign.upsert({
+    where: {
+      environment_key: {
+        environment: Environment.DEV,
+        key: "demo_home_top"
+      }
+    },
+    update: {
+      name: "Demo Home Top",
+      description: "Demo campaign for in-app home banner placement.",
+      status: InAppCampaignStatus.ACTIVE,
+      appKey: "meiro_store",
+      placementKey: "home_top",
+      templateKey: "banner_v1",
+      priority: 10,
+      ttlSeconds: 3600,
+      holdoutEnabled: false,
+      holdoutPercentage: 0,
+      holdoutSalt: "demo_home_top_holdout",
+      tokenBindingsJson: toInputJson({
+        first_name: "mx_first_name_last|takeFirst",
+        rfm: "web_rfm|takeFirst",
+        churn: "web_churn_risk_score|takeFirst",
+        spend: "web_total_spend|takeFirst",
+        recommended_product: "web_product_recommended2|parseJsonIfString|takeFirst"
+      }),
+      activatedAt: new Date()
+    },
+    create: {
+      environment: Environment.DEV,
+      key: "demo_home_top",
+      name: "Demo Home Top",
+      description: "Demo campaign for in-app home banner placement.",
+      status: InAppCampaignStatus.ACTIVE,
+      appKey: "meiro_store",
+      placementKey: "home_top",
+      templateKey: "banner_v1",
+      priority: 10,
+      ttlSeconds: 3600,
+      holdoutEnabled: false,
+      holdoutPercentage: 0,
+      holdoutSalt: "demo_home_top_holdout",
+      tokenBindingsJson: toInputJson({
+        first_name: "mx_first_name_last|takeFirst",
+        rfm: "web_rfm|takeFirst",
+        churn: "web_churn_risk_score|takeFirst",
+        spend: "web_total_spend|takeFirst",
+        recommended_product: "web_product_recommended2|parseJsonIfString|takeFirst"
+      }),
+      activatedAt: new Date()
+    }
+  });
+
+  await prisma.inAppCampaignVariant.deleteMany({
+    where: {
+      campaignId: campaign.id
+    }
+  });
+
+  await prisma.inAppCampaignVariant.create({
+    data: {
+      campaignId: campaign.id,
+      variantKey: "A",
+      weight: 100,
+      contentJson: toInputJson({
+        title: "Hey {{first_name}} - quick pick for you",
+        subtitle: "RFM {{rfm}} | churn {{churn}} | total spend {{spend}}",
+        cta: "See {{recommended_product.name}}",
+        image: "https://images.unsplash.com/photo-1483985988355-763728e1935b",
+        deeplink: "meiro-store://products/{{recommended_product.id}}"
+      })
+    }
+  });
+};
+
 const main = async () => {
   await upsertDecision({
     key: "cart_recovery",
@@ -316,6 +465,7 @@ const main = async () => {
 
   await upsertWbsInstance();
   await upsertWbsMapping();
+  await upsertInAppMvpSeed();
 
   const now = new Date();
   const conversionTimestamp = new Date(now);

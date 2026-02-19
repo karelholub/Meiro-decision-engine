@@ -5,6 +5,11 @@ import type {
   DecisionReportResponse,
   DecisionValidationResponse,
   DecisionVersionSummary,
+  InAppApplication,
+  InAppCampaign,
+  InAppDecideResponse,
+  InAppPlacement,
+  InAppTemplate,
   LogDetailsResponse,
   LogsQueryResponse,
   WbsInstanceSettings,
@@ -129,7 +134,10 @@ export const apiClient = {
     }),
   logs: {
     list: (params: {
+      type?: "decision" | "inapp";
       decisionId?: string;
+      campaignKey?: string;
+      placement?: string;
       profileId?: string;
       from?: string;
       to?: string;
@@ -137,8 +145,81 @@ export const apiClient = {
       limit?: number;
       includeTrace?: boolean;
     }) => apiFetch<LogsQueryResponse>(`/v1/logs${toQuery(params)}`),
-    get: (id: string, includeTrace = false) =>
-      apiFetch<LogDetailsResponse>(`/v1/logs/${id}${toQuery({ includeTrace: includeTrace ? 1 : 0 })}`)
+    get: (id: string, includeTrace = false, type: "decision" | "inapp" = "decision") =>
+      apiFetch<LogDetailsResponse>(`/v1/logs/${id}${toQuery({ includeTrace: includeTrace ? 1 : 0, type })}`)
+  },
+  inapp: {
+    apps: {
+      list: () => apiFetch<{ items: InAppApplication[] }>(`/v1/inapp/apps`),
+      create: (input: { key: string; name: string; platforms?: string[] }) =>
+        apiFetch<{ item: InAppApplication }>(`/v1/inapp/apps`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    },
+    placements: {
+      list: () => apiFetch<{ items: InAppPlacement[] }>(`/v1/inapp/placements`),
+      create: (input: {
+        key: string;
+        name: string;
+        description?: string;
+        allowedTemplateKeys?: string[];
+        defaultTtlSeconds?: number;
+      }) =>
+        apiFetch<{ item: InAppPlacement }>(`/v1/inapp/placements`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    },
+    templates: {
+      list: () => apiFetch<{ items: InAppTemplate[] }>(`/v1/inapp/templates`),
+      create: (input: { key: string; name: string; schemaJson: Record<string, unknown> }) =>
+        apiFetch<{ item: InAppTemplate }>(`/v1/inapp/templates`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      validate: (schemaJson: unknown) =>
+        apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; normalized?: unknown }>(`/v1/inapp/validate/template`, {
+          method: "POST",
+          body: JSON.stringify({ schemaJson })
+        })
+    },
+    campaigns: {
+      list: (params: { appKey?: string; placementKey?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED" } = {}) =>
+        apiFetch<{ items: InAppCampaign[] }>(`/v1/inapp/campaigns${toQuery(params)}`),
+      get: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}`),
+      create: (input: Record<string, unknown>) =>
+        apiFetch<{ item: InAppCampaign; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(
+          `/v1/inapp/campaigns`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        ),
+      update: (id: string, input: Record<string, unknown>) =>
+        apiFetch<{ item: InAppCampaign; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(
+          `/v1/inapp/campaigns/${id}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(input)
+          }
+        ),
+      activate: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/activate`, { method: "POST" }),
+      archive: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/archive`, { method: "POST" }),
+      validate: (input: Record<string, unknown>) =>
+        apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; requiredFields?: string[] }>(
+          `/v1/inapp/validate/campaign`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        )
+    },
+    decide: (input: Record<string, unknown>) =>
+      apiFetch<InAppDecideResponse>(`/v1/inapp/decide`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      })
   },
   settings: {
     getWbs: () => apiFetch<{ item: WbsInstanceSettings | null }>(`/v1/settings/wbs`),

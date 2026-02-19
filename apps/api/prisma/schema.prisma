@@ -33,6 +33,12 @@ enum WbsProfileIdStrategy {
   HASH_FALLBACK
 }
 
+enum InAppCampaignStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
 model Decision {
   id          String            @id @default(uuid())
   environment Environment       @default(DEV)
@@ -131,4 +137,131 @@ model WbsMapping {
 
   @@index([environment, isActive])
   @@index([environment, updatedAt])
+}
+
+model InAppApplication {
+  id            String      @id @default(uuid())
+  environment   Environment @default(DEV)
+  key           String
+  name          String
+  platforms     Json?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([environment, key])
+  @@index([environment, updatedAt])
+  @@map("inapp_applications")
+}
+
+model InAppPlacement {
+  id                  String      @id @default(uuid())
+  environment         Environment @default(DEV)
+  key                 String
+  name                String
+  description         String?
+  allowedTemplateKeys Json?
+  defaultTtlSeconds   Int?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@unique([environment, key])
+  @@index([environment, updatedAt])
+  @@map("inapp_placements")
+}
+
+model InAppTemplate {
+  id         String      @id @default(uuid())
+  environment Environment @default(DEV)
+  key        String
+  name       String
+  schemaJson Json
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@unique([environment, key])
+  @@index([environment, updatedAt])
+  @@map("inapp_templates")
+}
+
+model InAppCampaign {
+  id                    String             @id @default(uuid())
+  environment           Environment        @default(DEV)
+  key                   String
+  name                  String
+  description           String?
+  status                InAppCampaignStatus @default(DRAFT)
+  appKey                String
+  placementKey          String
+  templateKey           String
+  priority              Int                @default(0)
+  ttlSeconds            Int                @default(3600)
+  startAt               DateTime?
+  endAt                 DateTime?
+  holdoutEnabled        Boolean            @default(false)
+  holdoutPercentage     Int                @default(0)
+  holdoutSalt           String             @default("inapp-holdout")
+  capsPerProfilePerDay  Int?
+  capsPerProfilePerWeek Int?
+  eligibilityAudiencesAny Json?
+  tokenBindingsJson     Json?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  activatedAt           DateTime?
+  variants              InAppCampaignVariant[]
+
+  @@unique([environment, key])
+  @@index([environment, appKey, placementKey, status])
+  @@index([environment, status, priority])
+  @@map("inapp_campaigns")
+}
+
+model InAppCampaignVariant {
+  id         String        @id @default(uuid())
+  campaignId String
+  variantKey String
+  weight     Int
+  contentJson Json
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  campaign   InAppCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, variantKey])
+  @@index([campaignId, weight])
+  @@map("inapp_campaign_variants")
+}
+
+model InAppImpression {
+  id         String      @id @default(uuid())
+  environment Environment @default(DEV)
+  campaignKey String
+  profileId  String
+  timestamp  DateTime    @default(now())
+  messageId  String
+
+  @@index([environment, campaignKey, profileId, timestamp])
+  @@index([environment, profileId, timestamp])
+  @@index([messageId])
+  @@map("inapp_impressions")
+}
+
+model InAppDecisionLog {
+  id            String      @id @default(uuid())
+  environment   Environment @default(DEV)
+  campaignKey   String?
+  profileId     String
+  placement     String
+  templateKey   String?
+  variantKey    String?
+  shown         Boolean
+  reasonsJson   Json
+  payloadJson   Json?
+  replayInputJson Json?
+  correlationId String
+  createdAt     DateTime    @default(now())
+
+  @@index([environment, createdAt])
+  @@index([environment, profileId, createdAt])
+  @@index([environment, campaignKey, createdAt])
+  @@index([correlationId])
+  @@map("inapp_decision_logs")
 }

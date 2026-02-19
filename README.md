@@ -38,6 +38,8 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - Conversion ingestion endpoint + conversion proxy uplift estimate
 - WBS instance settings API + UI (base URL, query param names, timeout, segment toggle)
 - WBS mapping API + UI (returned_attributes -> attributes/audiences/consents)
+- In-App Messaging module (Applications, Placements, Templates, Campaigns + variants)
+- `/v1/inapp/decide` runtime endpoint with deterministic varianting, holdout, caps, token rendering, and tracking payload
 - DSL validation + formatting with Zod
 - Deterministic engine:
   - eligibility checks (audiences, attributes, consent)
@@ -62,6 +64,15 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `POST /v1/settings/wbs-mapping/validate`
   - `POST /v1/settings/wbs-mapping/test`
   - `GET /v1/settings/wbs-mapping/history`
+  - `GET/POST /v1/inapp/apps`
+  - `GET/POST /v1/inapp/placements`
+  - `GET/POST /v1/inapp/templates`
+  - `GET/POST/PUT /v1/inapp/campaigns`
+  - `POST /v1/inapp/campaigns/:id/activate`
+  - `POST /v1/inapp/campaigns/:id/archive`
+  - `POST /v1/inapp/validate/template`
+  - `POST /v1/inapp/validate/campaign`
+  - `POST /v1/inapp/decide`
   - paginated logs list + log details + NDJSON export
   - `GET /v1/logs/:id` for payload/trace/replay input
   - environment selection via `X-ENV` header (defaults to `DEV`)
@@ -85,6 +96,13 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `Conversion`
 - `WbsInstance`
 - `WbsMapping`
+- `InAppApplication` (`inapp_applications`)
+- `InAppPlacement` (`inapp_placements`)
+- `InAppTemplate` (`inapp_templates`)
+- `InAppCampaign` (`inapp_campaigns`)
+- `InAppCampaignVariant` (`inapp_campaign_variants`)
+- `InAppImpression` (`inapp_impressions`)
+- `InAppDecisionLog` (`inapp_decision_logs`)
 
 Migration is included at:
 - `apps/api/prisma/migrations/202602190001_init/migration.sql`
@@ -92,6 +110,7 @@ Migration is included at:
 - `apps/api/prisma/migrations/202602190003_conversions_reporting/migration.sql`
 - `apps/api/prisma/migrations/202602190004_wbs_settings_mapping/migration.sql`
 - `apps/api/prisma/migrations/202602190005_log_replay_and_indexes/migration.sql`
+- `apps/api/prisma/migrations/202602191700_inapp_mvp/migration.sql`
 
 ## Environment Variables
 
@@ -108,7 +127,7 @@ Important values:
 - `API_WRITE_KEY` (used for write endpoints via `X-API-KEY`)
 - `X-ENV` request header (`DEV`, `STAGE`, `PROD`; defaults to `DEV` when missing)
 - CRUD endpoints also accept `?environment=DEV|STAGE|PROD` (header still supported)
-- `PROTECT_DECIDE` (`true` to protect `/v1/decide` with API key)
+- `PROTECT_DECIDE` (`true` to protect `/v1/decide` and `/v1/inapp/decide` with API key)
 - `MEIRO_MODE` (`mock` or `real`)
 - `MEIRO_BASE_URL`, `MEIRO_TOKEN` (for real adapter)
 - `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
@@ -137,6 +156,10 @@ pnpm --filter @decisioning/ui dev
 
 - API: `http://localhost:3001`
 - UI: `http://localhost:3000`
+
+Playwright smoke spec is provided at:
+- `apps/ui/e2e/inapp.smoke.playwright.js`
+- `apps/ui/playwright.config.js`
 
 Performance sanity benchmark:
 
@@ -194,6 +217,24 @@ Defined in:
   - attribute mappings for `web_rfm`, `web_churn_risk_score`, `web_total_spend`, `web_product_recommended2`, `mea_open_time`, `cookie_consent_status`
   - audience rules: `rfm_lost`, `high_value`
   - consent mapping from `cookie_consent_status`
+
+### Seeded In-App Messaging Demo (DEV)
+
+- application:
+  - `meiro_store`
+- placement:
+  - `home_top` (allowed template keys: `banner_v1`)
+- template:
+  - `banner_v1` (required fields: `title`, `subtitle`, `cta`, `image`, `deeplink`)
+- campaign:
+  - `demo_home_top` (ACTIVE, priority `10`, ttl `3600`)
+  - variant `A` weight `100`
+  - token bindings:
+    - `first_name -> mx_first_name_last|takeFirst`
+    - `rfm -> web_rfm|takeFirst`
+    - `churn -> web_churn_risk_score|takeFirst`
+    - `spend -> web_total_spend|takeFirst`
+    - `recommended_product -> web_product_recommended2|parseJsonIfString|takeFirst`
 
 ## Example Decision DSL JSON
 
@@ -471,6 +512,13 @@ curl "http://localhost:3001/v1/logs?page=1&limit=50&includeTrace=false" \
   -H "X-ENV: DEV"
 ```
 
+### Read in-app logs
+
+```bash
+curl "http://localhost:3001/v1/logs?type=inapp&page=1&limit=50&campaignKey=demo_home_top" \
+  -H "X-ENV: DEV"
+```
+
 ### Read a single log with trace and replay input
 
 ```bash
@@ -506,6 +554,76 @@ curl "http://localhost:3001/v1/reports/decision/<decisionId>?windowDays=7" \
 curl "http://localhost:3001/v1/logs/export?limit=200"
 ```
 
+### Validate in-app template schema
+
+```bash
+curl -X POST "http://localhost:3001/v1/inapp/validate/template" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "schemaJson": {
+      "type": "object",
+      "required": ["title", "subtitle", "cta", "image", "deeplink"],
+      "properties": {
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "cta": { "type": "string" },
+        "image": { "type": "string" },
+        "deeplink": { "type": "string" }
+      }
+    }
+  }'
+```
+
+### Decide in-app message using Meiro demo lookup
+
+```bash
+curl -X POST "http://localhost:3001/v1/inapp/decide" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "appKey": "meiro_store",
+    "placement": "home_top",
+    "lookup": {
+      "attribute": "stitching_meiro_id",
+      "value": "97ead340-8d07-4fbb-b230-a61ad720a1f7"
+    },
+    "debug": true
+  }'
+```
+
+Response contract:
+
+```json
+{
+  "show": true,
+  "placement": "home_top",
+  "templateId": "banner_v1",
+  "ttl_seconds": 3600,
+  "tracking": {
+    "campaign_id": "demo_home_top",
+    "message_id": "msg_demo_home_top_A_489309",
+    "variant_id": "A"
+  },
+  "payload": {
+    "title": "Hey Alex - quick pick for you",
+    "subtitle": "RFM Champions | churn 0.2 | total spend 1240",
+    "cta": "See City Sneaker",
+    "image": "https://images.unsplash.com/photo-1483985988355-763728e1935b",
+    "deeplink": "meiro-store://products/sku-42",
+    "debug": {}
+  }
+}
+```
+
+### Mobile integration pattern
+
+1. Call `POST /v1/inapp/decide` with `appKey`, `placement`, and either `profileId` or `lookup`.
+2. If `show=false`, do not render a component for that placement.
+3. If `show=true`, route by `templateId` in the mobile app and render with `payload`.
+4. Use `tracking.message_id`, `tracking.campaign_id`, and `tracking.variant_id` for impressions/click analytics.
+5. Re-fetch on placement refresh boundary (`ttl_seconds`) or session change.
+
 ## UI Workflow
 
 1. Open `http://localhost:3000/overview`
@@ -514,10 +632,15 @@ curl "http://localhost:3001/v1/logs/export?limit=200"
 4. Open `Decision Details` (`/decisions/[id]`) then `Open Editor`
 5. Validate + Save (autosave enabled for drafts)
 6. Use `Preview Impact` and activate
-7. Open `Simulator` (`/simulate`) and compare two runs side-by-side
-8. Open `Logs` and use `Replay` to hydrate simulator from stored inputs
-9. Open `WBS Settings` and run `Test Connection`
-10. Open `WBS Mapping` and run `Test Mapping`
+7. Open `Engagement` pages:
+   - `/engagement/inapp/apps`
+   - `/engagement/inapp/placements`
+   - `/engagement/inapp/templates`
+   - `/engagement/inapp/campaigns`
+8. Edit campaign, validate, save, activate, then test in `Simulator` (`/simulate` -> `In-App`)
+9. Open `Logs`, switch `type=inapp`, and use `Replay` to hydrate simulator from stored inputs
+10. Open `WBS Settings` and run `Test Connection`
+11. Open `WBS Mapping` and run `Test Mapping`
 
 ## Notes for Enterprise Evolution
 
@@ -539,6 +662,12 @@ Current structure intentionally leaves extension points for:
 - UI editor: `apps/ui/src/app/decisions/[decisionId]/editor-client.tsx`
 - UI simulator: `apps/ui/src/app/simulate/page.tsx`
 - UI logs: `apps/ui/src/app/logs/page.tsx`
+- UI in-app apps: `apps/ui/src/app/engagement/inapp/apps/page.tsx`
+- UI in-app placements: `apps/ui/src/app/engagement/inapp/placements/page.tsx`
+- UI in-app templates: `apps/ui/src/app/engagement/inapp/templates/page.tsx`
+- UI in-app campaigns: `apps/ui/src/app/engagement/inapp/campaigns/page.tsx`
+- UI in-app campaign editor: `apps/ui/src/app/engagement/inapp/campaigns/[id]/page.tsx`
+- API in-app routes: `apps/api/src/inapp.ts`
 - Engine: `packages/engine/src/index.ts`
 - DSL: `packages/dsl/src/index.ts`
 - Meiro adapter: `packages/meiro/src/index.ts`
@@ -550,5 +679,7 @@ Current structure intentionally leaves extension points for:
 
 - `trace` response shape for `/v1/decide` and `/v1/simulate` is now standardized as an envelope (`formatVersion`, `engine`, `integration`).
 - `/v1/logs` is now environment-scoped and paginated; it returns `{ page, limit, total, totalPages, items }`.
+- `/v1/logs` supports `type=inapp` for in-app decision log browsing and replay.
 - New `decision_logs.inputJson` column stores replay-safe input to power Logs replay UX.
+- New In-App Messaging module adds admin CRUD, runtime decisioning (`/v1/inapp/decide`), in-app logs, simulator support, and DEV seed data.
 - No existing endpoint was removed; previous fields remain available for backwards compatibility.

@@ -31,6 +31,7 @@ import {
 import { z } from "zod";
 import { readConfig, type AppConfig } from "./config";
 import { seedMockProfiles } from "./data/mockProfiles";
+import { registerInAppRoutes } from "./inapp";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -127,7 +128,10 @@ const decisionListQuerySchema = z.object({
 });
 
 const logsQuerySchema = z.object({
+  type: z.enum(["decision", "inapp"]).optional(),
   decisionId: z.string().uuid().optional(),
+  campaignKey: z.string().optional(),
+  placement: z.string().optional(),
   profileId: z.string().optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
@@ -141,6 +145,7 @@ const logByIdParamsSchema = z.object({
 });
 
 const logByIdQuerySchema = z.object({
+  type: z.enum(["decision", "inapp"]).optional(),
   includeTrace: z.coerce.boolean().optional()
 });
 
@@ -805,6 +810,22 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   const requireWriteAuth = createWriteAuth(config);
   const requireDecideAuth = createDecideAuth(config);
+
+  await registerInAppRoutes({
+    app,
+    prisma,
+    meiro,
+    wbsAdapter,
+    now,
+    requireWriteAuth,
+    requireDecideAuth,
+    resolveEnvironment,
+    buildResponseError,
+    createRequestId,
+    fetchActiveWbsInstance,
+    fetchActiveWbsMapping,
+    redactSensitiveFields
+  });
 
   app.get("/health", async () => {
     return {
@@ -2327,6 +2348,57 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     const page = parsed.data.page ?? 1;
     const limit = parsed.data.limit ?? 100;
     const includeTrace = parsed.data.includeTrace ?? false;
+    const logType = parsed.data.type ?? "decision";
+
+    if (logType === "inapp") {
+      const where = {
+        environment,
+        ...(parsed.data.campaignKey ? { campaignKey: parsed.data.campaignKey } : {}),
+        ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
+        ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+        ...(parsed.data.from || parsed.data.to
+          ? {
+              createdAt: {
+                ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
+                ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
+              }
+            }
+          : {})
+      } satisfies Prisma.InAppDecisionLogWhereInput;
+
+      const [total, logs] = await Promise.all([
+        prisma.inAppDecisionLog.count({ where }),
+        prisma.inAppDecisionLog.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit,
+          take: limit
+        })
+      ]);
+
+      return {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        items: logs.map((log) => ({
+          id: log.id,
+          logType: "inapp",
+          requestId: log.correlationId,
+          decisionId: log.campaignKey ?? "inapp",
+          version: 1,
+          profileId: log.profileId,
+          timestamp: log.createdAt.toISOString(),
+          actionType: log.shown ? "message" : "noop",
+          outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
+          reasons: log.reasonsJson,
+          latencyMs: 0,
+          replayAvailable: log.replayInputJson !== null,
+          trace: includeTrace ? log.payloadJson : undefined
+        }))
+      };
+    }
+
     const where = {
       ...(parsed.data.decisionId ? { decisionId: parsed.data.decisionId } : {}),
       ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
@@ -2360,6 +2432,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       totalPages: Math.max(1, Math.ceil(total / limit)),
       items: logs.map((log) => ({
         id: log.id,
+        logType: "decision",
         requestId: log.requestId,
         decisionId: log.decisionId,
         version: log.version,
@@ -2387,6 +2460,39 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       return buildResponseError(reply, 400, "Invalid request");
     }
 
+    const logType = query.data.type ?? "decision";
+    if (logType === "inapp") {
+      const log = await prisma.inAppDecisionLog.findFirst({
+        where: {
+          id: params.data.id,
+          environment
+        }
+      });
+
+      if (!log) {
+        return buildResponseError(reply, 404, "Log not found");
+      }
+
+      return {
+        item: {
+          id: log.id,
+          logType: "inapp",
+          requestId: log.correlationId,
+          decisionId: log.campaignKey ?? "inapp",
+          version: 1,
+          profileId: log.profileId,
+          timestamp: log.createdAt.toISOString(),
+          actionType: log.shown ? "message" : "noop",
+          payload: (log.payloadJson ?? {}) as Record<string, unknown>,
+          outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
+          reasons: log.reasonsJson,
+          latencyMs: 0,
+          trace: query.data.includeTrace ? log.payloadJson : undefined,
+          replayInput: (log.replayInputJson ?? null) as Record<string, unknown> | null
+        }
+      };
+    }
+
     const log = await prisma.decisionLog.findFirst({
       where: {
         id: params.data.id,
@@ -2406,6 +2512,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     return {
       item: {
         id: log.id,
+        logType: "decision",
         requestId: log.requestId,
         decisionId: log.decisionId,
         version: log.version,
@@ -2431,6 +2538,52 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     const parsed = logsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const logType = parsed.data.type ?? "decision";
+    if (logType === "inapp") {
+      const logs = await prisma.inAppDecisionLog.findMany({
+        where: {
+          environment,
+          ...(parsed.data.campaignKey ? { campaignKey: parsed.data.campaignKey } : {}),
+          ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
+          ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+          ...(parsed.data.from || parsed.data.to
+            ? {
+                createdAt: {
+                  ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
+                  ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
+                }
+              }
+            : {})
+        },
+        orderBy: { createdAt: "desc" },
+        take: parsed.data.limit ?? 1000
+      });
+
+      reply.header("Content-Type", "application/x-ndjson");
+
+      const body = logs
+        .map((log) =>
+          JSON.stringify({
+            id: log.id,
+            logType: "inapp",
+            requestId: log.correlationId,
+            campaignKey: log.campaignKey,
+            profileId: log.profileId,
+            placement: log.placement,
+            templateKey: log.templateKey,
+            variantKey: log.variantKey,
+            shown: log.shown,
+            reasons: log.reasonsJson,
+            payload: log.payloadJson,
+            replayInput: log.replayInputJson,
+            timestamp: log.createdAt.toISOString()
+          })
+        )
+        .join("\n");
+
+      return `${body}\n`;
     }
 
     const logs = await prisma.decisionLog.findMany({
