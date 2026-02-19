@@ -18,6 +18,10 @@ export default function WbsSettingsPage() {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [testAttribute, setTestAttribute] = useState("email");
+  const [testValue, setTestValue] = useState("demo@example.com");
+  const [testSegmentValue, setTestSegmentValue] = useState("107");
+  const [testRequestUrl, setTestRequestUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -79,11 +83,33 @@ export default function WbsSettingsPage() {
   const testConnection = async () => {
     try {
       const result = await apiClient.settings.testWbsConnection({
-        attribute: attributeParamName || "attribute",
-        value: "demo-value"
+        attribute: testAttribute.trim() || "email",
+        value: testValue.trim() || "demo@example.com",
+        segmentValue: includeSegment ? testSegmentValue.trim() || undefined : undefined,
+        config: {
+          baseUrl: baseUrl.trim(),
+          attributeParamName: attributeParamName.trim() || "attribute",
+          valueParamName: valueParamName.trim() || "value",
+          segmentParamName: segmentParamName.trim() || "segment",
+          includeSegment,
+          defaultSegmentValue: includeSegment ? defaultSegmentValue.trim() || null : null,
+          timeoutMs: Number(timeoutMs) || 1500
+        }
       });
-      setTestResult(`Connection ok (${result.status})`);
+      setTestRequestUrl(result.requestUrl ?? null);
+      if (result.ok) {
+        setTestResult(`Connection ok (${result.status})`);
+        return;
+      }
+
+      const parts = [
+        result.reachable ? "Endpoint reachable" : "Connection failed",
+        result.upstreamStatusCode ? `upstream HTTP ${result.upstreamStatusCode}` : null,
+        result.error ?? null
+      ].filter(Boolean);
+      setTestResult(parts.join(" · "));
     } catch (error) {
+      setTestRequestUrl(null);
       setTestResult(error instanceof Error ? error.message : "Connection test failed");
     }
   };
@@ -168,6 +194,38 @@ export default function WbsSettingsPage() {
             />
           </label>
         ) : null}
+
+        <label className="flex flex-col gap-1 text-sm">
+          Test lookup attribute
+          <input
+            value={testAttribute}
+            onChange={(event) => setTestAttribute(event.target.value)}
+            className="rounded-md border border-stone-300 px-2 py-1"
+            placeholder="email"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          Test lookup value
+          <input
+            value={testValue}
+            onChange={(event) => setTestValue(event.target.value)}
+            className="rounded-md border border-stone-300 px-2 py-1"
+            placeholder="demo@example.com"
+          />
+        </label>
+
+        {includeSegment ? (
+          <label className="flex flex-col gap-1 text-sm">
+            Test segment value
+            <input
+              value={testSegmentValue}
+              onChange={(event) => setTestSegmentValue(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+              placeholder="107"
+            />
+          </label>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-3">
@@ -184,6 +242,11 @@ export default function WbsSettingsPage() {
 
       {feedback ? <p className="text-sm text-stone-800">{feedback}</p> : null}
       {testResult ? <p className="text-sm text-stone-800">{testResult}</p> : null}
+      {testRequestUrl ? (
+        <p className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs text-stone-700">
+          Request URL: {testRequestUrl}
+        </p>
+      ) : null}
     </section>
   );
 }

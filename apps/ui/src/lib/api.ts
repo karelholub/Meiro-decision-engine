@@ -147,8 +147,32 @@ export const apiClient = {
         method: "PUT",
         body: JSON.stringify(input)
       }),
-    testWbsConnection: (input: { attribute: string; value: string }) =>
-      apiFetch<{ ok: boolean; status: string; sample: unknown }>(`/v1/settings/wbs/test-connection`, {
+    testWbsConnection: (input: {
+      attribute: string;
+      value: string;
+      segmentValue?: string;
+      config?: {
+        baseUrl?: string;
+        attributeParamName?: string;
+        valueParamName?: string;
+        segmentParamName?: string;
+        includeSegment?: boolean;
+        defaultSegmentValue?: string | null;
+        timeoutMs?: number;
+      };
+    }) =>
+      apiFetch<{
+        ok: boolean;
+        reachable: boolean;
+        status: string;
+        usedConfigSource?: "active" | "override";
+        requestUrl?: string;
+        requestQuery?: Record<string, string>;
+        sample?: unknown;
+        upstreamStatusCode?: number | null;
+        error?: string;
+        tip?: string;
+      }>(`/v1/settings/wbs/test-connection`, {
         method: "POST",
         body: JSON.stringify(input)
       }),

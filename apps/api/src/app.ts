@@ -13,6 +13,7 @@ import {
 import { evaluateDecision, type EngineContext, type EngineProfile } from "@decisioning/engine";
 import {
   WbsMeiroAdapter,
+  buildWbsLookupRequest,
   createMeiroAdapter,
   type MeiroAdapter,
   type WbsLookupAdapter,
@@ -181,7 +182,19 @@ const wbsMappingValidateBodySchema = z.object({
 
 const wbsConnectionTestBodySchema = z.object({
   attribute: z.string().min(1).default("email"),
-  value: z.string().min(1).default("demo@example.com")
+  value: z.string().min(1).default("demo@example.com"),
+  segmentValue: z.string().optional(),
+  config: z
+    .object({
+      baseUrl: z.string().url().optional(),
+      attributeParamName: z.string().min(1).optional(),
+      valueParamName: z.string().min(1).optional(),
+      segmentParamName: z.string().min(1).optional(),
+      includeSegment: z.boolean().optional(),
+      defaultSegmentValue: z.string().nullable().optional(),
+      timeoutMs: z.number().int().positive().max(30_000).optional()
+    })
+    .optional()
 });
 
 const wbsMappingTestBodySchema = z.object({
@@ -900,29 +913,62 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       return buildResponseError(reply, 404, "No active WBS instance configured for environment");
     }
 
+    const activeConfig = {
+      baseUrl: active.baseUrl,
+      attributeParamName: active.attributeParamName,
+      valueParamName: active.valueParamName,
+      segmentParamName: active.segmentParamName,
+      includeSegment: active.includeSegment,
+      defaultSegmentValue: active.defaultSegmentValue,
+      timeoutMs: active.timeoutMs
+    };
+    const override = parsed.data.config;
+    const config = {
+      baseUrl: override?.baseUrl ?? activeConfig.baseUrl,
+      attributeParamName: override?.attributeParamName ?? activeConfig.attributeParamName,
+      valueParamName: override?.valueParamName ?? activeConfig.valueParamName,
+      segmentParamName: override?.segmentParamName ?? activeConfig.segmentParamName,
+      includeSegment: override?.includeSegment ?? activeConfig.includeSegment,
+      defaultSegmentValue: override?.defaultSegmentValue ?? activeConfig.defaultSegmentValue,
+      timeoutMs: override?.timeoutMs ?? activeConfig.timeoutMs
+    };
+
+    const requestInput = {
+      attribute: parsed.data.attribute,
+      value: parsed.data.value,
+      segmentValue: parsed.data.segmentValue
+    };
+
+    const requestComposed = buildWbsLookupRequest(config, requestInput);
+
     try {
-      const response = await wbsAdapter.lookup(
-        {
-          baseUrl: active.baseUrl,
-          attributeParamName: active.attributeParamName,
-          valueParamName: active.valueParamName,
-          segmentParamName: active.segmentParamName,
-          includeSegment: active.includeSegment,
-          defaultSegmentValue: active.defaultSegmentValue,
-          timeoutMs: active.timeoutMs
-        },
-        {
-          attribute: parsed.data.attribute,
-          value: parsed.data.value
-        }
-      );
+      const response = await wbsAdapter.lookup(config, requestInput);
       return {
         ok: true,
+        reachable: true,
         status: response.status ?? "unknown",
+        usedConfigSource: override ? "override" : "active",
+        requestUrl: requestComposed.url,
+        requestQuery: requestComposed.query,
         sample: redactSensitiveFields(response)
       };
     } catch (error) {
-      return buildResponseError(reply, 502, "WBS connection test failed", String(error));
+      const message = String(error);
+      const statusMatch = message.match(/HTTP\s+(\d{3})/i);
+      const upstreamStatusCode = statusMatch ? Number.parseInt(statusMatch[1] ?? "", 10) : undefined;
+      const reachable = typeof upstreamStatusCode === "number" && upstreamStatusCode >= 400 && upstreamStatusCode < 500;
+
+      return {
+        ok: false,
+        reachable,
+        status: "error",
+        usedConfigSource: override ? "override" : "active",
+        requestUrl: requestComposed.url,
+        requestQuery: requestComposed.query,
+        upstreamStatusCode: Number.isFinite(upstreamStatusCode) ? upstreamStatusCode : null,
+        error: message,
+        tip: "Verify base URL, DNS/network access from API container, and test attribute/value."
+      };
     }
   });
 

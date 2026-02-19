@@ -44,6 +44,7 @@ export interface WbsInstanceConfig {
 export interface WbsLookupInput {
   attribute: string;
   value: string;
+  segmentValue?: string;
 }
 
 export interface WbsLookupResponse {
@@ -55,6 +56,11 @@ export interface WbsLookupResponse {
 
 export interface WbsLookupAdapter {
   lookup(config: WbsInstanceConfig, input: WbsLookupInput): Promise<WbsLookupResponse>;
+}
+
+export interface BuiltWbsLookupRequest {
+  url: string;
+  query: Record<string, string>;
 }
 
 interface MeiroProfileApiPayload {
@@ -113,6 +119,26 @@ const toConsents = (value: unknown): string[] | undefined => {
 
 const sleep = async (ms: number) => {
   await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+export const buildWbsLookupRequest = (config: WbsInstanceConfig, input: WbsLookupInput): BuiltWbsLookupRequest => {
+  const params = new URLSearchParams();
+  params.set(config.attributeParamName, input.attribute);
+  params.set(config.valueParamName, input.value);
+
+  const segmentValue = input.segmentValue ?? config.defaultSegmentValue ?? undefined;
+  if (config.includeSegment && segmentValue) {
+    params.set(config.segmentParamName, segmentValue);
+  }
+
+  const baseUrl = config.baseUrl.replace(/\/$/, "");
+  const queryString = params.toString();
+  const url = queryString.length > 0 ? `${baseUrl}?${queryString}` : baseUrl;
+
+  return {
+    url,
+    query: Object.fromEntries(params.entries())
+  };
 };
 
 const parseJsonResponse = async <T>(response: Response): Promise<T> => {
@@ -304,16 +330,8 @@ export class WbsMeiroAdapter implements WbsLookupAdapter {
 
   async lookup(config: WbsInstanceConfig, input: WbsLookupInput): Promise<WbsLookupResponse> {
     const fetchImpl = this.deps.fetchImpl ?? fetch;
-    const params = new URLSearchParams();
-    params.set(config.attributeParamName, input.attribute);
-    params.set(config.valueParamName, input.value);
-
-    if (config.includeSegment && config.defaultSegmentValue) {
-      params.set(config.segmentParamName, config.defaultSegmentValue);
-    }
-
-    const baseUrl = config.baseUrl.replace(/\/$/, "");
-    const url = `${baseUrl}?${params.toString()}`;
+    const request = buildWbsLookupRequest(config, input);
+    const url = request.url;
     const timeoutMs = config.timeoutMs ?? 1500;
 
     let lastError: unknown;

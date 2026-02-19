@@ -405,13 +405,40 @@ curl -X POST "http://localhost:3001/v1/settings/wbs-mapping/validate" \
   }'
 ```
 
-### Test WBS connection using active instance config
+### Test WBS connection (composed request preview)
 
 ```bash
 curl -X POST "http://localhost:3001/v1/settings/wbs/test-connection" \
   -H "Content-Type: application/json" \
   -H "X-ENV: DEV" \
-  -d '{ "attribute": "email", "value": "demo@example.com" }'
+  -d '{
+    "attribute": "stitching_meiro_id",
+    "value": "97ead340-8d07-4fbb-b230-a61ad720a1f7",
+    "segmentValue": "107"
+  }'
+```
+
+Response includes `requestUrl` and `requestQuery` so you can verify the exact composed request.
+The UI `Test Connection` button sends the current form values as an override config, so you can test before saving.
+You can also send override config directly:
+
+```bash
+curl -X POST "http://localhost:3001/v1/settings/wbs/test-connection" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "attribute": "stitching_meiro_id",
+    "value": "97ead340-8d07-4fbb-b230-a61ad720a1f7",
+    "segmentValue": "107",
+    "config": {
+      "baseUrl": "https://cdp.store.demo.meiro.io/wbs",
+      "attributeParamName": "attribute",
+      "valueParamName": "value",
+      "segmentParamName": "segment",
+      "includeSegment": true,
+      "timeoutMs": 1500
+    }
+  }'
 ```
 
 ### Test WBS mapping with sample payload

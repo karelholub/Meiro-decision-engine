@@ -1116,6 +1116,119 @@ describe("API", () => {
     await app.close();
   });
 
+  it("tests WBS connection and returns composed request URL", async () => {
+    const { prisma } = makePrisma();
+    const wbsAdapter = {
+      lookup: vi.fn().mockResolvedValue({
+        status: "ok",
+        customer_entity_id: "cust-1",
+        returned_attributes: { score: ["10"] }
+      })
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      wbsAdapter,
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/settings/wbs/test-connection",
+      headers: { "x-env": "STAGE" },
+      payload: {
+        attribute: "stitching_meiro_id",
+        value: "97ead340-8d07-4fbb-b230-a61ad720a1f7",
+        segmentValue: "107"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.ok).toBe(true);
+    expect(body.requestUrl).toContain("https://stage.example.com/wbs?");
+    expect(body.requestUrl).toContain("attribute=stitching_meiro_id");
+    expect(body.requestUrl).toContain("value=97ead340-8d07-4fbb-b230-a61ad720a1f7");
+    expect(body.requestUrl).toContain("segment=107");
+    expect(wbsAdapter.lookup).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it("tests WBS connection with request config override", async () => {
+    const { prisma } = makePrisma();
+    const wbsAdapter = {
+      lookup: vi.fn().mockResolvedValue({
+        status: "ok",
+        customer_entity_id: "cust-2",
+        returned_attributes: { score: ["20"] }
+      })
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      wbsAdapter,
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/settings/wbs/test-connection",
+      headers: { "x-env": "DEV" },
+      payload: {
+        attribute: "stitching_meiro_id",
+        value: "97ead340-8d07-4fbb-b230-a61ad720a1f7",
+        segmentValue: "107",
+        config: {
+          baseUrl: "https://cdp.store.demo.meiro.io/wbs",
+          attributeParamName: "attribute",
+          valueParamName: "value",
+          segmentParamName: "segment",
+          includeSegment: true,
+          timeoutMs: 2500
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.ok).toBe(true);
+    expect(body.usedConfigSource).toBe("override");
+    expect(body.requestUrl).toContain("https://cdp.store.demo.meiro.io/wbs?");
+    expect(body.requestUrl).toContain("attribute=stitching_meiro_id");
+    expect(body.requestUrl).toContain("value=97ead340-8d07-4fbb-b230-a61ad720a1f7");
+    expect(body.requestUrl).toContain("segment=107");
+    expect(wbsAdapter.lookup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://cdp.store.demo.meiro.io/wbs",
+        attributeParamName: "attribute",
+        valueParamName: "value",
+        segmentParamName: "segment",
+        includeSegment: true,
+        timeoutMs: 2500
+      }),
+      expect.objectContaining({
+        attribute: "stitching_meiro_id",
+        value: "97ead340-8d07-4fbb-b230-a61ad720a1f7",
+        segmentValue: "107"
+      })
+    );
+
+    await app.close();
+  });
+
   it("evaluates /v1/decide using lookup mode with WBS mapping", async () => {
     const { prisma, decisionLogCreate } = makePrisma();
     const meiro: MeiroAdapter = {
