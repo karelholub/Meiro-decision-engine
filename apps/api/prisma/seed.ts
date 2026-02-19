@@ -1,6 +1,7 @@
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Environment, Prisma, PrismaClient, WbsProfileIdStrategy } from "@prisma/client";
 import { createDefaultDecisionDefinition, type DecisionDefinition } from "@decisioning/dsl";
 import type { MeiroProfile } from "@decisioning/meiro";
+import { type WbsMappingConfig } from "@decisioning/wbs-mapping";
 
 const prisma = new PrismaClient();
 
@@ -69,6 +70,17 @@ const cartRecoveryDefinition = (decisionId: string): DecisionDefinition => {
   definition.caps = {
     perProfilePerDay: 1,
     perProfilePerWeek: 3
+  };
+  definition.policies = {
+    requiredConsents: ["email_marketing"],
+    payloadAllowlist: ["channel", "templateId", "campaign"],
+    redactKeys: ["customerEmail"]
+  };
+  definition.writeback = {
+    enabled: true,
+    mode: "label",
+    key: "last_decision_outcome",
+    ttlDays: 30
   };
   definition.flow.rules = [
     {
@@ -143,10 +155,11 @@ const upsertDecision = async (input: {
   key: string;
   name: string;
   description: string;
+  environment: Environment;
   definitionFactory: (decisionId: string) => DecisionDefinition;
 }) => {
-  const existing = await prisma.decision.findUnique({
-    where: { key: input.key },
+  const existing = await prisma.decision.findFirst({
+    where: { key: input.key, environment: input.environment },
     include: {
       versions: {
         where: { status: "ACTIVE" }
@@ -162,6 +175,7 @@ const upsertDecision = async (input: {
     existing ??
     (await prisma.decision.create({
       data: {
+        environment: input.environment,
         key: input.key,
         name: input.name,
         description: input.description
@@ -181,9 +195,112 @@ const upsertDecision = async (input: {
   });
 };
 
+const upsertWbsInstance = async () => {
+  const existingActive = await prisma.wbsInstance.findFirst({
+    where: {
+      environment: Environment.DEV,
+      isActive: true
+    }
+  });
+
+  if (existingActive) {
+    return;
+  }
+
+  await prisma.wbsInstance.updateMany({
+    where: {
+      environment: Environment.DEV,
+      isActive: true
+    },
+    data: {
+      isActive: false
+    }
+  });
+
+  await prisma.wbsInstance.create({
+    data: {
+      environment: Environment.DEV,
+      name: "Meiro Store Demo",
+      baseUrl: "https://cdp.store.demo.meiro.io/wbs",
+      attributeParamName: "attribute",
+      valueParamName: "value",
+      segmentParamName: "segment",
+      includeSegment: false,
+      timeoutMs: 1500,
+      isActive: true
+    }
+  });
+};
+
+const defaultWbsMapping: WbsMappingConfig = {
+  attributeMappings: [
+    { sourceKey: "web_rfm", targetKey: "web_rfm", transform: "takeFirst" },
+    { sourceKey: "web_churn_risk_score", targetKey: "web_churn_risk_score", transform: "coerceNumber" },
+    { sourceKey: "web_total_spend", targetKey: "web_total_spend", transform: "coerceNumber" },
+    { sourceKey: "web_product_recommended2", targetKey: "web_product_recommended2", transform: "parseJsonIfString" },
+    { sourceKey: "mea_open_time", targetKey: "mea_open_time", transform: "parseJsonIfString" },
+    { sourceKey: "cookie_consent_status", targetKey: "cookie_consent_status", transform: "takeFirst" }
+  ],
+  audienceRules: [
+    {
+      id: "rfm-lost",
+      audienceKey: "rfm_lost",
+      when: { sourceKey: "web_rfm", op: "contains", value: "Lost" },
+      transform: "takeFirst"
+    },
+    {
+      id: "high-value",
+      audienceKey: "high_value",
+      when: { sourceKey: "web_total_spend", op: "gte", value: 8000 },
+      transform: "coerceNumber"
+    }
+  ],
+  consentMapping: {
+    sourceKey: "cookie_consent_status",
+    transform: "takeFirst",
+    yesValues: ["yes"],
+    noValues: ["no"]
+  }
+};
+
+const upsertWbsMapping = async () => {
+  const existingActive = await prisma.wbsMapping.findFirst({
+    where: {
+      environment: Environment.DEV,
+      isActive: true
+    }
+  });
+
+  if (existingActive) {
+    return;
+  }
+
+  await prisma.wbsMapping.updateMany({
+    where: {
+      environment: Environment.DEV,
+      isActive: true
+    },
+    data: {
+      isActive: false
+    }
+  });
+
+  await prisma.wbsMapping.create({
+    data: {
+      environment: Environment.DEV,
+      name: "Default WBS Mapping",
+      isActive: true,
+      profileIdStrategy: WbsProfileIdStrategy.CUSTOMER_ENTITY_ID,
+      profileIdAttributeKey: null,
+      mappingJson: toInputJson(defaultWbsMapping)
+    }
+  });
+};
+
 const main = async () => {
   await upsertDecision({
     key: "cart_recovery",
+    environment: Environment.DEV,
     name: "Cart Recovery",
     description: "Send recovery reminders for abandoners with consent.",
     definitionFactory: cartRecoveryDefinition
@@ -191,9 +308,53 @@ const main = async () => {
 
   await upsertDecision({
     key: "global_suppression",
+    environment: Environment.DEV,
     name: "Global Suppression",
     description: "Suppress profiles in global suppression audience.",
     definitionFactory: suppressionDefinition
+  });
+
+  await upsertWbsInstance();
+  await upsertWbsMapping();
+
+  const now = new Date();
+  const conversionTimestamp = new Date(now);
+  conversionTimestamp.setUTCDate(conversionTimestamp.getUTCDate() - 1);
+
+  await prisma.conversion.upsert({
+    where: { id: "11111111-1111-1111-1111-111111111111" },
+    update: {
+      profileId: "p-1001",
+      timestamp: conversionTimestamp,
+      type: "purchase",
+      value: 120,
+      metadata: { source: "seed" }
+    },
+    create: {
+      id: "11111111-1111-1111-1111-111111111111",
+      profileId: "p-1001",
+      timestamp: conversionTimestamp,
+      type: "purchase",
+      value: 120,
+      metadata: { source: "seed" }
+    }
+  });
+
+  await prisma.conversion.upsert({
+    where: { id: "22222222-2222-2222-2222-222222222222" },
+    update: {
+      profileId: "p-1002",
+      timestamp: conversionTimestamp,
+      type: "signup",
+      metadata: { source: "seed" }
+    },
+    create: {
+      id: "22222222-2222-2222-2222-222222222222",
+      profileId: "p-1002",
+      timestamp: conversionTimestamp,
+      type: "signup",
+      metadata: { source: "seed" }
+    }
   });
 
   console.log(

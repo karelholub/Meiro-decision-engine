@@ -96,6 +96,21 @@ export const CapsSchema = z.object({
 });
 export type Caps = z.infer<typeof CapsSchema>;
 
+export const PoliciesConfigSchema = z.object({
+  requiredConsents: z.array(z.string()).optional(),
+  payloadAllowlist: z.array(z.string()).optional(),
+  redactKeys: z.array(z.string()).optional()
+});
+export type PoliciesConfig = z.infer<typeof PoliciesConfigSchema>;
+
+export const WritebackConfigSchema = z.object({
+  enabled: z.boolean(),
+  mode: z.enum(["label", "attribute"]),
+  key: z.string().min(1),
+  ttlDays: z.number().int().positive().optional()
+});
+export type WritebackConfig = z.infer<typeof WritebackConfigSchema>;
+
 export const ReasonSchema = z.object({
   code: z.string().min(1),
   detail: z.string().optional()
@@ -115,6 +130,8 @@ export const DecisionDefinitionSchema = z.object({
   holdout: HoldoutSchema,
   eligibility: EligibilitySchema.default({}),
   caps: CapsSchema.default({}),
+  policies: PoliciesConfigSchema.optional(),
+  writeback: WritebackConfigSchema.optional(),
   flow: z.object({
     rules: z.array(FlowRuleSchema).min(1)
   }),

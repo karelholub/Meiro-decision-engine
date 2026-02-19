@@ -21,15 +21,30 @@ enum Outcome {
   ERROR
 }
 
+enum Environment {
+  DEV
+  STAGE
+  PROD
+}
+
+enum WbsProfileIdStrategy {
+  CUSTOMER_ENTITY_ID
+  ATTRIBUTE_KEY
+  HASH_FALLBACK
+}
+
 model Decision {
   id          String            @id @default(uuid())
-  key         String            @unique
+  environment Environment       @default(DEV)
+  key         String
   name        String
   description String            @default("")
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   versions    DecisionVersion[]
   logs        DecisionLog[]
+
+  @@unique([environment, key])
 }
 
 model DecisionVersion {
@@ -59,10 +74,61 @@ model DecisionLog {
   outcome        Outcome
   reasonsJson    Json
   debugTraceJson Json?
+  inputJson      Json?
   latencyMs      Int
   decision       Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
 
   @@index([decisionId, timestamp])
   @@index([profileId, timestamp])
+  @@index([decisionId, profileId, timestamp])
+  @@index([decisionId, outcome, timestamp])
+  @@index([timestamp])
   @@index([requestId])
+}
+
+model Conversion {
+  id         String   @id @default(uuid())
+  profileId  String
+  timestamp  DateTime @default(now())
+  type       String
+  value      Float?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([profileId, timestamp])
+  @@index([type, timestamp])
+}
+
+model WbsInstance {
+  id                  String      @id @default(uuid())
+  environment         Environment @default(DEV)
+  name                String
+  baseUrl             String
+  attributeParamName  String      @default("attribute")
+  valueParamName      String      @default("value")
+  segmentParamName    String      @default("segment")
+  includeSegment      Boolean     @default(false)
+  defaultSegmentValue String?
+  timeoutMs           Int         @default(1500)
+  isActive            Boolean     @default(true)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@index([environment, isActive])
+  @@index([environment, updatedAt])
+}
+
+model WbsMapping {
+  id                    String               @id @default(uuid())
+  environment           Environment          @default(DEV)
+  name                  String
+  isActive              Boolean              @default(true)
+  profileIdStrategy     WbsProfileIdStrategy @default(CUSTOMER_ENTITY_ID)
+  profileIdAttributeKey String?
+  mappingJson           Json
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@index([environment, isActive])
+  @@index([environment, updatedAt])
 }

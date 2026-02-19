@@ -1,10 +1,10 @@
-import DecisionEditorClient from "./editor-client";
+import DecisionDetailsClient from "./details-client";
 
-export default async function DecisionEditorPage({
+export default async function DecisionDetailsPage({
   params
 }: {
   params: Promise<{ decisionId: string }>;
 }) {
   const { decisionId } = await params;
-  return <DecisionEditorClient decisionId={decisionId} />;
+  return <DecisionDetailsClient decisionId={decisionId} />;
 }

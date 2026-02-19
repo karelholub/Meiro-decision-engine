@@ -32,9 +32,15 @@ importers:
       '@decisioning/meiro':
         specifier: workspace:*
         version: link:../../packages/meiro
+      '@decisioning/policies':
+        specifier: workspace:*
+        version: link:../../packages/policies
       '@decisioning/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@decisioning/wbs-mapping':
+        specifier: workspace:*
+        version: link:../../packages/wbs-mapping
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0
@@ -115,6 +121,15 @@ importers:
 
   packages/meiro: {}
 
+  packages/policies:
+    dependencies:
+      '@decisioning/dsl':
+        specifier: workspace:*
+        version: link:../dsl
+      '@decisioning/engine':
+        specifier: workspace:*
+        version: link:../engine
+
   packages/shared:
     dependencies:
       '@decisioning/dsl':
@@ -126,6 +141,19 @@ importers:
       '@decisioning/meiro':
         specifier: workspace:*
         version: link:../meiro
+
+  packages/wbs-mapping:
+    dependencies:
+      '@decisioning/engine':
+        specifier: workspace:*
+        version: link:../engine
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.11)
 
 packages:
 

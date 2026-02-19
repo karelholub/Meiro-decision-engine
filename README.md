@@ -12,6 +12,8 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   /dsl      Decision DSL types, Zod schema validation, formatter
   /engine   Pure deterministic decision evaluator
   /meiro    Meiro adapter interface + mock/real adapter
+  /policies Decision policy layer (consent/allowlist/redaction)
+  /wbs-mapping WBS mapping schema + mapper + validation helpers
   /shared   Shared API/UI contract types
 ```
 
@@ -22,11 +24,20 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - DB: Postgres + Prisma
 - UI: Next.js App Router + Tailwind CSS
 - Monorepo: pnpm workspaces
-- Tests: Vitest
+- Tests: Vitest (engine/api + UI utility smoke)
 
 ## Key MVP Features
 
 - Versioned decision definitions (`DRAFT`, `ACTIVE`, `ARCHIVED`)
+- Environment scoping per decision (`DEV`, `STAGE`, `PROD`)
+- Policy enforcement on `/v1/decide` (consent gate, payload allowlist, PII redaction)
+- Optional DSL writeback config to persist decision outcome as Meiro label/attribute
+- Real Meiro adapter with timeout/retry and typed response mapping
+- In-memory profile cache (LRU + TTL) for `/v1/decide`
+- Decision reporting endpoint (outcomes, action distribution, holdout vs treatment)
+- Conversion ingestion endpoint + conversion proxy uplift estimate
+- WBS instance settings API + UI (base URL, query param names, timeout, segment toggle)
+- WBS mapping API + UI (returned_attributes -> attributes/audiences/consents)
 - DSL validation + formatting with Zod
 - Deterministic engine:
   - eligibility checks (audiences, attributes, consent)
@@ -34,17 +45,34 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - caps (daily/weekly by profile)
   - first-match rule evaluation with IF/ELSE branch support
 - API endpoints:
+  - `GET /` basic API root status
   - `POST /v1/decide`
+  - `/v1/decide` supports either `profileId` or `lookup: { attribute, value }`
+  - `/v1/decide` returns `outcome: ERROR` (and logs it) if profile fetch from Meiro fails
   - decision CRUD/versioning + activate/archive
+  - `POST /v1/decisions/:id/validate` now returns `schemaErrors`, `warnings`, and validation `metrics`
+  - `POST /v1/decisions/:id/preview-activation` returns draft vs active diff summary
   - `POST /v1/simulate`
-  - logs list + NDJSON export
+  - `POST /v1/conversions`
+  - `GET /v1/reports/decision/:decisionId`
+  - `GET/PUT /v1/settings/wbs`
+  - `POST /v1/settings/wbs/test-connection`
+  - `GET /v1/settings/wbs/history`
+  - `GET/PUT /v1/settings/wbs-mapping`
+  - `POST /v1/settings/wbs-mapping/validate`
+  - `POST /v1/settings/wbs-mapping/test`
+  - `GET /v1/settings/wbs-mapping/history`
+  - paginated logs list + log details + NDJSON export
+  - `GET /v1/logs/:id` for payload/trace/replay input
+  - environment selection via `X-ENV` header (defaults to `DEV`)
 - Persistence:
   - `decisions`, `decision_versions`, `decision_logs`
   - caps computed from logs (daily/weekly counts)
 - Meiro integration abstraction:
   - `MeiroAdapter` interface
   - `MockMeiroAdapter` with seeded mock profiles
-  - `RealMeiroAdapter` skeleton (`MEIRO_BASE_URL`, `MEIRO_TOKEN`)
+  - `RealMeiroAdapter` (`MEIRO_BASE_URL`, `MEIRO_TOKEN`, `MEIRO_TIMEOUT_MS`)
+  - `writebackOutcome(...)` support (real adapter stub + mock in-memory recording)
 - Extensibility hooks included in API wiring:
   - pre/post policy hook
   - optional ranker hook for candidate payloads
@@ -54,9 +82,16 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `Decision`
 - `DecisionVersion`
 - `DecisionLog`
+- `Conversion`
+- `WbsInstance`
+- `WbsMapping`
 
 Migration is included at:
 - `apps/api/prisma/migrations/202602190001_init/migration.sql`
+- `apps/api/prisma/migrations/202602190002_environment_scope/migration.sql`
+- `apps/api/prisma/migrations/202602190003_conversions_reporting/migration.sql`
+- `apps/api/prisma/migrations/202602190004_wbs_settings_mapping/migration.sql`
+- `apps/api/prisma/migrations/202602190005_log_replay_and_indexes/migration.sql`
 
 ## Environment Variables
 
@@ -71,9 +106,12 @@ Important values:
 - `DATABASE_URL`
 - `API_PORT` (default `3001`)
 - `API_WRITE_KEY` (used for write endpoints via `X-API-KEY`)
+- `X-ENV` request header (`DEV`, `STAGE`, `PROD`; defaults to `DEV` when missing)
+- CRUD endpoints also accept `?environment=DEV|STAGE|PROD` (header still supported)
 - `PROTECT_DECIDE` (`true` to protect `/v1/decide` with API key)
 - `MEIRO_MODE` (`mock` or `real`)
 - `MEIRO_BASE_URL`, `MEIRO_TOKEN` (for real adapter)
+- `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
 - `NEXT_PUBLIC_API_BASE_URL`
 - `NEXT_PUBLIC_API_KEY`
 
@@ -86,6 +124,8 @@ pnpm --filter @decisioning/api prisma:migrate
 pnpm --filter @decisioning/api prisma:seed
 pnpm test
 pnpm build
+pnpm typecheck
+pnpm lint
 ```
 
 Run apps:
@@ -97,6 +137,14 @@ pnpm --filter @decisioning/ui dev
 
 - API: `http://localhost:3001`
 - UI: `http://localhost:3000`
+
+Performance sanity benchmark:
+
+```bash
+pnpm bench:decide
+# optional
+BENCH_ITERATIONS=1000 pnpm bench:decide
+```
 
 ## Docker Compose
 
@@ -124,8 +172,28 @@ Defined in:
 
 ### Seeded Decisions
 
-- `cart_recovery` (ACTIVE)
-- `global_suppression` (ACTIVE)
+- `cart_recovery` (ACTIVE in `DEV`)
+- `global_suppression` (ACTIVE in `DEV`)
+
+### Seeded Conversions
+
+- one `purchase` event for `p-1001`
+- one `signup` event for `p-1002`
+
+### Seeded WBS Settings (DEV)
+
+- active WBS instance:
+  - `baseUrl=https://cdp.store.demo.meiro.io/wbs`
+  - `attributeParamName=attribute`
+  - `valueParamName=value`
+  - `segmentParamName=segment`
+  - `includeSegment=false`
+  - `timeoutMs=1500`
+- active mapping:
+  - profile ID strategy: `CUSTOMER_ENTITY_ID`
+  - attribute mappings for `web_rfm`, `web_churn_risk_score`, `web_total_spend`, `web_product_recommended2`, `mea_open_time`, `cookie_consent_status`
+  - audience rules: `rfm_lost`, `high_value`
+  - consent mapping from `cookie_consent_status`
 
 ## Example Decision DSL JSON
 
@@ -155,6 +223,17 @@ Defined in:
   "caps": {
     "perProfilePerDay": 1,
     "perProfilePerWeek": 3
+  },
+  "policies": {
+    "requiredConsents": ["email_marketing"],
+    "payloadAllowlist": ["templateId", "campaign"],
+    "redactKeys": ["customerEmail"]
+  },
+  "writeback": {
+    "enabled": true,
+    "mode": "label",
+    "key": "last_decision_outcome",
+    "ttlDays": 30
   },
   "flow": {
     "rules": [
@@ -198,7 +277,8 @@ Defined in:
 ### List decisions
 
 ```bash
-curl "http://localhost:3001/v1/decisions?status=ACTIVE"
+curl "http://localhost:3001/v1/decisions?status=ACTIVE" \
+  -H "X-ENV: DEV"
 ```
 
 ### Create draft decision
@@ -207,6 +287,7 @@ curl "http://localhost:3001/v1/decisions?status=ACTIVE"
 curl -X POST "http://localhost:3001/v1/decisions" \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
   -d '{
     "key": "welcome_message",
     "name": "Welcome Message",
@@ -217,14 +298,23 @@ curl -X POST "http://localhost:3001/v1/decisions" \
 ### Validate draft
 
 ```bash
-curl -X POST "http://localhost:3001/v1/decisions/<decisionId>/validate"
+curl -X POST "http://localhost:3001/v1/decisions/<decisionId>/validate" \
+  -H "X-ENV: DEV"
+```
+
+### Preview activation impact
+
+```bash
+curl -X POST "http://localhost:3001/v1/decisions/<decisionId>/preview-activation" \
+  -H "X-ENV: DEV"
 ```
 
 ### Activate draft
 
 ```bash
 curl -X POST "http://localhost:3001/v1/decisions/<decisionId>/activate" \
-  -H "X-API-KEY: local-write-key"
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV"
 ```
 
 ### Simulate with inline profile (no log write)
@@ -249,6 +339,7 @@ curl -X POST "http://localhost:3001/v1/simulate" \
 ```bash
 curl -X POST "http://localhost:3001/v1/decide" \
   -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
   -d '{
     "decisionKey": "cart_recovery",
     "profileId": "p-1001",
@@ -256,10 +347,130 @@ curl -X POST "http://localhost:3001/v1/decide" \
   }'
 ```
 
+### Decide using WBS lookup mode
+
+```bash
+curl -X POST "http://localhost:3001/v1/decide" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "decisionKey": "cart_recovery",
+    "lookup": {
+      "attribute": "email",
+      "value": "alice@example.com"
+    },
+    "debug": true
+  }'
+```
+
+When `debug=true` in lookup mode, the response includes redacted `rawWbsResponse` and mapping summary.  
+Keys containing `email` or `phone` are redacted. Raw WBS payload is never persisted in `decision_logs`.
+
+### Get WBS settings
+
+```bash
+curl "http://localhost:3001/v1/settings/wbs" \
+  -H "X-ENV: DEV"
+```
+
+### Update WBS settings
+
+```bash
+curl -X PUT "http://localhost:3001/v1/settings/wbs" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "name": "Meiro Store Demo",
+    "baseUrl": "https://cdp.store.demo.meiro.io/wbs",
+    "attributeParamName": "attribute",
+    "valueParamName": "value",
+    "segmentParamName": "segment",
+    "includeSegment": false,
+    "timeoutMs": 1500
+  }'
+```
+
+### Validate WBS mapping JSON
+
+```bash
+curl -X POST "http://localhost:3001/v1/settings/wbs-mapping/validate" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "mappingJson": {
+      "attributeMappings": [],
+      "audienceRules": []
+    }
+  }'
+```
+
+### Test WBS connection using active instance config
+
+```bash
+curl -X POST "http://localhost:3001/v1/settings/wbs/test-connection" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{ "attribute": "email", "value": "demo@example.com" }'
+```
+
+### Test WBS mapping with sample payload
+
+```bash
+curl -X POST "http://localhost:3001/v1/settings/wbs-mapping/test" \
+  -H "Content-Type: application/json" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "lookup": { "attribute": "email", "value": "demo@example.com" },
+    "rawResponse": {
+      "status": "ok",
+      "customer_entity_id": "cust-demo-1",
+      "returned_attributes": {
+        "web_rfm": ["Lost"],
+        "web_total_spend": ["9200"],
+        "cookie_consent_status": ["yes"]
+      }
+    }
+  }'
+```
+
+When `writeback.enabled` is true, `/v1/decide` calls Meiro writeback after non-`ERROR` outcomes.  
+If writeback fails, the decision response still succeeds and adds reason code `WRITEBACK_FAILED`.
+
 ### Read logs
 
 ```bash
-curl "http://localhost:3001/v1/logs?limit=50"
+curl "http://localhost:3001/v1/logs?page=1&limit=50&includeTrace=false" \
+  -H "X-ENV: DEV"
+```
+
+### Read a single log with trace and replay input
+
+```bash
+curl "http://localhost:3001/v1/logs/<logId>?includeTrace=true" \
+  -H "X-ENV: DEV"
+```
+
+### Ingest conversion event
+
+```bash
+curl -X POST "http://localhost:3001/v1/conversions" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -d '{
+    "profileId": "p-1001",
+    "timestamp": "2026-02-19T12:00:00.000Z",
+    "type": "purchase",
+    "value": 120,
+    "metadata": { "orderId": "o-123" }
+  }'
+```
+
+### Decision report (includes conversion proxy)
+
+```bash
+curl "http://localhost:3001/v1/reports/decision/<decisionId>?windowDays=7" \
+  -H "X-ENV: DEV"
 ```
 
 ### Export logs as NDJSON
@@ -270,13 +481,16 @@ curl "http://localhost:3001/v1/logs/export?limit=200"
 
 ## UI Workflow
 
-1. Open `http://localhost:3000/decisions`
-2. Create draft
-3. Open editor
-4. Validate + Save
-5. Activate
-6. Open simulator and run against mock profile
-7. Open logs viewer to inspect outcomes/reasons
+1. Open `http://localhost:3000/overview`
+2. Select environment (`DEV`/`STAGE`/`PROD`) from header
+3. Go to `Decisions` and choose `Create Draft (Wizard)` or `Create Draft (JSON)`
+4. Open `Decision Details` (`/decisions/[id]`) then `Open Editor`
+5. Validate + Save (autosave enabled for drafts)
+6. Use `Preview Impact` and activate
+7. Open `Simulator` (`/simulate`) and compare two runs side-by-side
+8. Open `Logs` and use `Replay` to hydrate simulator from stored inputs
+9. Open `WBS Settings` and run `Test Connection`
+10. Open `WBS Mapping` and run `Test Mapping`
 
 ## Notes for Enterprise Evolution
 
@@ -294,7 +508,20 @@ Current structure intentionally leaves extension points for:
 - Prisma schema: `apps/api/prisma/schema.prisma`
 - Seed script: `apps/api/prisma/seed.ts`
 - UI list page: `apps/ui/src/app/decisions/page.tsx`
+- UI details page: `apps/ui/src/app/decisions/[decisionId]/details-client.tsx`
 - UI editor: `apps/ui/src/app/decisions/[decisionId]/editor-client.tsx`
+- UI simulator: `apps/ui/src/app/simulate/page.tsx`
+- UI logs: `apps/ui/src/app/logs/page.tsx`
 - Engine: `packages/engine/src/index.ts`
 - DSL: `packages/dsl/src/index.ts`
 - Meiro adapter: `packages/meiro/src/index.ts`
+- WBS mapping package: `packages/wbs-mapping/src/index.ts`
+- WBS settings UI: `apps/ui/src/app/settings/wbs/page.tsx`
+- WBS mapping UI: `apps/ui/src/app/settings/wbs-mapping/page.tsx`
+
+## Release Notes
+
+- `trace` response shape for `/v1/decide` and `/v1/simulate` is now standardized as an envelope (`formatVersion`, `engine`, `integration`).
+- `/v1/logs` is now environment-scoped and paginated; it returns `{ page, limit, total, totalPages, items }`.
+- New `decision_logs.inputJson` column stores replay-safe input to power Logs replay UX.
+- No existing endpoint was removed; previous fields remain available for backwards compatibility.

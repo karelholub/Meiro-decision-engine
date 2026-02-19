@@ -5,6 +5,7 @@ export interface AppConfig {
   meiroMode: "mock" | "real";
   meiroBaseUrl?: string;
   meiroToken?: string;
+  meiroTimeoutMs?: number;
 }
 
 const toBool = (value: string | undefined, fallback: boolean): boolean => {
@@ -20,5 +21,6 @@ export const readConfig = (): AppConfig => ({
   protectDecide: toBool(process.env.PROTECT_DECIDE, false),
   meiroMode: process.env.MEIRO_MODE === "real" ? "real" : "mock",
   meiroBaseUrl: process.env.MEIRO_BASE_URL,
-  meiroToken: process.env.MEIRO_TOKEN
+  meiroToken: process.env.MEIRO_TOKEN,
+  meiroTimeoutMs: Number.parseInt(process.env.MEIRO_TIMEOUT_MS ?? "1500", 10)
 });

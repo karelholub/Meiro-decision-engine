@@ -15,7 +15,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: docker/api.Dockerfile
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/decisioning
       API_PORT: 3001
@@ -32,7 +32,10 @@ services:
   ui:
     build:
       context: .
-      dockerfile: apps/ui/Dockerfile
+      dockerfile: docker/ui.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+        NEXT_PUBLIC_API_KEY: local-write-key
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
       NEXT_PUBLIC_API_KEY: local-write-key

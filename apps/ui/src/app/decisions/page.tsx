@@ -2,19 +2,40 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { DecisionVersionSummary } from "@decisioning/shared";
-import { apiFetch, toQuery } from "../../lib/api";
-
-interface DecisionsResponse {
-  items: DecisionVersionSummary[];
-}
+import { apiClient } from "../../lib/api";
+import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
 export default function DecisionsPage() {
+  const router = useRouter();
   const [items, setItems] = useState<DecisionVersionSummary[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [createMode, setCreateMode] = useState<"wizard" | "json">("wizard");
+  const [createKey, setCreateKey] = useState("");
+  const [createName, setCreateName] = useState("");
+  const [createDescription, setCreateDescription] = useState("");
+
+  useEffect(() => {
+    setEnvironment(getEnvironment());
+    return onEnvironmentChange(setEnvironment);
+  }, []);
+
+  useEffect(() => {
+    const mode = new URLSearchParams(window.location.search).get("create");
+    if (mode === "wizard" || mode === "json") {
+      setCreateMode(mode);
+      setShowCreate(true);
+    }
+  }, []);
 
   const grouped = useMemo(() => {
     const map = new Map<string, DecisionVersionSummary[]>();
@@ -23,20 +44,36 @@ export default function DecisionsPage() {
       current.push(item);
       map.set(item.decisionId, current);
     }
-    return [...map.entries()].map(([decisionId, versions]) => ({
-      decisionId,
-      key: versions[0]?.key ?? "",
-      name: versions[0]?.name ?? "",
-      versions
-    }));
+
+    return [...map.entries()].map(([decisionId, versions]) => {
+      const sorted = [...versions].sort((a, b) => b.version - a.version);
+      const active = sorted.find((version) => version.status === "ACTIVE") ?? null;
+      const draft = sorted.find((version) => version.status === "DRAFT") ?? null;
+      return {
+        decisionId,
+        key: sorted[0]?.key ?? "",
+        environment: sorted[0]?.environment ?? "DEV",
+        name: sorted[0]?.name ?? "",
+        owner: "Unassigned",
+        active,
+        draft,
+        versions: sorted
+      };
+    });
   }, [items]);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<DecisionsResponse>(`/v1/decisions${toQuery({ status: statusFilter, q: search })}`);
+      const data = await apiClient.decisions.list({
+        status: statusFilter || undefined,
+        q: search || undefined,
+        page,
+        limit: 50
+      });
       setItems(data.items);
+      setTotalPages(data.totalPages);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load decisions");
     } finally {
@@ -46,57 +83,72 @@ export default function DecisionsPage() {
 
   useEffect(() => {
     void load();
-  }, [statusFilter]);
+  }, [statusFilter, environment, page]);
+
+  const resetCreateForm = () => {
+    setCreateKey("");
+    setCreateName("");
+    setCreateDescription("");
+  };
 
   const createDraft = async () => {
-    const key = window.prompt("Decision key (letters/numbers/_/-)");
-    if (!key) {
+    if (!createKey.trim()) {
+      setError("Decision key is required.");
       return;
     }
 
-    const name = window.prompt("Decision name") ?? key;
-    const description = window.prompt("Decision description") ?? "";
-
     try {
-      await apiFetch("/v1/decisions", {
-        method: "POST",
-        body: JSON.stringify({ key, name, description })
+      const created = await apiClient.decisions.create({
+        key: createKey.trim(),
+        name: createName.trim() || createKey.trim(),
+        description: createDescription.trim() || undefined
       });
+      resetCreateForm();
+      setShowCreate(false);
       await load();
+      router.push(`/decisions/${created.decisionId}/edit?tab=${createMode === "json" ? "advanced" : "basic"}`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Failed to create decision");
+      setError(err instanceof Error ? err.message : "Failed to create decision");
     }
   };
 
   const duplicateActive = async (decisionId: string) => {
     try {
-      await apiFetch(`/v1/decisions/${decisionId}/duplicate`, { method: "POST" });
+      await apiClient.decisions.duplicate(decisionId);
       await load();
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Duplicate failed");
+      setError(err instanceof Error ? err.message : "Duplicate failed");
     }
   };
 
   const archive = async (decisionId: string) => {
-    if (!window.confirm("Archive latest active/draft version?")) {
+    if (!window.confirm("Archive latest ACTIVE/DRAFT version?")) {
       return;
     }
     try {
-      await apiFetch(`/v1/decisions/${decisionId}/archive`, { method: "POST" });
+      await apiClient.decisions.archive(decisionId);
       await load();
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "Archive failed");
+      setError(err instanceof Error ? err.message : "Archive failed");
     }
   };
 
   return (
     <section className="space-y-4">
+      <header className="panel p-4">
+        <h2 className="text-xl font-semibold">Decisions</h2>
+        <p className="text-sm text-stone-700">Search, filter, and manage decision versions in {environment}.</p>
+      </header>
+
       <div className="panel flex flex-wrap items-end gap-3 p-4">
         <label className="flex flex-col gap-1 text-sm">
           Status
           <select
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
+            onChange={(event) => {
+              setPage(1);
+              setStatusFilter(event.target.value);
+            }}
             className="rounded-md border border-stone-300 bg-white px-2 py-1"
           >
             <option value="">All</option>
@@ -114,13 +166,75 @@ export default function DecisionsPage() {
             className="rounded-md border border-stone-300 bg-white px-2 py-1"
           />
         </label>
-        <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void load()}>
+        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
           Apply
         </button>
-        <button className="rounded-md bg-accent px-3 py-2 text-sm text-white" onClick={createDraft}>
-          Create Draft
+        <button
+          className="rounded-md bg-ink px-3 py-2 text-sm text-white"
+          onClick={() => {
+            setCreateMode("wizard");
+            setShowCreate((current) => !current);
+          }}
+        >
+          Create Draft (Wizard)
+        </button>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+          onClick={() => {
+            setCreateMode("json");
+            setShowCreate((current) => !current);
+          }}
+        >
+          Create Draft (JSON)
         </button>
       </div>
+
+      {showCreate ? (
+        <article className="panel grid gap-3 p-4 md:grid-cols-2">
+          <p className="text-sm md:col-span-2">
+            New draft mode: <strong>{createMode === "wizard" ? "Wizard" : "JSON editor"}</strong>
+          </p>
+          <label className="flex flex-col gap-1 text-sm">
+            Decision key
+            <input
+              value={createKey}
+              onChange={(event) => setCreateKey(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+              placeholder="cart_recovery"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Name
+            <input
+              value={createName}
+              onChange={(event) => setCreateName(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+            Description
+            <input
+              value={createDescription}
+              onChange={(event) => setCreateDescription(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            />
+          </label>
+          <div className="md:col-span-2 flex items-center gap-2">
+            <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void createDraft()}>
+              Create
+            </button>
+            <button
+              className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+              onClick={() => {
+                setShowCreate(false);
+                resetCreateForm();
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </article>
+      ) : null}
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {loading ? <p className="text-sm">Loading...</p> : null}
@@ -130,15 +244,23 @@ export default function DecisionsPage() {
           <article key={group.decisionId} className="panel p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">{group.name}</h2>
-                <p className="text-sm text-stone-700">{group.key}</p>
+                <h3 className="text-lg font-semibold">{group.name}</h3>
+                <p className="text-sm text-stone-700">
+                  {group.key} ({group.environment}) · owner: {group.owner}
+                </p>
+                <p className="text-xs text-stone-600">
+                  Last activation: {group.active?.activatedAt ? new Date(group.active.activatedAt).toLocaleString() : "never"}
+                </p>
               </div>
               <div className="flex flex-wrap gap-2 text-sm">
+                <Link href={`/decisions/${group.decisionId}`} className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100">
+                  Details
+                </Link>
                 <Link
-                  href={`/decisions/${group.decisionId}`}
+                  href={`/decisions/${group.decisionId}/edit`}
                   className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100"
                 >
-                  Open Editor
+                  Edit Draft
                 </Link>
                 <button
                   onClick={() => void duplicateActive(group.decisionId)}
@@ -146,10 +268,7 @@ export default function DecisionsPage() {
                 >
                   Duplicate Active
                 </button>
-                <button
-                  onClick={() => void archive(group.decisionId)}
-                  className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100"
-                >
+                <button onClick={() => void archive(group.decisionId)} className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100">
                   Archive
                 </button>
               </div>
@@ -180,6 +299,32 @@ export default function DecisionsPage() {
             </div>
           </article>
         ))}
+      </div>
+
+      {grouped.length === 0 && !loading ? (
+        <article className="panel p-4">
+          <p className="text-sm text-stone-700">No decisions found for the selected filters.</p>
+        </article>
+      ) : null}
+
+      <div className="flex items-center justify-between text-sm">
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
+          onClick={() => setPage((value) => Math.max(1, value - 1))}
+          disabled={page <= 1}
+        >
+          Previous
+        </button>
+        <p>
+          Page {page} / {Math.max(1, totalPages)}
+        </p>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
+          onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+          disabled={page >= totalPages}
+        >
+          Next
+        </button>
       </div>
     </section>
   );

@@ -1,41 +1,85 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { Fragment, useEffect, useState } from "react";
 import type { LogsQueryResponseItem } from "@decisioning/shared";
-import { apiFetch, toQuery } from "../../lib/api";
-
-interface LogsResponse {
-  items: LogsQueryResponseItem[];
-}
+import { apiClient } from "../../lib/api";
+import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
 export default function LogsPage() {
+  const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [decisionId, setDecisionId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [items, setItems] = useState<LogsQueryResponseItem[]>([]);
+  const [expanded, setExpanded] = useState<Record<string, { trace?: unknown; payload?: unknown }>>({});
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setEnvironment(getEnvironment());
+    return onEnvironmentChange(setEnvironment);
+  }, []);
 
   const load = async () => {
+    setLoading(true);
     try {
-      const response = await apiFetch<LogsResponse>(
-        `/v1/logs${toQuery({
-          decisionId,
-          profileId,
-          from: from ? new Date(from).toISOString() : undefined,
-          to: to ? new Date(to).toISOString() : undefined,
-          limit: 200
-        })}`
-      );
+      const response = await apiClient.logs.list({
+        decisionId: decisionId || undefined,
+        profileId: profileId || undefined,
+        from: from ? new Date(from).toISOString() : undefined,
+        to: to ? new Date(to).toISOString() : undefined,
+        page,
+        limit: 50
+      });
       setItems(response.items);
+      setTotalPages(response.totalPages);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load logs");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, [page, environment]);
+
+  const toggleExpand = async (id: string) => {
+    if (expanded[id]) {
+      setExpanded((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+
+    try {
+      const response = await apiClient.logs.get(id, true);
+      setExpanded((current) => ({
+        ...current,
+        [id]: {
+          trace: response.item?.trace,
+          payload: response.item?.payload
+        }
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load log details");
     }
   };
 
   return (
     <section className="space-y-4">
+      <header className="panel p-4">
+        <h2 className="text-xl font-semibold">Decision Logs</h2>
+        <p className="text-sm text-stone-700">Fast filters with pagination and replay support. Environment: {environment}</p>
+      </header>
+
       <div className="panel grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-5">
         <label className="flex flex-col gap-1 text-sm lg:col-span-2">
           Decision ID
@@ -73,9 +117,18 @@ export default function LogsPage() {
         </label>
       </div>
 
-      <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void load()}>
-        Load Logs
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          className="rounded-md bg-ink px-4 py-2 text-sm text-white"
+          onClick={() => {
+            setPage(1);
+            void load();
+          }}
+          disabled={loading}
+        >
+          {loading ? "Loading..." : "Apply Filters"}
+        </button>
+      </div>
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
@@ -90,22 +143,77 @@ export default function LogsPage() {
               <th className="border-b border-stone-200 px-3 py-2">Action</th>
               <th className="border-b border-stone-200 px-3 py-2">Reasons</th>
               <th className="border-b border-stone-200 px-3 py-2">Latency</th>
+              <th className="border-b border-stone-200 px-3 py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.id}>
-                <td className="border-b border-stone-100 px-3 py-2">{new Date(item.timestamp).toLocaleString()}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.decisionId}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.profileId}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.outcome}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.actionType}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.reasons.map((reason) => reason.code).join(", ")}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.latencyMs}ms</td>
-              </tr>
+              <Fragment key={item.id}>
+                <tr key={item.id}>
+                  <td className="border-b border-stone-100 px-3 py-2">{new Date(item.timestamp).toLocaleString()}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.decisionId}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.profileId}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.outcome}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.actionType}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.reasons.map((reason) => reason.code).join(", ")}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{item.latencyMs}ms</td>
+                  <td className="border-b border-stone-100 px-3 py-2">
+                    <div className="flex gap-2">
+                      <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void toggleExpand(item.id)}>
+                        {expanded[item.id] ? "Hide" : "Expand"}
+                      </button>
+                      {item.replayAvailable ? (
+                        <Link className="rounded border border-stone-300 px-2 py-1 text-xs" href={`/simulate?logId=${item.id}`}>
+                          Replay
+                        </Link>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+                {expanded[item.id] ? (
+                  <tr key={`${item.id}-expanded`}>
+                    <td colSpan={8} className="border-b border-stone-100 bg-stone-50 px-3 py-2">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <p className="mb-1 text-xs font-semibold">Payload</p>
+                          <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-2 text-xs">
+                            {JSON.stringify(expanded[item.id]?.payload ?? {}, null, 2)}
+                          </pre>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs font-semibold">Trace</p>
+                          <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-2 text-xs">
+                            {JSON.stringify(expanded[item.id]?.trace ?? {}, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between text-sm">
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
+          onClick={() => setPage((value) => Math.max(1, value - 1))}
+          disabled={page <= 1}
+        >
+          Previous
+        </button>
+        <p>
+          Page {page} / {Math.max(1, totalPages)}
+        </p>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
+          onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+          disabled={page >= totalPages}
+        >
+          Next
+        </button>
       </div>
     </section>
   );
