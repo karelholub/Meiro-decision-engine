@@ -54,8 +54,8 @@ export interface RegisterCacheRoutesDeps {
   app: FastifyInstance;
   prisma: PrismaClient;
   cache: JsonCache;
-  defaultTtlSeconds: number;
-  importantContextKeys: string[];
+  getDefaultTtlSeconds: (environment: Environment) => number;
+  getImportantContextKeys: (environment: Environment) => string[];
   resolveEnvironment: (request: FastifyRequest, reply: FastifyReply) => Environment | null;
   buildResponseError: (reply: FastifyReply, statusCode: number, error: string, details?: unknown) => FastifyReply;
   requireWriteAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
@@ -151,8 +151,8 @@ export const registerCacheRoutes = async (deps: RegisterCacheRoutesDeps) => {
     return {
       environment,
       redisEnabled: deps.cache.enabled,
-      ttlSecondsDefault: deps.defaultTtlSeconds,
-      importantContextKeys: deps.importantContextKeys,
+      ttlSecondsDefault: deps.getDefaultTtlSeconds(environment),
+      importantContextKeys: deps.getImportantContextKeys(environment),
       hits: stats.hits,
       misses: stats.misses,
       fallbackCount: stats.fallbackCount ?? 0,

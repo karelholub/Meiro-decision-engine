@@ -10,9 +10,98 @@ import {
   setDecisionWizardMode,
   type DecisionWizardMode
 } from "../../../lib/app-settings";
+import { apiClient, type RuntimeSettingsPayload } from "../../../lib/api";
+import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+
+interface RuntimeSettingsForm {
+  decisionTimeoutMs: string;
+  decisionWbsTimeoutMs: string;
+  decisionCacheTtlSeconds: string;
+  decisionStaleTtlSeconds: string;
+  realtimeCacheTtlSeconds: string;
+  realtimeCacheLockTtlMs: string;
+  realtimeContextKeys: string;
+  inappWbsTimeoutMs: string;
+  inappCacheTtlSeconds: string;
+  inappStaleTtlSeconds: string;
+  inappContextKeys: string;
+  inappRateLimitPerAppKey: string;
+  inappRateLimitWindowMs: string;
+  precomputeConcurrency: string;
+  precomputeMaxRetries: string;
+  precomputeLookupDelayMs: string;
+}
+
+const toCsv = (items: string[]): string => items.join(", ");
+
+const parseCsv = (value: string, fallback: string[]): string[] => {
+  const items = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? [...new Set(items)] : fallback;
+};
+
+const parseIntOr = (value: string, fallback: number): number => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toForm = (settings: RuntimeSettingsPayload): RuntimeSettingsForm => ({
+  decisionTimeoutMs: String(settings.decisionDefaults.timeoutMs),
+  decisionWbsTimeoutMs: String(settings.decisionDefaults.wbsTimeoutMs),
+  decisionCacheTtlSeconds: String(settings.decisionDefaults.cacheTtlSeconds),
+  decisionStaleTtlSeconds: String(settings.decisionDefaults.staleTtlSeconds),
+  realtimeCacheTtlSeconds: String(settings.realtimeCache.ttlSeconds),
+  realtimeCacheLockTtlMs: String(settings.realtimeCache.lockTtlMs),
+  realtimeContextKeys: toCsv(settings.realtimeCache.contextKeys),
+  inappWbsTimeoutMs: String(settings.inappV2.wbsTimeoutMs),
+  inappCacheTtlSeconds: String(settings.inappV2.cacheTtlSeconds),
+  inappStaleTtlSeconds: String(settings.inappV2.staleTtlSeconds),
+  inappContextKeys: toCsv(settings.inappV2.cacheContextKeys),
+  inappRateLimitPerAppKey: String(settings.inappV2.rateLimitPerAppKey),
+  inappRateLimitWindowMs: String(settings.inappV2.rateLimitWindowMs),
+  precomputeConcurrency: String(settings.precompute.concurrency),
+  precomputeMaxRetries: String(settings.precompute.maxRetries),
+  precomputeLookupDelayMs: String(settings.precompute.lookupDelayMs)
+});
+
+const toPayload = (form: RuntimeSettingsForm, fallback: RuntimeSettingsPayload): RuntimeSettingsPayload => ({
+  decisionDefaults: {
+    timeoutMs: parseIntOr(form.decisionTimeoutMs, fallback.decisionDefaults.timeoutMs),
+    wbsTimeoutMs: parseIntOr(form.decisionWbsTimeoutMs, fallback.decisionDefaults.wbsTimeoutMs),
+    cacheTtlSeconds: parseIntOr(form.decisionCacheTtlSeconds, fallback.decisionDefaults.cacheTtlSeconds),
+    staleTtlSeconds: parseIntOr(form.decisionStaleTtlSeconds, fallback.decisionDefaults.staleTtlSeconds)
+  },
+  realtimeCache: {
+    ttlSeconds: parseIntOr(form.realtimeCacheTtlSeconds, fallback.realtimeCache.ttlSeconds),
+    lockTtlMs: parseIntOr(form.realtimeCacheLockTtlMs, fallback.realtimeCache.lockTtlMs),
+    contextKeys: parseCsv(form.realtimeContextKeys, fallback.realtimeCache.contextKeys)
+  },
+  inappV2: {
+    wbsTimeoutMs: parseIntOr(form.inappWbsTimeoutMs, fallback.inappV2.wbsTimeoutMs),
+    cacheTtlSeconds: parseIntOr(form.inappCacheTtlSeconds, fallback.inappV2.cacheTtlSeconds),
+    staleTtlSeconds: parseIntOr(form.inappStaleTtlSeconds, fallback.inappV2.staleTtlSeconds),
+    cacheContextKeys: parseCsv(form.inappContextKeys, fallback.inappV2.cacheContextKeys),
+    rateLimitPerAppKey: parseIntOr(form.inappRateLimitPerAppKey, fallback.inappV2.rateLimitPerAppKey),
+    rateLimitWindowMs: parseIntOr(form.inappRateLimitWindowMs, fallback.inappV2.rateLimitWindowMs)
+  },
+  precompute: {
+    concurrency: parseIntOr(form.precomputeConcurrency, fallback.precompute.concurrency),
+    maxRetries: parseIntOr(form.precomputeMaxRetries, fallback.precompute.maxRetries),
+    lookupDelayMs: parseIntOr(form.precomputeLookupDelayMs, fallback.precompute.lookupDelayMs)
+  }
+});
 
 export default function AppSettingsPage() {
   const [wizardMode, setWizardMode] = useState<DecisionWizardMode>("default");
+  const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
+  const [runtimeEffective, setRuntimeEffective] = useState<RuntimeSettingsPayload | null>(null);
+  const [runtimeForm, setRuntimeForm] = useState<RuntimeSettingsForm | null>(null);
+  const [runtimeUpdatedAt, setRuntimeUpdatedAt] = useState<string | null>(null);
+  const [runtimeFeedback, setRuntimeFeedback] = useState<string | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(true);
+  const [runtimeSaving, setRuntimeSaving] = useState(false);
 
   useEffect(() => {
     setWizardMode(getDecisionWizardMode());
@@ -21,21 +110,79 @@ export default function AppSettingsPage() {
     });
   }, []);
 
+  useEffect(() => {
+    setEnvironment(getEnvironment());
+    return onEnvironmentChange(setEnvironment);
+  }, []);
+
+  const loadRuntimeSettings = async () => {
+    setRuntimeLoading(true);
+    try {
+      const response = await apiClient.settings.getRuntimeSettings();
+      setRuntimeEffective(response.effective);
+      setRuntimeForm(toForm(response.effective));
+      setRuntimeUpdatedAt(response.updatedAt);
+      setRuntimeFeedback(null);
+    } catch (error) {
+      setRuntimeFeedback(error instanceof Error ? error.message : "Failed to load runtime settings");
+    } finally {
+      setRuntimeLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadRuntimeSettings();
+  }, [environment]);
+
   const wizardEnabled = useMemo(() => getDecisionWizardEnabled(), [wizardMode]);
   const envDefault = useMemo(() => getDecisionWizardEnvDefaultValue(), []);
+
+  const saveRuntimeSettings = async () => {
+    if (!runtimeForm || !runtimeEffective) {
+      return;
+    }
+    setRuntimeSaving(true);
+    try {
+      const payload = toPayload(runtimeForm, runtimeEffective);
+      const response = await apiClient.settings.saveRuntimeSettings(payload);
+      setRuntimeEffective(response.effective);
+      setRuntimeForm(toForm(response.effective));
+      setRuntimeUpdatedAt(response.updatedAt);
+      setRuntimeFeedback("Runtime settings saved.");
+    } catch (error) {
+      setRuntimeFeedback(error instanceof Error ? error.message : "Failed to save runtime settings");
+    } finally {
+      setRuntimeSaving(false);
+    }
+  };
+
+  const resetRuntimeSettings = async () => {
+    setRuntimeSaving(true);
+    try {
+      const response = await apiClient.settings.resetRuntimeSettings();
+      setRuntimeEffective(response.effective);
+      setRuntimeForm(toForm(response.effective));
+      setRuntimeUpdatedAt(null);
+      setRuntimeFeedback("Runtime settings reset to environment defaults.");
+    } catch (error) {
+      setRuntimeFeedback(error instanceof Error ? error.message : "Failed to reset runtime settings");
+    } finally {
+      setRuntimeSaving(false);
+    }
+  };
 
   return (
     <section className="space-y-4">
       <header className="panel p-4">
         <h2 className="text-xl font-semibold">App Settings</h2>
-        <p className="text-sm text-stone-700">Global UI preferences for this workspace and browser profile.</p>
+        <p className="text-sm text-stone-700">Personal UI preferences + environment-scoped runtime defaults.</p>
       </header>
 
       <article className="panel space-y-3 p-4">
         <div>
-          <h3 className="font-semibold">Decision Builder Wizard</h3>
+          <h3 className="font-semibold">Personal: Decision Builder Wizard</h3>
           <p className="text-sm text-stone-700">
-            Control whether the Decision Builder Wizard is available in the Decisions editor.
+            Controls Wizard availability in this browser profile only.
           </p>
         </div>
 
@@ -93,9 +240,226 @@ export default function AppSettingsPage() {
             }}
             type="button"
           >
-            Reset to defaults
+            Reset personal defaults
           </button>
         </div>
+      </article>
+
+      <article className="panel space-y-3 p-4">
+        <div>
+          <h3 className="font-semibold">Runtime Defaults ({environment})</h3>
+          <p className="text-sm text-stone-700">Applies to API runtime behavior for this environment.</p>
+          {runtimeUpdatedAt ? <p className="text-xs text-stone-600">Last updated: {new Date(runtimeUpdatedAt).toLocaleString()}</p> : null}
+        </div>
+
+        {runtimeForm ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm">
+              Decision timeout ms
+              <input
+                type="number"
+                min={20}
+                max={5000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.decisionTimeoutMs}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, decisionTimeoutMs: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Decision WBS timeout ms
+              <input
+                type="number"
+                min={10}
+                max={4000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.decisionWbsTimeoutMs}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, decisionWbsTimeoutMs: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Decision cache TTL seconds
+              <input
+                type="number"
+                min={1}
+                max={86400}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.decisionCacheTtlSeconds}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, decisionCacheTtlSeconds: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Decision stale TTL seconds
+              <input
+                type="number"
+                min={0}
+                max={604800}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.decisionStaleTtlSeconds}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, decisionStaleTtlSeconds: event.target.value })}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-sm">
+              Realtime cache TTL seconds
+              <input
+                type="number"
+                min={1}
+                max={86400}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.realtimeCacheTtlSeconds}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, realtimeCacheTtlSeconds: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Realtime lock TTL ms
+              <input
+                type="number"
+                min={50}
+                max={60000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.realtimeCacheLockTtlMs}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, realtimeCacheLockTtlMs: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm md:col-span-2">
+              Realtime cache context keys (comma separated)
+              <input
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.realtimeContextKeys}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, realtimeContextKeys: event.target.value })}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-sm">
+              In-app WBS timeout ms
+              <input
+                type="number"
+                min={20}
+                max={2000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.inappWbsTimeoutMs}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, inappWbsTimeoutMs: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              In-app cache TTL seconds
+              <input
+                type="number"
+                min={1}
+                max={86400}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.inappCacheTtlSeconds}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, inappCacheTtlSeconds: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              In-app stale TTL seconds
+              <input
+                type="number"
+                min={0}
+                max={604800}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.inappStaleTtlSeconds}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, inappStaleTtlSeconds: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              In-app rate limit per app key
+              <input
+                type="number"
+                min={10}
+                max={1000000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.inappRateLimitPerAppKey}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, inappRateLimitPerAppKey: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              In-app rate limit window ms
+              <input
+                type="number"
+                min={100}
+                max={60000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.inappRateLimitWindowMs}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, inappRateLimitWindowMs: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm md:col-span-2">
+              In-app cache context keys (comma separated)
+              <input
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.inappContextKeys}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, inappContextKeys: event.target.value })}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-sm">
+              Precompute concurrency
+              <input
+                type="number"
+                min={1}
+                max={200}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.precomputeConcurrency}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, precomputeConcurrency: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Precompute max retries
+              <input
+                type="number"
+                min={0}
+                max={10}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.precomputeMaxRetries}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, precomputeMaxRetries: event.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Precompute lookup delay ms
+              <input
+                type="number"
+                min={0}
+                max={10000}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={runtimeForm.precomputeLookupDelayMs}
+                onChange={(event) => setRuntimeForm({ ...runtimeForm, precomputeLookupDelayMs: event.target.value })}
+              />
+            </label>
+          </div>
+        ) : (
+          <p className="text-sm text-stone-600">{runtimeLoading ? "Loading runtime settings..." : "Runtime settings unavailable."}</p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className="rounded-md bg-ink px-3 py-2 text-sm text-white"
+            onClick={() => void saveRuntimeSettings()}
+            disabled={!runtimeForm || runtimeSaving || runtimeLoading}
+            type="button"
+          >
+            Save runtime settings
+          </button>
+          <button
+            className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            onClick={() => void resetRuntimeSettings()}
+            disabled={runtimeSaving || runtimeLoading}
+            type="button"
+          >
+            Reset runtime overrides
+          </button>
+          <button
+            className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            onClick={() => void loadRuntimeSettings()}
+            disabled={runtimeSaving}
+            type="button"
+          >
+            Reload
+          </button>
+        </div>
+
+        {runtimeFeedback ? <p className="text-sm text-stone-700">{runtimeFeedback}</p> : null}
       </article>
     </section>
   );

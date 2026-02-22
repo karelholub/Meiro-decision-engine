@@ -74,6 +74,11 @@ interface RunnerDeps {
   concurrency: number;
   maxRetries: number;
   lookupDelayMs: number;
+  getRuntimeConfig?: (environment: Environment) => {
+    concurrency: number;
+    maxRetries: number;
+    lookupDelayMs: number;
+  };
   segmentResolver?: SegmentResolver;
 }
 
@@ -258,6 +263,14 @@ const precomputeTaskPayloadSchema = z.object({
 export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
   const queue: string[] = [];
   let draining = false;
+  const getRuntimeConfig = (environment: Environment) => {
+    const override = deps.getRuntimeConfig?.(environment);
+    return {
+      concurrency: Math.max(1, Math.floor(override?.concurrency ?? deps.concurrency)),
+      maxRetries: Math.max(0, Math.floor(override?.maxRetries ?? deps.maxRetries)),
+      lookupDelayMs: Math.max(0, Math.floor(override?.lookupDelayMs ?? deps.lookupDelayMs))
+    };
+  };
 
   const processIdentity = async (input: {
     runKey: string;
@@ -301,11 +314,12 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
     let attempts = 0;
     let lastError: string | null = null;
     let failureStatusCode: number | null = null;
-    while (attempts <= deps.maxRetries) {
+    const runtimeConfig = getRuntimeConfig(input.environment);
+    while (attempts <= runtimeConfig.maxRetries) {
       attempts += 1;
 
-      if (input.identity.lookupAttribute && deps.lookupDelayMs > 0) {
-        await sleep(deps.lookupDelayMs);
+      if (input.identity.lookupAttribute && runtimeConfig.lookupDelayMs > 0) {
+        await sleep(runtimeConfig.lookupDelayMs);
       }
 
       const route = input.parameters.mode === "decision" ? "/v1/decide" : "/v1/decide/stack";
@@ -354,7 +368,7 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
       if (response.statusCode >= 500) {
         lastError = `HTTP ${response.statusCode} ${response.body}`;
         failureStatusCode = response.statusCode;
-        if (attempts <= deps.maxRetries) {
+        if (attempts <= runtimeConfig.maxRetries) {
           await sleep(50 * attempts);
           continue;
         }
@@ -455,7 +469,7 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
         return { status, skipped: false };
       }
 
-      if (attempts > deps.maxRetries) {
+      if (attempts > runtimeConfig.maxRetries) {
         break;
       }
     }
@@ -585,7 +599,8 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
           }
         });
 
-        await runWithConcurrency(identities, deps.concurrency, async (identity) => {
+        const runtimeConfig = getRuntimeConfig(run.environment);
+        await runWithConcurrency(identities, runtimeConfig.concurrency, async (identity) => {
           const itemResult = await processIdentity({
             runKey,
             environment: run.environment,

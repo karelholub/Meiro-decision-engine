@@ -64,11 +64,19 @@ import { registerCacheRoutes } from "./routes/cache";
 import { registerDlqRoutes } from "./routes/dlq";
 import { registerMaintenanceRoutes } from "./routes/maintenance";
 import { registerPrecomputeRoutes } from "./routes/precompute";
+import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
 import {
   processPipesWebhook,
   pipesWebhookBodySchema,
   registerWebhooksRoutes
 } from "./routes/webhooks";
+import {
+  RUNTIME_SETTINGS_KEY,
+  createRuntimeSettingsMap,
+  normalizeRuntimeSettings,
+  parseRuntimeSettings,
+  type RuntimeSettings
+} from "./settings/runtimeSettings";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -1121,6 +1129,45 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     typeof config.inappV2RateLimitWindowMs === "number" && Number.isFinite(config.inappV2RateLimitWindowMs)
       ? Math.max(100, Math.floor(config.inappV2RateLimitWindowMs))
       : 1000;
+  const runtimeSettingsDefaults: RuntimeSettings = {
+    decisionDefaults: {
+      timeoutMs: decisionDefaultTimeoutMs,
+      wbsTimeoutMs: decisionDefaultWbsTimeoutMs,
+      cacheTtlSeconds: decisionDefaultCacheTtlSeconds,
+      staleTtlSeconds: decisionDefaultStaleTtlSeconds
+    },
+    realtimeCache: {
+      ttlSeconds: realtimeCacheTtlSeconds,
+      lockTtlMs: realtimeCacheLockTtlMs,
+      contextKeys: realtimeCacheImportantContextKeys
+    },
+    inappV2: {
+      wbsTimeoutMs: inappV2WbsTimeoutMs,
+      cacheTtlSeconds: inappV2CacheTtlSeconds,
+      staleTtlSeconds: inappV2StaleTtlSeconds,
+      cacheContextKeys: inappV2CacheContextKeys,
+      rateLimitPerAppKey: inappV2RateLimitPerAppKey,
+      rateLimitWindowMs: inappV2RateLimitWindowMs
+    },
+    precompute: {
+      concurrency: precomputeConcurrency,
+      maxRetries: precomputeMaxRetries,
+      lookupDelayMs: precomputeLookupDelayMs
+    }
+  };
+  const runtimeSettingsByEnvironment = createRuntimeSettingsMap(runtimeSettingsDefaults);
+  const runtimeSettingsOverrides: Partial<Record<Environment, RuntimeSettings>> = {};
+  const getRuntimeSettings = (environment: Environment): RuntimeSettings => runtimeSettingsByEnvironment[environment];
+  const applyRuntimeSettingsOverride = (environment: Environment, value: unknown) => {
+    const normalized = normalizeRuntimeSettings(value, runtimeSettingsDefaults);
+    runtimeSettingsOverrides[environment] = normalized;
+    runtimeSettingsByEnvironment[environment] = normalized;
+    return normalized;
+  };
+  const clearRuntimeSettingsOverride = (environment: Environment) => {
+    delete runtimeSettingsOverrides[environment];
+    runtimeSettingsByEnvironment[environment] = normalizeRuntimeSettings(undefined, runtimeSettingsDefaults);
+  };
   const inappEventsStreamKey = config.inappEventsStreamKey ?? "inapp_events";
   const inappEventsStreamGroup = config.inappEventsStreamGroup ?? "inapp_events_group";
   const inappEventsConsumerName = config.inappEventsConsumerName ?? "api-1";
@@ -1189,6 +1236,24 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   const prisma = deps.prisma ?? new PrismaClient();
   const ownsPrisma = deps.prisma === undefined;
+  const hasAppSettingsStorage =
+    typeof (prisma as unknown as { appSetting?: { findMany?: unknown } }).appSetting?.findMany === "function";
+
+  if (hasAppSettingsStorage) {
+    const runtimeSettingRows = await prisma.appSetting.findMany({
+      where: {
+        key: RUNTIME_SETTINGS_KEY
+      }
+    });
+    for (const row of runtimeSettingRows) {
+      const parsed = parseRuntimeSettings(row.valueJson, runtimeSettingsDefaults);
+      if (!parsed) {
+        app.log.warn({ environment: row.environment, key: row.key }, "Invalid runtime settings override ignored");
+        continue;
+      }
+      applyRuntimeSettingsOverride(row.environment, parsed);
+    }
+  }
 
   const meiro =
     deps.meiroAdapter ??
@@ -1420,6 +1485,14 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     concurrency: precomputeConcurrency,
     maxRetries: precomputeMaxRetries,
     lookupDelayMs: precomputeLookupDelayMs,
+    getRuntimeConfig: (environment) => {
+      const settings = getRuntimeSettings(environment);
+      return {
+        concurrency: settings.precompute.concurrency,
+        maxRetries: settings.precompute.maxRetries,
+        lookupDelayMs: settings.precompute.lookupDelayMs
+      };
+    },
     segmentResolver: deps.segmentResolver
   });
 
@@ -1626,13 +1699,18 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     fetchActiveWbsMapping,
     redactSensitiveFields,
     inappV2: {
-      wbsTimeoutMs: inappV2WbsTimeoutMs,
-      cacheTtlSeconds: inappV2CacheTtlSeconds,
-      staleTtlSeconds: inappV2StaleTtlSeconds,
-      cacheContextKeys: inappV2CacheContextKeys,
-      bodyLimitBytes: inappV2BodyLimitBytes,
-      rateLimitPerAppKey: inappV2RateLimitPerAppKey,
-      rateLimitWindowMs: inappV2RateLimitWindowMs
+      bodyLimitBytes: inappV2BodyLimitBytes
+    },
+    getInappV2Config: (environment) => {
+      const settings = getRuntimeSettings(environment);
+      return {
+        wbsTimeoutMs: settings.inappV2.wbsTimeoutMs,
+        cacheTtlSeconds: settings.inappV2.cacheTtlSeconds,
+        staleTtlSeconds: settings.inappV2.staleTtlSeconds,
+        cacheContextKeys: settings.inappV2.cacheContextKeys,
+        rateLimitPerAppKey: settings.inappV2.rateLimitPerAppKey,
+        rateLimitWindowMs: settings.inappV2.rateLimitWindowMs
+      };
     },
     eventsStream: {
       streamKey: inappEventsStreamKey,
@@ -1645,8 +1723,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     app,
     prisma,
     cache,
-    defaultTtlSeconds: realtimeCacheTtlSeconds,
-    importantContextKeys: realtimeCacheImportantContextKeys,
+    getDefaultTtlSeconds: (environment) => getRuntimeSettings(environment).realtimeCache.ttlSeconds,
+    getImportantContextKeys: (environment) => getRuntimeSettings(environment).realtimeCache.contextKeys,
     resolveEnvironment,
     buildResponseError,
     requireWriteAuth,
@@ -1694,6 +1772,26 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     runRetentionTick: async () => retentionWorker?.runTick() ?? null,
     getRetentionStatus: () => retentionWorker?.getStatus() ?? null
   });
+
+  if (hasAppSettingsStorage) {
+    await registerRuntimeSettingsRoutes({
+      app,
+      prisma,
+      requireWriteAuth,
+      resolveEnvironment,
+      buildResponseError,
+      defaults: runtimeSettingsDefaults,
+      getEffective: (environment) => getRuntimeSettings(environment),
+      applyOverride: (environment, settings) => {
+        applyRuntimeSettingsOverride(environment, settings);
+      },
+      clearOverride: (environment) => {
+        clearRuntimeSettingsOverride(environment);
+      }
+    });
+  } else {
+    app.log.info({ runtimeRole: apiRuntimeRole }, "Runtime settings routes not started (app settings storage unavailable)");
+  }
 
   app.get("/health", async () => {
     return {
@@ -3123,6 +3221,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     if (!parsed.success) {
       return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
     }
+    const runtimeSettings = getRuntimeSettings(environment);
 
     const requestId = parsed.data.context?.requestId ?? createRequestId(request);
     const correlationId =
@@ -3202,7 +3301,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       identity: realtimeIdentity,
       context: pickImportantContext(
         (parsed.data.context ?? {}) as Record<string, unknown>,
-        realtimeCacheImportantContextKeys
+        runtimeSettings.realtimeCache.contextKeys
       ),
       policyKey: parsed.data.context?.policyKey
     });
@@ -3224,7 +3323,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       realtimeCacheStats.misses += 1;
       request.log.info({ event: "realtime_cache", mode: "stack", status: "miss", key: realtimeCacheKey }, "cache miss");
       const lockKey = buildRealtimeLockKey(realtimeCacheKey);
-      realtimeCacheLock = await cache.lock(lockKey, realtimeCacheLockTtlMs);
+      realtimeCacheLock = await cache.lock(lockKey, runtimeSettings.realtimeCache.lockTtlMs);
       if (!realtimeCacheLock) {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 30));
@@ -3432,7 +3531,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       const ttlFromPayload =
         typeof response.final.payload.ttl_seconds === "number" && response.final.payload.ttl_seconds > 0
           ? Math.floor(response.final.payload.ttl_seconds)
-          : realtimeCacheTtlSeconds;
+          : runtimeSettings.realtimeCache.ttlSeconds;
       if (cache.enabled) {
         await cache.setJson(realtimeCacheKey, responsePayload, ttlFromPayload);
       }
@@ -3538,6 +3637,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     if (!parsed.success) {
       return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
     }
+    const runtimeSettings = getRuntimeSettings(environment);
 
     const requestId = parsed.data.context?.requestId ?? createRequestId(request);
     const started = process.hrtime.bigint();
@@ -3555,10 +3655,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
     const decisionDefinition = parseDefinition(activeVersion.definitionJson);
     const reliabilityConfig = resolveDecisionReliabilityConfig(decisionDefinition, {
-      timeoutMs: decisionDefaultTimeoutMs,
-      wbsTimeoutMs: decisionDefaultWbsTimeoutMs,
-      cacheTtlSeconds: decisionDefaultCacheTtlSeconds,
-      staleTtlSeconds: decisionDefaultStaleTtlSeconds
+      timeoutMs: runtimeSettings.decisionDefaults.timeoutMs,
+      wbsTimeoutMs: runtimeSettings.decisionDefaults.wbsTimeoutMs,
+      cacheTtlSeconds: runtimeSettings.decisionDefaults.cacheTtlSeconds,
+      staleTtlSeconds: runtimeSettings.decisionDefaults.staleTtlSeconds
     });
     if (reliabilityConfig.performance.wbsTimeoutClamped) {
       request.log.warn(
@@ -3822,7 +3922,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         const staleResponse = await maybeServeStale({});
         if (staleResponse) {
           const swrLockKey = buildRealtimeLockKey(`${realtimeCacheKey}:swr`);
-          const swrLock = await cache.lock(swrLockKey, realtimeCacheLockTtlMs);
+          const swrLock = await cache.lock(swrLockKey, runtimeSettings.realtimeCache.lockTtlMs);
           if (swrLock) {
             void (async () => {
               try {
@@ -3847,7 +3947,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       }
 
       const lockKey = buildRealtimeLockKey(realtimeCacheKey);
-      realtimeCacheLock = await cache.lock(lockKey, realtimeCacheLockTtlMs);
+      realtimeCacheLock = await cache.lock(lockKey, runtimeSettings.realtimeCache.lockTtlMs);
       if (!realtimeCacheLock) {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 30));

@@ -49,11 +49,13 @@ export interface RegisterInAppRoutesDeps {
   fetchActiveWbsMapping: (environment: Environment) => Promise<WbsMappingRecord | null>;
   redactSensitiveFields: (value: unknown, keyHint?: string) => unknown;
   inappV2: {
+    bodyLimitBytes: number;
+  };
+  getInappV2Config: (environment: Environment) => {
     wbsTimeoutMs: number;
     cacheTtlSeconds: number;
     staleTtlSeconds: number;
     cacheContextKeys: string[];
-    bodyLimitBytes: number;
     rateLimitPerAppKey: number;
     rateLimitWindowMs: number;
   };
@@ -806,6 +808,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     fetchActiveWbsMapping,
     redactSensitiveFields,
     inappV2,
+    getInappV2Config,
     eventsStream,
     getInappEventsWorkerStatus
   } = deps;
@@ -816,12 +819,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     meiro,
     wbsAdapter,
     now,
-    config: {
-      wbsTimeoutMs: inappV2.wbsTimeoutMs,
-      cacheTtlSeconds: inappV2.cacheTtlSeconds,
-      staleTtlSeconds: inappV2.staleTtlSeconds,
-      cacheContextKeys: inappV2.cacheContextKeys
-    },
+    getConfig: getInappV2Config,
     fetchActiveWbsInstance,
     fetchActiveWbsMapping
   });
@@ -2170,6 +2168,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const runtimeInappV2 = getInappV2Config(environment);
 
     const parsed = inAppEventsBodySchema.safeParse(request.body);
     if (!parsed.success) {
@@ -2178,8 +2177,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
 
     const rate = perAppKeyLimiterV2.check({
       key: `events:${environment}:${parsed.data.appKey}`,
-      limit: inappV2.rateLimitPerAppKey,
-      windowMs: inappV2.rateLimitWindowMs
+      limit: runtimeInappV2.rateLimitPerAppKey,
+      windowMs: runtimeInappV2.rateLimitWindowMs
     });
     if (!rate.allowed) {
       return buildResponseError(reply, 429, "Rate limit exceeded", {
@@ -2531,6 +2530,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!environment) {
       return;
     }
+    const runtimeInappV2 = getInappV2Config(environment);
 
     const parsed = inAppV2DecideSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -2541,8 +2541,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     const startedAtMs = Date.now();
     const rate = perAppKeyLimiterV2.check({
       key: `decide:${environment}:${parsed.data.appKey}`,
-      limit: inappV2.rateLimitPerAppKey,
-      windowMs: inappV2.rateLimitWindowMs
+      limit: runtimeInappV2.rateLimitPerAppKey,
+      windowMs: runtimeInappV2.rateLimitWindowMs
     });
     if (!rate.allowed) {
       return buildResponseError(reply, 429, "Rate limit exceeded", {

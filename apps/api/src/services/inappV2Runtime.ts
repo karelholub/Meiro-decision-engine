@@ -86,7 +86,13 @@ interface InAppV2RuntimeDeps {
   meiro: MeiroAdapter;
   wbsAdapter: WbsLookupAdapter;
   now: () => Date;
-  config: {
+  config?: {
+    wbsTimeoutMs: number;
+    cacheTtlSeconds: number;
+    staleTtlSeconds: number;
+    cacheContextKeys: string[];
+  };
+  getConfig?: (environment: Environment) => {
     wbsTimeoutMs: number;
     cacheTtlSeconds: number;
     staleTtlSeconds: number;
@@ -368,6 +374,15 @@ const buildInappV2CacheKey = (input: {
 const buildInappV2StaleKey = (cacheKey: string) => `${cacheKey}:stale`;
 
 export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
+  const getConfig = (environment: Environment) =>
+    deps.getConfig?.(environment) ??
+    deps.config ?? {
+      wbsTimeoutMs: 80,
+      cacheTtlSeconds: 60,
+      staleTtlSeconds: 1800,
+      cacheContextKeys: ["locale", "deviceType"]
+    };
+
   const campaignSetCache = new Map<
     string,
     {
@@ -485,6 +500,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     fallbackReason?: string;
   }> => {
     const startedAtMs = Date.now();
+    const runtimeConfig = getConfig(input.environment);
     let wbsMs = 0;
     let engineMs = 0;
 
@@ -531,7 +547,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       ]);
       if (!activeWbsInstance || !activeWbsMapping) {
         const response = buildNoShowResponse({ placement: input.body.placement });
-        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        response.ttl_seconds = runtimeConfig.cacheTtlSeconds;
         return { response, wbsMs, engineMs, fallbackReason: "WBS_NOT_CONFIGURED" };
       }
 
@@ -539,7 +555,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       try {
         rawLookup = await withWbsMs(() =>
           withTimeout({
-            timeoutMs: deps.config.wbsTimeoutMs,
+            timeoutMs: runtimeConfig.wbsTimeoutMs,
             timeoutMessage: "WBS_LOOKUP_TIMEOUT",
             task: async () =>
               deps.wbsAdapter.lookup(
@@ -550,7 +566,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
                   segmentParamName: activeWbsInstance.segmentParamName,
                   includeSegment: activeWbsInstance.includeSegment,
                   defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
-                  timeoutMs: Math.min(activeWbsInstance.timeoutMs, deps.config.wbsTimeoutMs)
+                  timeoutMs: Math.min(activeWbsInstance.timeoutMs, runtimeConfig.wbsTimeoutMs)
                 },
                 input.body.lookup as { attribute: string; value: string }
               )
@@ -558,7 +574,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         );
       } catch (error) {
         const response = buildNoShowResponse({ placement: input.body.placement });
-        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        response.ttl_seconds = runtimeConfig.cacheTtlSeconds;
         return {
           response,
           wbsMs,
@@ -570,7 +586,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       const parsedMapping = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
       if (!parsedMapping.success) {
         const response = buildNoShowResponse({ placement: input.body.placement });
-        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        response.ttl_seconds = runtimeConfig.cacheTtlSeconds;
         return { response, wbsMs, engineMs, fallbackReason: "WBS_MAPPING_INVALID" };
       }
 
@@ -586,14 +602,14 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       try {
         profile = await withWbsMs(() =>
           withTimeout({
-            timeoutMs: deps.config.wbsTimeoutMs,
+            timeoutMs: runtimeConfig.wbsTimeoutMs,
             timeoutMessage: "MEIRO_PROFILE_TIMEOUT",
             task: async () => deps.meiro.getProfile(input.body.profileId as string)
           })
         );
       } catch (error) {
         const response = buildNoShowResponse({ placement: input.body.placement });
-        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        response.ttl_seconds = runtimeConfig.cacheTtlSeconds;
         return {
           response,
           wbsMs,
@@ -627,14 +643,14 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
 
     if (!selectedCampaign) {
       const response = buildNoShowResponse({ placement: input.body.placement });
-      response.ttl_seconds = Math.max(1, Math.min(30, deps.config.cacheTtlSeconds));
+      response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
       return { response, wbsMs, engineMs };
     }
 
     const selectedTemplate = campaignSet.templatesByKey.get(selectedCampaign.templateKey);
     if (!selectedTemplate) {
       const response = buildNoShowResponse({ placement: input.body.placement });
-      response.ttl_seconds = Math.max(1, Math.min(30, deps.config.cacheTtlSeconds));
+      response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
       return { response, wbsMs, engineMs, fallbackReason: "TEMPLATE_NOT_FOUND" };
     }
 
@@ -661,7 +677,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     const selectedVariant = variantSelection.variant;
     if (!selectedVariant) {
       const response = buildNoShowResponse({ placement: input.body.placement });
-      response.ttl_seconds = Math.max(1, Math.min(30, deps.config.cacheTtlSeconds));
+      response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
       return { response, wbsMs, engineMs, fallbackReason: "VARIANT_NOT_FOUND" };
     }
 
@@ -671,7 +687,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         ? selectedCampaign.ttlSeconds
         : campaignSet.placement?.defaultTtlSeconds && campaignSet.placement.defaultTtlSeconds > 0
           ? campaignSet.placement.defaultTtlSeconds
-          : deps.config.cacheTtlSeconds;
+          : runtimeConfig.cacheTtlSeconds;
     const messageWindow = Math.floor(contextNow.getTime() / (Math.max(1, ttlSeconds) * 1000));
     const messageId = `msg_${selectedCampaign.key}_${selectedVariant.variantKey}_${messageWindow}`;
 
@@ -707,6 +723,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     logger: FastifyBaseLogger;
   }): Promise<InAppV2DecideResponse> => {
     const startedAtMs = Date.now();
+    const runtimeConfig = getConfig(input.environment);
     let cacheAvailable = deps.cache.enabled;
     const campaignSet = await loadCampaignSet({
       environment: input.environment,
@@ -720,7 +737,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       profileId: input.body.profileId,
       lookup: input.body.lookup
     });
-    const contextForKey = pickAllowedContext(input.body.context, deps.config.cacheContextKeys);
+    const contextForKey = pickAllowedContext(input.body.context, runtimeConfig.cacheContextKeys);
     const contextHash = hashSha256(stableStringify(contextForKey)).slice(0, 16);
     const realtimeCacheKey = buildInappV2CacheKey({
       environment: input.environment,
@@ -796,11 +813,11 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       if (!cacheAvailable) {
         return;
       }
-      const freshTtl = response.ttl_seconds > 0 ? response.ttl_seconds : deps.config.cacheTtlSeconds;
+      const freshTtl = response.ttl_seconds > 0 ? response.ttl_seconds : runtimeConfig.cacheTtlSeconds;
       try {
         await deps.cache.setJson(realtimeCacheKey, response, freshTtl);
-        if (deps.config.staleTtlSeconds > 0) {
-          await deps.cache.setJson(staleCacheKey, response, freshTtl + deps.config.staleTtlSeconds);
+        if (runtimeConfig.staleTtlSeconds > 0) {
+          await deps.cache.setJson(staleCacheKey, response, freshTtl + runtimeConfig.staleTtlSeconds);
         }
       } catch (error) {
         markCacheUnavailable("write", error);

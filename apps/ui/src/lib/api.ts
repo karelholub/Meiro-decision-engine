@@ -138,6 +138,41 @@ export type InAppV2EventsMonitorResponse = {
   } | null;
 };
 
+export type RuntimeSettingsPayload = {
+  decisionDefaults: {
+    timeoutMs: number;
+    wbsTimeoutMs: number;
+    cacheTtlSeconds: number;
+    staleTtlSeconds: number;
+  };
+  realtimeCache: {
+    ttlSeconds: number;
+    lockTtlMs: number;
+    contextKeys: string[];
+  };
+  inappV2: {
+    wbsTimeoutMs: number;
+    cacheTtlSeconds: number;
+    staleTtlSeconds: number;
+    cacheContextKeys: string[];
+    rateLimitPerAppKey: number;
+    rateLimitWindowMs: number;
+  };
+  precompute: {
+    concurrency: number;
+    maxRetries: number;
+    lookupDelayMs: number;
+  };
+};
+
+export type RuntimeSettingsResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  defaults: RuntimeSettingsPayload;
+  override: RuntimeSettingsPayload | null;
+  effective: RuntimeSettingsPayload;
+  updatedAt: string | null;
+};
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   if (!headers.has("Content-Type") && init?.body) {
@@ -634,6 +669,17 @@ export const apiClient = {
       }>(`/v1/dlq/metrics`)
   },
   settings: {
+    getRuntimeSettings: () => apiFetch<RuntimeSettingsResponse>(`/v1/settings/runtime`),
+    saveRuntimeSettings: (settings: RuntimeSettingsPayload) =>
+      apiFetch<RuntimeSettingsResponse>(`/v1/settings/runtime`, {
+        method: "PUT",
+        body: JSON.stringify({ settings })
+      }),
+    resetRuntimeSettings: () =>
+      apiFetch<RuntimeSettingsResponse>(`/v1/settings/runtime`, {
+        method: "DELETE",
+        body: JSON.stringify({})
+      }),
     getWbs: () => apiFetch<{ item: WbsInstanceSettings | null }>(`/v1/settings/wbs`),
     saveWbs: (input: Record<string, unknown>) =>
       apiFetch<{ item: WbsInstanceSettings | null }>(`/v1/settings/wbs`, {

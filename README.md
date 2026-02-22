@@ -74,6 +74,7 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `POST /v1/conversions`
   - `GET /v1/reports/decision/:decisionId`
   - `GET/PUT /v1/settings/wbs`
+  - `GET/PUT/DELETE /v1/settings/runtime`
   - `POST /v1/settings/wbs/test-connection`
   - `GET /v1/settings/wbs/history`
   - `GET/PUT /v1/settings/wbs-mapping`
@@ -240,6 +241,9 @@ Important values:
 - `RETENTION_INAPP_DECISION_LOGS_DAYS` (default `30`)
 - `RETENTION_DECISION_RESULTS_DAYS` (default `14`)
 - `RETENTION_PRECOMPUTE_RUNS_DAYS` (default `30`)
+
+Runtime defaults for decision/cache/in-app/precompute can be overridden per environment from `Settings -> App`
+and are stored in `app_settings` (`key=runtime_settings_v1`). Environment variables remain bootstrap defaults.
 
 PgBouncer/pooling note for burst traffic:
 - Use PgBouncer in transaction mode for API pods at scale.
