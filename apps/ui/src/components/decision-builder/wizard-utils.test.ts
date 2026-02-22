@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DecisionDefinition, FlowRule } from "@decisioning/dsl";
 import { fieldRegistry } from "./field-registry";
 import {
+  attributesToConditionRows,
   conditionRowsToAttributes,
   detectWizardUnsupported,
   mapValidationErrors,
@@ -138,6 +139,20 @@ describe("conditionRowsToAttributes", () => {
       { field: "email", op: "exists" },
       { field: "consent_marketing", op: "eq", value: true }
     ]);
+  });
+});
+
+describe("attributesToConditionRows", () => {
+  it("produces stable row ids across renders", () => {
+    const attributes = [
+      { field: "email", op: "exists" as const },
+      { field: "purchase_count", op: "eq" as const, value: 3 }
+    ];
+
+    const first = attributesToConditionRows(attributes, fieldRegistry);
+    const second = attributesToConditionRows(attributes, fieldRegistry);
+
+    expect(first.map((row) => row.id)).toEqual(second.map((row) => row.id));
   });
 });
 

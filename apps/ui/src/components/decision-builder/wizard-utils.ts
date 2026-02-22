@@ -202,8 +202,9 @@ export const conditionRowsToAttributes = (rows: ConditionRow[], registry: FieldR
 };
 
 export const attributesToConditionRows = (attributes: AttributePredicate[], _registry: FieldRegistryItem[]): ConditionRow[] => {
-  return attributes.map((attribute) =>
+  return attributes.map((attribute, index) =>
     createConditionRow({
+      id: `condition-${index}`,
       field: attribute.field,
       op: attribute.op,
       value: toDisplayValue(attribute.value)

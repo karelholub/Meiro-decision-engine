@@ -1,3 +1,4 @@
+import { useEffect, useState, type KeyboardEvent } from "react";
 import type { DecisionDefinition } from "@decisioning/dsl";
 
 interface GuardrailsEditorProps {
@@ -15,6 +16,21 @@ const hasMarketingConsentShortcut = (definition: DecisionDefinition) => {
 
 export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }: GuardrailsEditorProps) {
   const shortcutEnabled = hasMarketingConsentShortcut(definition);
+  const [capPerDayInput, setCapPerDayInput] = useState(definition.caps.perProfilePerDay?.toString() ?? "");
+  const [capPerWeekInput, setCapPerWeekInput] = useState(definition.caps.perProfilePerWeek?.toString() ?? "");
+  const [holdoutPercentageInput, setHoldoutPercentageInput] = useState(definition.holdout.percentage.toString());
+
+  useEffect(() => {
+    setCapPerDayInput(definition.caps.perProfilePerDay?.toString() ?? "");
+  }, [definition.caps.perProfilePerDay]);
+
+  useEffect(() => {
+    setCapPerWeekInput(definition.caps.perProfilePerWeek?.toString() ?? "");
+  }, [definition.caps.perProfilePerWeek]);
+
+  useEffect(() => {
+    setHoldoutPercentageInput(definition.holdout.percentage.toString());
+  }, [definition.holdout.percentage]);
 
   const updateHoldout = (patch: Partial<DecisionDefinition["holdout"]>) => {
     onChange({
@@ -62,6 +78,53 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
     });
   };
 
+  const commitCapPerDay = () => {
+    const value = capPerDayInput.trim();
+    if (!value) {
+      updateCaps({ perProfilePerDay: null });
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    updateCaps({ perProfilePerDay: parsed });
+  };
+
+  const commitCapPerWeek = () => {
+    const value = capPerWeekInput.trim();
+    if (!value) {
+      updateCaps({ perProfilePerWeek: null });
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    updateCaps({ perProfilePerWeek: parsed });
+  };
+
+  const commitHoldoutPercentage = () => {
+    const value = holdoutPercentageInput.trim();
+    if (!value) {
+      updateHoldout({ percentage: 0 });
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    updateHoldout({ percentage: parsed });
+  };
+
+  const commitOnEnter =
+    (commit: () => void) =>
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        commit();
+      }
+    };
+
   return (
     <section className="space-y-4">
       <div className="grid gap-3 md:grid-cols-2">
@@ -70,8 +133,10 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
           <input
             type="number"
             min={1}
-            value={definition.caps.perProfilePerDay ?? ""}
-            onChange={(event) => updateCaps({ perProfilePerDay: event.target.value ? Number(event.target.value) : null })}
+            value={capPerDayInput}
+            onChange={(event) => setCapPerDayInput(event.target.value)}
+            onBlur={commitCapPerDay}
+            onKeyDown={commitOnEnter(commitCapPerDay)}
             disabled={readOnly}
             className="rounded-md border border-stone-300 px-2 py-1"
           />
@@ -83,8 +148,10 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
           <input
             type="number"
             min={1}
-            value={definition.caps.perProfilePerWeek ?? ""}
-            onChange={(event) => updateCaps({ perProfilePerWeek: event.target.value ? Number(event.target.value) : null })}
+            value={capPerWeekInput}
+            onChange={(event) => setCapPerWeekInput(event.target.value)}
+            onBlur={commitCapPerWeek}
+            onKeyDown={commitOnEnter(commitCapPerWeek)}
             disabled={readOnly}
             className="rounded-md border border-stone-300 px-2 py-1"
           />
@@ -109,8 +176,10 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
             type="number"
             min={0}
             max={50}
-            value={definition.holdout.percentage}
-            onChange={(event) => updateHoldout({ percentage: Number(event.target.value) || 0 })}
+            value={holdoutPercentageInput}
+            onChange={(event) => setHoldoutPercentageInput(event.target.value)}
+            onBlur={commitHoldoutPercentage}
+            onKeyDown={commitOnEnter(commitHoldoutPercentage)}
             disabled={readOnly}
             className="rounded-md border border-stone-300 px-2 py-1"
           />

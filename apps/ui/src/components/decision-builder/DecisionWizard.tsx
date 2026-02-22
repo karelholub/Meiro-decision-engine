@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import type { DecisionValidationResponse } from "@decisioning/shared";
@@ -76,6 +76,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 };
 
+const signatureForDecision = (definition: DecisionDefinition) => JSON.stringify(definition);
+
 const isStepComplete = (step: WizardStepId, definition: DecisionDefinition, hasSimulation: boolean) => {
   if (step === "template") {
     return true;
@@ -129,16 +131,23 @@ export function DecisionWizard({
   const [simulationError, setSimulationError] = useState<string | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [audiencesAnyInput, setAudiencesAnyInput] = useState("");
   const [timeoutPayloadJson, setTimeoutPayloadJson] = useState("{}");
   const [timeoutTrackingJson, setTimeoutTrackingJson] = useState("{}");
   const [timeoutJsonError, setTimeoutJsonError] = useState<string | null>(null);
   const [errorPayloadJson, setErrorPayloadJson] = useState("{}");
   const [errorTrackingJson, setErrorTrackingJson] = useState("{}");
   const [errorJsonError, setErrorJsonError] = useState<string | null>(null);
+  const lastScrolledErrorRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setDraft(ensureDecisionDefinitionDefaults(initialDefinition));
+    const normalized = ensureDecisionDefinitionDefaults(initialDefinition);
+    setDraft((current) => (signatureForDecision(current) === signatureForDecision(normalized) ? current : normalized));
   }, [initialDefinition]);
+
+  useEffect(() => {
+    setAudiencesAnyInput((draft.eligibility.audiencesAny ?? []).join(", "));
+  }, [draft.eligibility.audiencesAny]);
 
   useEffect(() => {
     const timeoutPayload = draft.fallback?.onTimeout?.payload;
@@ -177,6 +186,7 @@ export function DecisionWizard({
 
   useEffect(() => {
     if (mappedErrors.length === 0) {
+      lastScrolledErrorRef.current = null;
       return;
     }
     const prefixes = STEP_PREFIX[activeStep] ?? [];
@@ -187,6 +197,12 @@ export function DecisionWizard({
     if (!first) {
       return;
     }
+
+    const scrollKey = `${activeStep}:${first.path}:${first.message}`;
+    if (lastScrolledErrorRef.current === scrollKey) {
+      return;
+    }
+    lastScrolledErrorRef.current = scrollKey;
 
     const target = document.querySelector<HTMLElement>(`[data-error-path^="${first.path}"]`);
     if (target) {
@@ -347,6 +363,20 @@ export function DecisionWizard({
   const readOnly = readOnlyReasons.length > 0;
   const activeHint = STEP_HINTS[activeStep];
 
+  const commitAudiencesAnyInput = () => {
+    const audiencesAny = audiencesAnyInput
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    setDraft((current) => ({
+      ...current,
+      eligibility: {
+        ...current.eligibility,
+        audiencesAny
+      }
+    }));
+  };
+
   return (
     <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)_320px]">
       <aside className="panel h-fit p-3">
@@ -488,19 +518,13 @@ export function DecisionWizard({
             <label className="flex flex-col gap-1 text-sm" data-error-path="eligibility.audiencesAny">
               Audiences (match any)
               <input
-                value={(draft.eligibility.audiencesAny ?? []).join(", ")}
-                onChange={(event) => {
-                  const audiencesAny = event.target.value
-                    .split(",")
-                    .map((entry) => entry.trim())
-                    .filter(Boolean);
-                  setDraft((current) => ({
-                    ...current,
-                    eligibility: {
-                      ...current.eligibility,
-                      audiencesAny
-                    }
-                  }));
+                value={audiencesAnyInput}
+                onChange={(event) => setAudiencesAnyInput(event.target.value)}
+                onBlur={commitAudiencesAnyInput}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitAudiencesAnyInput();
+                  }
                 }}
                 disabled={readOnly}
                 className="rounded-md border border-stone-300 px-2 py-1"

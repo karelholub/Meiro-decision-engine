@@ -45,6 +45,12 @@ const parseDefinitionFromJson = (jsonDraft: string): DecisionDefinition => {
 };
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+const sameDefinition = (left: DecisionDefinition | null, right: DecisionDefinition | null) => {
+  if (!left || !right) {
+    return left === right;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+};
 
 export default function DecisionEditorClient({
   decisionId,
@@ -137,6 +143,13 @@ export default function DecisionEditorClient({
     }
     return wizardDraft;
   }, [parseCurrentAdvancedJson, tab, wizardDraft]);
+
+  const editorDraftSignature = useMemo(() => {
+    if (tab === "advanced") {
+      return jsonDraft;
+    }
+    return wizardDraft ? JSON.stringify(wizardDraft) : "";
+  }, [jsonDraft, tab, wizardDraft]);
 
   const buildDefinitionFromEditor = useCallback((): DecisionDefinition => {
     if (tab === "advanced") {
@@ -384,7 +397,7 @@ export default function DecisionEditorClient({
     }, 900);
 
     return () => window.clearTimeout(timeout);
-  }, [draftVersion, jsonDraft, tab, unsupported.supported, validateSilently, wizardDraft]);
+  }, [draftVersion, editorDraftSignature, tab, unsupported.supported, validateSilently]);
 
   useEffect(() => {
     if (!draftVersion) {
@@ -408,7 +421,7 @@ export default function DecisionEditorClient({
     }, 1800);
 
     return () => window.clearTimeout(timeout);
-  }, [buildDefinitionFromEditor, decisionId, draftVersion, jsonDraft, tab, unsupported.supported, wizardDraft]);
+  }, [buildDefinitionFromEditor, decisionId, draftVersion, editorDraftSignature, tab, unsupported.supported]);
 
   useEffect(() => {
     if (tab !== "basic" || !wizardDraft) {
@@ -427,6 +440,9 @@ export default function DecisionEditorClient({
   }
 
   const statusVariant = selectedVersion.status === "ACTIVE" ? "success" : selectedVersion.status === "ARCHIVED" ? "warning" : "neutral";
+  const handleWizardDraftChange = useCallback((nextDefinition: DecisionDefinition) => {
+    setWizardDraft((current) => (sameDefinition(current, nextDefinition) ? current : nextDefinition));
+  }, []);
 
   return (
     <section className="space-y-4">
@@ -553,9 +569,7 @@ export default function DecisionEditorClient({
             validation={validation}
             environment={details.environment}
             readOnlyReasons={unsupported.supported ? [] : unsupported.reasons}
-            onDraftChange={(nextDefinition) => {
-              setWizardDraft(nextDefinition);
-            }}
+            onDraftChange={handleWizardDraftChange}
             onOpenAdvanced={() => switchTab("advanced")}
             onRunSimulation={async (definition, profileJson) => {
               try {
