@@ -7,6 +7,11 @@ const docs = [
     description: "Step-by-step instructions, examples, and troubleshooting for non-technical users."
   },
   {
+    href: "/docs/reliability-defaults",
+    title: "Reliability & Defaults Guide",
+    description: "Configure timeout budgets, cache behavior, and safe fallback outputs for resilient decisions."
+  },
+  {
     href: "/simulate",
     title: "Simulator Guide",
     description: "Run decisions with profile JSON and inspect rule matches, reasons, and payload output."
@@ -44,7 +49,7 @@ export default function DocsPage() {
         <h3 className="font-semibold">Quick Start</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5">
           <li>Create a draft decision from the Decisions list.</li>
-          <li>Use the Decision Builder Wizard to define eligibility, rules, guardrails, and fallback.</li>
+          <li>Use the Decision Builder Wizard to define eligibility, rules, guardrails, and performance defaults.</li>
           <li>Run inline simulation in the Test & Activate step.</li>
           <li>Validate and Save, then Activate after checklist confirmation.</li>
         </ol>

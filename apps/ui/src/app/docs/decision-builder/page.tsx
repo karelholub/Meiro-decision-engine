@@ -22,8 +22,8 @@ const stepGuide = [
     detail: "Configure caps and holdout to control risk and experiment safety."
   },
   {
-    title: "6) Fallback",
-    detail: "Set default output used when no rule matches."
+    title: "6) Performance & Defaults",
+    detail: "Set timeout budgets, cache mode, and timeout/error fallback behavior for reliable low-latency responses."
   },
   {
     title: "7) Test & Activate",
@@ -34,6 +34,8 @@ const stepGuide = [
 const troubleshooting = [
   "Validation error on eligibility field/operator/value: check each condition row for missing values.",
   "Rule THEN required: each rule card must have an action type and payload object.",
+  "Unexpected timeout fallback: increase `wbsTimeoutMs` or switch timeout behavior to custom action for fail-open handling.",
+  "Stale response served: check cache mode (`stale_if_error`/`stale_while_revalidate`) and stale TTL in Performance & Defaults.",
   "Advanced-only banner: this decision contains DSL constructs not supported by wizard (for example OR groups). Use Advanced JSON.",
   "Simulation failed: verify profile JSON shape includes profileId, attributes object, and audiences array."
 ];
@@ -66,6 +68,18 @@ export default function DecisionBuilderDocsPage() {
             </div>
           ))}
         </div>
+      </article>
+
+      <article className="panel p-4 text-sm text-stone-700">
+        <h3 className="font-semibold">Recommended Reliability Defaults</h3>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          <li>Overall timeout: `120ms`</li>
+          <li>WBS timeout: `80ms`</li>
+          <li>Cache mode: `stale_if_error` for activation-heavy channels</li>
+          <li>Fresh TTL: `60s`</li>
+          <li>Stale TTL: `1800s` (30 minutes)</li>
+          <li>Enable `preferStaleCache` when low-latency continuity is preferred over strict recency.</li>
+        </ul>
       </article>
 
       <article className="panel p-4">

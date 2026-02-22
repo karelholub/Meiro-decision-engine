@@ -840,7 +840,7 @@ Response contract:
 2. Select environment (`DEV`/`STAGE`/`PROD`) from header
 3. Go to `Decisions` and choose `Create Draft (Wizard)` or `Create Draft (JSON)`
 4. Open `Decision Details` (`/decisions/[id]`) then `Open Editor`
-5. In the Decision Builder Wizard, configure `Template -> Basics -> Eligibility -> Rules -> Guardrails -> Fallback -> Test & Activate`
+5. In the Decision Builder Wizard, configure `Template -> Basics -> Eligibility -> Rules -> Guardrails -> Performance & Defaults -> Test & Activate`
 6. Validate + Save (autosave enabled for drafts)
 7. Activate from the editor header or `Test & Activate` checklist
 8. Open `Engagement` pages:
@@ -853,6 +853,23 @@ Response contract:
 11. Open `WBS Settings` and run `Test Connection`
 12. Open `WBS Mapping` and run `Test Mapping`
 13. Open `App Settings` (`/settings/app`) to force-enable/disable Decision Builder Wizard globally in UI
+
+## User Documentation
+
+In-app end-user docs are available at `http://localhost:3000/docs`:
+
+- `Decision Builder Wizard Guide` (`/docs/decision-builder`)
+- `Reliability & Defaults Guide` (`/docs/reliability-defaults`)
+- `Simulator Guide` (`/simulate`)
+- `Logs & Replay Guide` (`/logs`)
+
+Reliability guide coverage:
+
+- choosing timeout budgets (`timeoutMs`, `wbsTimeoutMs`)
+- selecting cache mode (`normal`, `stale_if_error`, `stale_while_revalidate`, `disabled`)
+- setting stale/fresh TTL
+- configuring `preferStaleCache`, `onTimeout`, and `onError` behavior
+- reading debug fields (`servedStale`, `fallbackReason`, `wbsLatencyMs`)
 
 ## Notes for Enterprise Evolution
 
@@ -874,6 +891,8 @@ Current structure intentionally leaves extension points for:
 - UI editor: `apps/ui/src/app/decisions/[decisionId]/editor-client.tsx`
 - UI simulator: `apps/ui/src/app/simulate/page.tsx`
 - UI logs: `apps/ui/src/app/logs/page.tsx`
+- UI docs home: `apps/ui/src/app/docs/page.tsx`
+- UI reliability docs: `apps/ui/src/app/docs/reliability-defaults/page.tsx`
 - UI in-app apps: `apps/ui/src/app/engagement/inapp/apps/page.tsx`
 - UI in-app placements: `apps/ui/src/app/engagement/inapp/placements/page.tsx`
 - UI in-app templates: `apps/ui/src/app/engagement/inapp/templates/page.tsx`
