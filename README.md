@@ -111,6 +111,8 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `DELETE /v1/precompute/runs/:runKey`
   - `GET /v1/results/latest`
   - `POST /v1/results/cleanup`
+  - `GET /v1/maintenance/retention/status`
+  - `POST /v1/maintenance/retention/run`
   - `GET/PUT /v1/settings/webhook-rules`
   - `POST /v1/webhooks/pipes`
   - `GET /v1/dlq/messages`
@@ -171,6 +173,8 @@ Migration is included at:
 - `apps/api/prisma/migrations/202602191900_inapp_v2_hardening/migration.sql`
 - `apps/api/prisma/migrations/202602221310_hybrid_execution_v1/migration.sql`
 - `apps/api/prisma/migrations/202602221530_dlq_v1/migration.sql`
+- `apps/api/prisma/migrations/202602221700_inapp_event_idempotency/migration.sql`
+- `apps/api/prisma/migrations/202602221745_chunk5_retention_indexes/migration.sql`
 
 ## Environment Variables
 
@@ -228,6 +232,14 @@ Important values:
 - `INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS` (default `15000`)
 - `INAPP_EVENTS_WORKER_MAX_BATCHES_PER_TICK` (default `3`)
 - `INAPP_EVENTS_WORKER_DEDUPE_TTL_SECONDS` (default `86400`)
+- `RETENTION_WORKER_ENABLED` (default `true`)
+- `RETENTION_POLL_MS` (default `21600000`)
+- `RETENTION_DECISION_LOGS_DAYS` (default `30`)
+- `RETENTION_STACK_LOGS_DAYS` (default `30`)
+- `RETENTION_INAPP_EVENTS_DAYS` (default `30`)
+- `RETENTION_INAPP_DECISION_LOGS_DAYS` (default `30`)
+- `RETENTION_DECISION_RESULTS_DAYS` (default `14`)
+- `RETENTION_PRECOMPUTE_RUNS_DAYS` (default `30`)
 
 PgBouncer/pooling note for burst traffic:
 - Use PgBouncer in transaction mode for API pods at scale.
@@ -422,6 +434,20 @@ curl -X POST "http://localhost:3001/v2/inapp/events" \
 
 ```bash
 curl "http://localhost:3001/v2/inapp/events/monitor" \
+  -H "X-ENV: DEV" \
+  -H "X-API-KEY: local-write-key"
+```
+
+### Retention maintenance
+
+```bash
+curl "http://localhost:3001/v1/maintenance/retention/status" \
+  -H "X-ENV: DEV" \
+  -H "X-API-KEY: local-write-key"
+```
+
+```bash
+curl -X POST "http://localhost:3001/v1/maintenance/retention/run" \
   -H "X-ENV: DEV" \
   -H "X-API-KEY: local-write-key"
 ```

@@ -905,6 +905,46 @@ describe("API", () => {
     expect(response.json().runtime?.role).toBe("serve");
     expect(typeof response.json().runtime?.workers?.dlq).toBe("boolean");
     expect(typeof response.json().runtime?.workers?.inappEvents).toBe("boolean");
+    expect(typeof response.json().runtime?.workers?.retention).toBe("boolean");
+
+    await app.close();
+  });
+
+  it("exposes retention maintenance status and supports manual run", async () => {
+    const { prisma } = makePrisma();
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const statusResponse = await app.inject({
+      method: "GET",
+      url: "/v1/maintenance/retention/status",
+      headers: {
+        "x-api-key": "write-key"
+      }
+    });
+    expect(statusResponse.statusCode).toBe(200);
+    expect(statusResponse.json().retention).toBeTruthy();
+    expect(statusResponse.json().retention.enabled).toBe(true);
+
+    const runResponse = await app.inject({
+      method: "POST",
+      url: "/v1/maintenance/retention/run",
+      headers: {
+        "x-api-key": "write-key"
+      }
+    });
+    expect(runResponse.statusCode).toBe(200);
+    expect(runResponse.json().status).toBe("ok");
+    expect(runResponse.json().retention).toBeTruthy();
 
     await app.close();
   });

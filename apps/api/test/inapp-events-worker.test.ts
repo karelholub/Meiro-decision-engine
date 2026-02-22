@@ -356,4 +356,43 @@ describe("in-app events worker", () => {
     expect(enqueueFailure).toHaveBeenCalledTimes(1);
     expect(worker.getStatus().permanentFailures).toBe(1);
   });
+
+  it("treats DB unique duplicates as deduped without DLQ", async () => {
+    const cache = new FakeStreamCache();
+    await cache.xadd("inapp_events", makeEventFields(1));
+
+    const createMany = vi.fn().mockResolvedValue({ count: 0 });
+    const enqueueFailure = vi.fn().mockResolvedValue(undefined);
+    const worker = createInAppEventsWorker({
+      cache,
+      prisma: {
+        inAppEvent: {
+          createMany
+        }
+      } as any,
+      dlq: {
+        enqueueFailure
+      } as any,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: () => ({} as any)
+      } as any,
+      config: {
+        ...baseWorkerConfig
+      }
+    });
+
+    await worker.runTick();
+
+    expect(createMany).toHaveBeenCalledTimes(1);
+    expect(worker.getStatus().inserted).toBe(0);
+    expect(worker.getStatus().deduped).toBe(1);
+    expect(worker.getStatus().failed).toBe(0);
+    expect(enqueueFailure).not.toHaveBeenCalled();
+  });
 });

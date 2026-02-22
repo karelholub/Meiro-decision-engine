@@ -2282,6 +2282,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         campaignKey: item.campaignKey,
         variantKey: item.variantKey,
         messageId: item.messageId,
+        sourceStreamId: item.sourceStreamId,
         profileId: item.profileId,
         lookupAttribute: item.lookupAttribute,
         lookupValueHash: item.lookupValueHash,

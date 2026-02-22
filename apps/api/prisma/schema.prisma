@@ -152,6 +152,7 @@ model DecisionStackLog {
   @@index([environment, stackKey, timestamp])
   @@index([environment, profileId, timestamp])
   @@index([environment, stackKey, profileId, timestamp])
+  @@index([timestamp])
   @@index([requestId])
   @@index([correlationId])
   @@map("decision_stack_logs")
@@ -358,6 +359,7 @@ model InAppDecisionLog {
   @@index([environment, createdAt])
   @@index([environment, profileId, createdAt])
   @@index([environment, campaignKey, createdAt])
+  @@index([createdAt])
   @@index([correlationId])
   @@map("inapp_decision_logs")
 }
@@ -385,6 +387,7 @@ model InAppEvent {
   campaignKey     String
   variantKey      String
   messageId       String
+  sourceStreamId  String?       @unique
   profileId       String?
   lookupAttribute String?
   lookupValueHash String?
@@ -394,6 +397,7 @@ model InAppEvent {
   @@index([environment, campaignKey, ts])
   @@index([environment, messageId])
   @@index([environment, appKey, placement, ts])
+  @@index([ts])
   @@map("inapp_events")
 }
 
@@ -466,6 +470,7 @@ model PrecomputeRun {
 
   @@index([environment, createdAt])
   @@index([environment, status, createdAt])
+  @@index([status, createdAt])
   @@map("precompute_runs")
 }
 
@@ -496,11 +501,16 @@ model DecisionResult {
   createdAt       DateTime             @default(now())
 
   @@index([runKey])
+  @@index([environment, runKey, status, createdAt], map: "dr_env_run_status_created_idx")
   @@index([environment, decisionKey, profileId])
+  @@index([environment, decisionKey, profileId, status, expiresAt, createdAt], map: "dr_env_decision_profile_status_exp_created_idx")
   @@index([expiresAt])
+  @@index([createdAt], map: "dr_createdAt_idx")
   @@index([lookupAttribute, lookupValue])
+  @@index([environment, stackKey, profileId, status, expiresAt, createdAt], map: "dr_env_stack_profile_status_exp_created_idx")
   @@index([environment, stackKey, profileId, createdAt])
-  @@index([environment, decisionKey, lookupAttribute, lookupValue, createdAt])
+  @@index([environment, decisionKey, lookupAttribute, lookupValue, status, expiresAt, createdAt], map: "dr_env_decision_lookup_status_exp_created_idx")
+  @@index([environment, decisionKey, lookupAttribute, lookupValue, createdAt], map: "dr_env_decision_lookup_created_idx")
   @@map("decision_results")
 }
 

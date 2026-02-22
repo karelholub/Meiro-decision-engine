@@ -128,6 +128,7 @@ const toDbRow = (entry: StreamEnvelope): Prisma.InAppEventCreateManyInput => {
     campaignKey: entry.payload.body.tracking.campaign_id,
     variantKey: entry.payload.body.tracking.variant_id,
     messageId: entry.payload.body.tracking.message_id,
+    sourceStreamId: entry.id,
     profileId: entry.payload.body.profileId ?? null,
     lookupAttribute: entry.payload.body.lookup?.attribute ?? null,
     lookupValueHash: lookupHash,
@@ -279,17 +280,31 @@ export const createInAppEventsWorker = (input: {
 
     try {
       if ("createMany" in input.prisma.inAppEvent && typeof input.prisma.inAppEvent.createMany === "function") {
-        await input.prisma.inAppEvent.createMany({
-          data: rows
+        const result = await input.prisma.inAppEvent.createMany({
+          data: rows,
+          skipDuplicates: true
         });
+        status.inserted += result.count;
+        const duplicateCount = Math.max(0, rows.length - result.count);
+        status.deduped += duplicateCount;
       } else {
+        let insertedCount = 0;
         for (const row of rows) {
-          await input.prisma.inAppEvent.create({
-            data: row
-          });
+          try {
+            await input.prisma.inAppEvent.create({
+              data: row
+            });
+            insertedCount += 1;
+          } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+              status.deduped += 1;
+              continue;
+            }
+            throw error;
+          }
         }
+        status.inserted += insertedCount;
       }
-      status.inserted += rows.length;
       status.lastFlushAt = new Date().toISOString();
       for (const streamId of rowSourceIds) {
         await input.cache.setJson(

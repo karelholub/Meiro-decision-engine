@@ -59,8 +59,10 @@ import { deriveDecisionRequiredAttributes, deriveStackRequiredAttributes } from 
 import { isTimeoutError, withTimeout } from "./lib/timeout";
 import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
+import { createRetentionWorker } from "./jobs/retentionWorker";
 import { registerCacheRoutes } from "./routes/cache";
 import { registerDlqRoutes } from "./routes/dlq";
+import { registerMaintenanceRoutes } from "./routes/maintenance";
 import { registerPrecomputeRoutes } from "./routes/precompute";
 import {
   processPipesWebhook,
@@ -1153,6 +1155,35 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     Number.isFinite(config.inappEventsWorkerDedupeTtlSeconds)
       ? Math.max(60, Math.min(604800, Math.floor(config.inappEventsWorkerDedupeTtlSeconds)))
       : 86400;
+  const retentionWorkerEnabled = config.retentionWorkerEnabled !== false;
+  const retentionPollMs =
+    typeof config.retentionPollMs === "number" && Number.isFinite(config.retentionPollMs)
+      ? Math.max(60_000, Math.floor(config.retentionPollMs))
+      : 6 * 60 * 60 * 1000;
+  const retentionDecisionLogsDays =
+    typeof config.retentionDecisionLogsDays === "number" && Number.isFinite(config.retentionDecisionLogsDays)
+      ? Math.max(1, Math.floor(config.retentionDecisionLogsDays))
+      : 30;
+  const retentionStackLogsDays =
+    typeof config.retentionStackLogsDays === "number" && Number.isFinite(config.retentionStackLogsDays)
+      ? Math.max(1, Math.floor(config.retentionStackLogsDays))
+      : 30;
+  const retentionInappEventsDays =
+    typeof config.retentionInappEventsDays === "number" && Number.isFinite(config.retentionInappEventsDays)
+      ? Math.max(1, Math.floor(config.retentionInappEventsDays))
+      : 30;
+  const retentionInappDecisionLogsDays =
+    typeof config.retentionInappDecisionLogsDays === "number" && Number.isFinite(config.retentionInappDecisionLogsDays)
+      ? Math.max(1, Math.floor(config.retentionInappDecisionLogsDays))
+      : 30;
+  const retentionDecisionResultsDays =
+    typeof config.retentionDecisionResultsDays === "number" && Number.isFinite(config.retentionDecisionResultsDays)
+      ? Math.max(1, Math.floor(config.retentionDecisionResultsDays))
+      : 14;
+  const retentionPrecomputeRunsDays =
+    typeof config.retentionPrecomputeRunsDays === "number" && Number.isFinite(config.retentionPrecomputeRunsDays)
+      ? Math.max(1, Math.floor(config.retentionPrecomputeRunsDays))
+      : 30;
 
   await app.register(cors, { origin: true });
 
@@ -1197,6 +1228,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     (hasDlqStorage ? createDbDlqProvider(prisma as PrismaClient) : createNoopDlqProvider());
   let dlqWorker: ReturnType<typeof createDlqWorker> | null = null;
   let inappEventsWorker: ReturnType<typeof createInAppEventsWorker> | null = null;
+  let retentionWorker: ReturnType<typeof createRetentionWorker> | null = null;
 
   const now = deps.now ?? (() => new Date());
   const stackNowMs = deps.stackNowMs;
@@ -1365,6 +1397,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   app.addHook("onClose", async () => {
     dlqWorker?.stop();
     inappEventsWorker?.stop();
+    retentionWorker?.stop();
   });
 
   app.addHook("onClose", async () => {
@@ -1536,6 +1569,47 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     );
   }
 
+  retentionWorker = createRetentionWorker({
+    prisma,
+    logger: app.log,
+    now,
+    config: {
+      enabled: retentionWorkerEnabled,
+      pollMs: retentionPollMs,
+      decisionLogsDays: retentionDecisionLogsDays,
+      stackLogsDays: retentionStackLogsDays,
+      inappEventsDays: retentionInappEventsDays,
+      inappDecisionLogsDays: retentionInappDecisionLogsDays,
+      decisionResultsDays: retentionDecisionResultsDays,
+      precomputeRunsDays: retentionPrecomputeRunsDays
+    }
+  });
+
+  if (runBackgroundWorkers && retentionWorkerEnabled) {
+    retentionWorker.start();
+    app.log.info(
+      {
+        runtimeRole: apiRuntimeRole,
+        pollMs: retentionPollMs,
+        decisionLogsDays: retentionDecisionLogsDays,
+        stackLogsDays: retentionStackLogsDays,
+        inappEventsDays: retentionInappEventsDays,
+        inappDecisionLogsDays: retentionInappDecisionLogsDays,
+        decisionResultsDays: retentionDecisionResultsDays,
+        precomputeRunsDays: retentionPrecomputeRunsDays
+      },
+      "Retention worker started"
+    );
+  } else {
+    app.log.info(
+      {
+        runtimeRole: apiRuntimeRole,
+        configuredEnabled: retentionWorkerEnabled
+      },
+      "Retention worker not started"
+    );
+  }
+
   await registerInAppRoutes({
     app,
     prisma,
@@ -1612,6 +1686,15 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     });
   }
 
+  await registerMaintenanceRoutes({
+    app,
+    requireWriteAuth,
+    resolveEnvironment,
+    buildResponseError,
+    runRetentionTick: async () => retentionWorker?.runTick() ?? null,
+    getRetentionStatus: () => retentionWorker?.getStatus() ?? null
+  });
+
   app.get("/health", async () => {
     return {
       status: "ok",
@@ -1620,7 +1703,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         role: apiRuntimeRole,
         workers: {
           dlq: runBackgroundWorkers && config.dlqWorkerEnabled !== false && hasDlqStorage,
-          inappEvents: runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled
+          inappEvents: runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled,
+          retention: runBackgroundWorkers && retentionWorkerEnabled
         }
       }
     };

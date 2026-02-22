@@ -69,7 +69,7 @@ Acceptance:
 - Stream lag stabilizes in load tests.
 - No duplicate inserts under replay conditions.
 
-### Chunk 5: Data lifecycle and retention
+### Chunk 5 (completed): Data lifecycle and retention
 
 Goal:
 - Keep operational tables bounded and query performance stable.

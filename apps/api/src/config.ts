@@ -42,6 +42,14 @@ export interface AppConfig {
   inappEventsWorkerReclaimIdleMs?: number;
   inappEventsWorkerMaxBatchesPerTick?: number;
   inappEventsWorkerDedupeTtlSeconds?: number;
+  retentionWorkerEnabled?: boolean;
+  retentionPollMs?: number;
+  retentionDecisionLogsDays?: number;
+  retentionStackLogsDays?: number;
+  retentionInappEventsDays?: number;
+  retentionInappDecisionLogsDays?: number;
+  retentionDecisionResultsDays?: number;
+  retentionPrecomputeRunsDays?: number;
 }
 
 const toBool = (value: string | undefined, fallback: boolean): boolean => {
@@ -129,5 +137,13 @@ export const readConfig = (): AppConfig => ({
   inappEventsWorkerPollMs: toNumber(process.env.INAPP_EVENTS_WORKER_POLL_MS, 250),
   inappEventsWorkerReclaimIdleMs: toNumber(process.env.INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS, 15000),
   inappEventsWorkerMaxBatchesPerTick: toNumber(process.env.INAPP_EVENTS_WORKER_MAX_BATCHES_PER_TICK, 3),
-  inappEventsWorkerDedupeTtlSeconds: toNumber(process.env.INAPP_EVENTS_WORKER_DEDUPE_TTL_SECONDS, 86400)
+  inappEventsWorkerDedupeTtlSeconds: toNumber(process.env.INAPP_EVENTS_WORKER_DEDUPE_TTL_SECONDS, 86400),
+  retentionWorkerEnabled: toBool(process.env.RETENTION_WORKER_ENABLED, true),
+  retentionPollMs: toNumber(process.env.RETENTION_POLL_MS, 6 * 60 * 60 * 1000),
+  retentionDecisionLogsDays: toNumber(process.env.RETENTION_DECISION_LOGS_DAYS, 30),
+  retentionStackLogsDays: toNumber(process.env.RETENTION_STACK_LOGS_DAYS, 30),
+  retentionInappEventsDays: toNumber(process.env.RETENTION_INAPP_EVENTS_DAYS, 30),
+  retentionInappDecisionLogsDays: toNumber(process.env.RETENTION_INAPP_DECISION_LOGS_DAYS, 30),
+  retentionDecisionResultsDays: toNumber(process.env.RETENTION_DECISION_RESULTS_DAYS, 14),
+  retentionPrecomputeRunsDays: toNumber(process.env.RETENTION_PRECOMPUTE_RUNS_DAYS, 30)
 });
