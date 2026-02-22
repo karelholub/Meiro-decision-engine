@@ -1,0 +1,94 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: decision-engine-golden-signals
+    folder: Decision Engine
+    interval: 1m
+    rules:
+      - uid: inapp-p95-high
+        title: In-app p95 latency high
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_LOKI}
+            model:
+              editorMode: code
+              expr: quantile_over_time(0.95, ({app="decisioning-api"} |= "inapp_v2_runtime" | json | unwrap totalMs)[10m]) > 200
+              queryType: range
+              refId: A
+        for: 10m
+        noDataState: NoData
+        execErrState: Alerting
+        annotations:
+          summary: /v2/inapp/decide p95 latency above 200ms for 10m
+        labels:
+          severity: critical
+
+      - uid: fallback-ratio-high
+        title: Fallback ratio high
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_LOKI}
+            model:
+              editorMode: code
+              expr: (sum(rate({app="decisioning-api"} |= "inapp_v2_runtime" | json | fallbackReason=~".+" [10m])) / sum(rate({app="decisioning-api"} |= "inapp_v2_runtime" [10m]))) > 0.05
+              queryType: range
+              refId: A
+        for: 10m
+        noDataState: NoData
+        execErrState: Alerting
+        annotations:
+          summary: In-app fallback ratio above 5% for 10m
+        labels:
+          severity: critical
+
+      - uid: retention-worker-stale
+        title: Retention worker stale
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 43200
+              to: 0
+            datasourceUid: ${DS_LOKI}
+            model:
+              editorMode: code
+              expr: sum(count_over_time({app="decisioning-api"} |= "retention_cleanup" [12h])) < 1
+              queryType: range
+              refId: A
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: Retention cleanup has not run within the expected window
+        labels:
+          severity: warning
+
+      - uid: inapp-batch-failures
+        title: In-app ingest failures detected
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: ${DS_LOKI}
+            model:
+              editorMode: code
+              expr: sum(rate({app="decisioning-api"} |= "Failed to persist in-app events batch" [15m])) > 0
+              queryType: range
+              refId: A
+        for: 15m
+        noDataState: NoData
+        execErrState: Alerting
+        annotations:
+          summary: In-app event batch failures sustained for 15m
+        labels:
+          severity: warning

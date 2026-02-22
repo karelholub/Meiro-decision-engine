@@ -10,6 +10,7 @@
     "test": "vitest run",
     "bench:decide": "tsx scripts/bench-decide.ts",
     "smoke:inapp": "node --import tsx scripts/load-smoke-inapp-v2.ts",
+    "drill:dependency": "node --import tsx scripts/incident-drill-dependency.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "sh -c 'set -a; [ -f ../../.env ] && . ../../.env; set +a; prisma migrate deploy'",
     "prisma:seed": "tsx prisma/seed.ts",

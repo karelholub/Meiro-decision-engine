@@ -227,7 +227,12 @@ const run = async () => {
   const p50 = percentile(latencies, 50);
   const p95 = percentile(latencies, 95);
   const p99 = percentile(latencies, 99);
-  const max = Math.max(...latencies);
+  let max = 0;
+  for (const value of latencies) {
+    if (value > max) {
+      max = value;
+    }
+  }
   const rps = totalRequests / Math.max(1, elapsedMs / 1000);
   const cacheHitRate = cacheHits / Math.max(1, totalRequests);
   const fallbackRate = fallbackCount / Math.max(1, totalRequests);

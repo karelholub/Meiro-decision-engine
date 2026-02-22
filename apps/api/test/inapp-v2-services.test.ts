@@ -183,4 +183,122 @@ describe("in-app v2 runtime service", () => {
     expect(response.debug.fallbackReason).toBe("WBS_TIMEOUT");
     expect(response.debug.cache.hit).toBe(false);
   });
+
+  it("fails open when cache read/write throws during redis hiccup", async () => {
+    const meiro = {
+      getProfile: vi.fn().mockResolvedValue({
+        profileId: "p-1001",
+        attributes: {
+          locale: "en-US"
+        },
+        audiences: [],
+        consents: []
+      })
+    };
+    const logger = createLogger();
+    const cache: JsonCache = {
+      ...createBaseCache(),
+      getJson: async () => {
+        throw new Error("redis unavailable");
+      },
+      setJson: async () => {
+        throw new Error("redis unavailable");
+      },
+      lock: async () => {
+        throw new Error("redis unavailable");
+      }
+    };
+
+    const runtime = createInAppV2RuntimeService({
+      prisma: {
+        inAppCampaign: {
+          findMany: vi.fn(async () => [
+            {
+              id: "camp-1",
+              environment: "DEV",
+              key: "campaign_1",
+              name: "Campaign",
+              description: null,
+              status: "ACTIVE",
+              appKey: "meiro_store",
+              placementKey: "home_top",
+              templateKey: "template_a",
+              priority: 10,
+              ttlSeconds: 60,
+              startAt: null,
+              endAt: null,
+              holdoutEnabled: false,
+              holdoutPercentage: 0,
+              holdoutSalt: "seed",
+              capsPerProfilePerDay: null,
+              capsPerProfilePerWeek: null,
+              eligibilityAudiencesAny: [],
+              tokenBindingsJson: {},
+              submittedAt: null,
+              lastReviewComment: null,
+              createdAt: now,
+              updatedAt: now,
+              activatedAt: now,
+              variants: [
+                {
+                  id: "variant-1",
+                  campaignId: "camp-1",
+                  variantKey: "A",
+                  weight: 100,
+                  contentJson: { title: "Hello" },
+                  createdAt: now,
+                  updatedAt: now
+                }
+              ]
+            }
+          ])
+        },
+        inAppPlacement: {
+          findFirst: vi.fn(async () => null)
+        },
+        inAppTemplate: {
+          findMany: vi.fn(async () => [
+            {
+              id: "template-1",
+              environment: "DEV",
+              key: "template_a",
+              name: "Template A",
+              schemaJson: {},
+              createdAt: now,
+              updatedAt: now
+            }
+          ])
+        }
+      } as any,
+      cache,
+      meiro: meiro as any,
+      wbsAdapter: { lookup: vi.fn() } as any,
+      now: () => now,
+      config: {
+        wbsTimeoutMs: 80,
+        cacheTtlSeconds: 60,
+        staleTtlSeconds: 1800,
+        cacheContextKeys: ["locale", "deviceType"]
+      },
+      fetchActiveWbsInstance: async () => null,
+      fetchActiveWbsMapping: async () => null
+    });
+
+    const response = await runtime.decide({
+      environment: "DEV",
+      body: {
+        appKey: "meiro_store",
+        placement: "home_top",
+        profileId: "p-1001"
+      },
+      requestId: "req-redis-hiccup",
+      logger
+    });
+
+    expect(response.show).toBe(true);
+    expect(response.debug.cache.hit).toBe(false);
+    expect(response.debug.cache.servedStale).toBe(false);
+    expect(logger.warn).toHaveBeenCalled();
+    expect(meiro.getProfile).toHaveBeenCalledTimes(1);
+  });
 });

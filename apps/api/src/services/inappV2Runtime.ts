@@ -707,6 +707,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     logger: FastifyBaseLogger;
   }): Promise<InAppV2DecideResponse> => {
     const startedAtMs = Date.now();
+    let cacheAvailable = deps.cache.enabled;
     const campaignSet = await loadCampaignSet({
       environment: input.environment,
       appKey: input.body.appKey,
@@ -732,6 +733,21 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       contextHash
     });
     const staleCacheKey = buildInappV2StaleKey(realtimeCacheKey);
+
+    const markCacheUnavailable = (phase: string, error: unknown) => {
+      cacheAvailable = false;
+      input.logger.warn(
+        {
+          event: "inapp_v2_cache_unavailable",
+          phase,
+          requestId: input.requestId,
+          appKey: input.body.appKey,
+          placement: input.body.placement,
+          err: error
+        },
+        "In-app v2 cache unavailable, continuing without cache"
+      );
+    };
 
     const finalizeResponse = (result: {
       response: InAppDecideResponse;
@@ -777,18 +793,27 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     };
 
     const persistCaches = async (response: InAppDecideResponse) => {
-      if (!deps.cache.enabled) {
+      if (!cacheAvailable) {
         return;
       }
       const freshTtl = response.ttl_seconds > 0 ? response.ttl_seconds : deps.config.cacheTtlSeconds;
-      await deps.cache.setJson(realtimeCacheKey, response, freshTtl);
-      if (deps.config.staleTtlSeconds > 0) {
-        await deps.cache.setJson(staleCacheKey, response, freshTtl + deps.config.staleTtlSeconds);
+      try {
+        await deps.cache.setJson(realtimeCacheKey, response, freshTtl);
+        if (deps.config.staleTtlSeconds > 0) {
+          await deps.cache.setJson(staleCacheKey, response, freshTtl + deps.config.staleTtlSeconds);
+        }
+      } catch (error) {
+        markCacheUnavailable("write", error);
       }
     };
 
-    if (deps.cache.enabled) {
-      const fresh = await deps.cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+    if (cacheAvailable) {
+      let fresh: Record<string, unknown> | null = null;
+      try {
+        fresh = await deps.cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+      } catch (error) {
+        markCacheUnavailable("read_fresh", error);
+      }
       const freshResponse = normalizeInAppResponse(fresh, input.body.placement);
       if (freshResponse) {
         return finalizeResponse({
@@ -800,10 +825,24 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         });
       }
 
-      const stale = await deps.cache.getJson<Record<string, unknown>>(staleCacheKey);
+      let stale: Record<string, unknown> | null = null;
+      if (cacheAvailable) {
+        try {
+          stale = await deps.cache.getJson<Record<string, unknown>>(staleCacheKey);
+        } catch (error) {
+          markCacheUnavailable("read_stale", error);
+        }
+      }
       const staleResponse = normalizeInAppResponse(stale, input.body.placement);
       if (staleResponse) {
-        const swrLock = await deps.cache.lock(`lock:${realtimeCacheKey}:swr`, 5000);
+        let swrLock: Awaited<ReturnType<JsonCache["lock"]>> | null = null;
+        if (cacheAvailable) {
+          try {
+            swrLock = await deps.cache.lock(`lock:${realtimeCacheKey}:swr`, 5000);
+          } catch (error) {
+            markCacheUnavailable("lock_swr", error);
+          }
+        }
         if (swrLock) {
           void (async () => {
             try {
@@ -835,10 +874,22 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
 
     let lock: Awaited<ReturnType<JsonCache["lock"]>> | null = null;
     try {
-      if (deps.cache.enabled) {
-        lock = await deps.cache.lock(`lock:${realtimeCacheKey}`, 5000);
+      if (cacheAvailable) {
+        try {
+          lock = await deps.cache.lock(`lock:${realtimeCacheKey}`, 5000);
+        } catch (error) {
+          markCacheUnavailable("lock", error);
+          lock = null;
+        }
         if (!lock) {
-          const retryFresh = await deps.cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+          let retryFresh: Record<string, unknown> | null = null;
+          if (cacheAvailable) {
+            try {
+              retryFresh = await deps.cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+            } catch (error) {
+              markCacheUnavailable("read_after_lock_wait", error);
+            }
+          }
           const retryResponse = normalizeInAppResponse(retryFresh, input.body.placement);
           if (retryResponse) {
             return finalizeResponse({

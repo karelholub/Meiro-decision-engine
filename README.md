@@ -1005,6 +1005,14 @@ Smoke gate configuration:
 Operational docs:
 - Golden signals: `docs/observability-golden-signals.md`
 - Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
+- Drill report (latest): `docs/runbooks/drill-report-2026-02-22.md`
+- Monitoring wiring assets: `ops/monitoring/README.md`
+
+Run dependency drill:
+
+```bash
+pnpm drill:dependency
+```
 
 ## Notes for Enterprise Evolution
 
