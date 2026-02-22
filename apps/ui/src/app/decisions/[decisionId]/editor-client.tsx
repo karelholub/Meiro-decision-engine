@@ -435,14 +435,15 @@ export default function DecisionEditorClient({
     return () => window.clearTimeout(timeout);
   }, [tab, wizardDraft]);
 
+  const handleWizardDraftChange = useCallback((nextDefinition: DecisionDefinition) => {
+    setWizardDraft((current) => (sameDefinition(current, nextDefinition) ? current : nextDefinition));
+  }, []);
+
   if (!details || !selectedVersion) {
     return <p className="text-sm">Loading editor...</p>;
   }
 
   const statusVariant = selectedVersion.status === "ACTIVE" ? "success" : selectedVersion.status === "ARCHIVED" ? "warning" : "neutral";
-  const handleWizardDraftChange = useCallback((nextDefinition: DecisionDefinition) => {
-    setWizardDraft((current) => (sameDefinition(current, nextDefinition) ? current : nextDefinition));
-  }, []);
 
   return (
     <section className="space-y-4">

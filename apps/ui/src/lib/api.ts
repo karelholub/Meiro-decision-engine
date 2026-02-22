@@ -242,6 +242,40 @@ export const toQuery = (params: Record<string, string | number | boolean | undef
   return query ? `?${query}` : "";
 };
 
+const validateLatestDecisionResultParams = (params: {
+  mode: "decision" | "stack";
+  key: string;
+  profileId?: string;
+  lookupAttribute?: string;
+  lookupValue?: string;
+}) => {
+  const key = params.key.trim();
+  const profileId = params.profileId?.trim() ?? "";
+  const lookupAttribute = params.lookupAttribute?.trim() ?? "";
+  const lookupValue = params.lookupValue?.trim() ?? "";
+
+  if (!key) {
+    throw new Error("Key is required.");
+  }
+
+  if (!profileId && !(lookupAttribute && lookupValue)) {
+    throw new Error("Provide profileId or both lookupAttribute and lookupValue.");
+  }
+
+  return {
+    mode: params.mode,
+    key,
+    ...(profileId
+      ? {
+          profileId
+        }
+      : {
+          lookupAttribute,
+          lookupValue
+        })
+  };
+};
+
 export const apiClient = {
   system: {
     health: () => apiFetch<SystemHealthResponse>(`/health`)
@@ -589,7 +623,10 @@ export const apiClient = {
         profileId?: string;
         lookupAttribute?: string;
         lookupValue?: string;
-      }) => apiFetch<{ item: Record<string, unknown> | null }>(`/v1/results/latest${toQuery(params)}`),
+      }) => {
+        const validated = validateLatestDecisionResultParams(params);
+        return apiFetch<{ item: Record<string, unknown> | null }>(`/v1/results/latest${toQuery(validated)}`);
+      },
       cleanup: (olderThanDays?: number) =>
         apiFetch<{ status: string; deleted: number; olderThanDays: number }>(`/v1/results/cleanup`, {
           method: "POST",

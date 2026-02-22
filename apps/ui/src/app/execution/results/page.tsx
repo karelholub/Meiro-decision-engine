@@ -21,19 +21,38 @@ export default function DecisionResultsPage() {
     return onEnvironmentChange(setEnvironment);
   }, []);
 
+  const trimmedKey = key.trim();
+  const trimmedProfileId = profileId.trim();
+  const trimmedLookupAttribute = lookupAttribute.trim();
+  const trimmedLookupValue = lookupValue.trim();
+  const hasValidIdentity =
+    identityMode === "profile" ? Boolean(trimmedProfileId) : Boolean(trimmedLookupAttribute) && Boolean(trimmedLookupValue);
+  const canFetch = Boolean(trimmedKey) && hasValidIdentity;
+
   const load = async () => {
+    if (!trimmedKey) {
+      setResult(null);
+      setMessage("Enter Decision/Stack key.");
+      return;
+    }
+    if (!hasValidIdentity) {
+      setResult(null);
+      setMessage(identityMode === "profile" ? "Enter Profile ID." : "Enter both lookup attribute and value.");
+      return;
+    }
+
     setLoading(true);
     try {
       const response = await apiClient.execution.results.latest({
         mode,
-        key,
+        key: trimmedKey,
         ...(identityMode === "profile"
           ? {
-              profileId
+              profileId: trimmedProfileId
             }
           : {
-              lookupAttribute,
-              lookupValue
+              lookupAttribute: trimmedLookupAttribute,
+              lookupValue: trimmedLookupValue
             })
       });
       setResult(response.item);
@@ -101,9 +120,19 @@ export default function DecisionResultsPage() {
         )}
       </div>
 
-      <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void load()} disabled={loading}>
+      <button
+        className="rounded-md bg-ink px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+        onClick={() => void load()}
+        disabled={loading || !canFetch}
+      >
         Fetch Latest
       </button>
+
+      {!canFetch ? (
+        <p className="text-xs text-stone-600">
+          Provide key and {identityMode === "profile" ? "profileId" : "lookup attribute + value"} to fetch latest result.
+        </p>
+      ) : null}
 
       {message ? <p className="text-sm text-stone-800">{message}</p> : null}
 
