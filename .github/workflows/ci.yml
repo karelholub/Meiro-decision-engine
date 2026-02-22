@@ -39,3 +39,12 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Load smoke gate (in-app v2)
+        env:
+          SMOKE_REQUESTS: "1000"
+          SMOKE_CONCURRENCY: "50"
+          SMOKE_MAX_P95_MS: "25"
+          SMOKE_MIN_CACHE_HIT_RATE: "0.80"
+          SMOKE_MAX_FALLBACK_RATE: "0.00"
+        run: pnpm --filter @decisioning/api smoke:inapp

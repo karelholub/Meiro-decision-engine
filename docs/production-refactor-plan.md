@@ -83,7 +83,7 @@ Acceptance:
 - Retention jobs run without table lock regressions.
 - Query plans stay index-backed for key dashboards/endpoints.
 
-### Chunk 6: Observability and release gates
+### Chunk 6 (completed): Observability and release gates
 
 Goal:
 - Define objective go/no-go checks for release.

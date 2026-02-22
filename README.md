@@ -981,6 +981,31 @@ Reliability guide coverage:
 - configuring `preferStaleCache`, `onTimeout`, and `onError` behavior
 - reading debug fields (`servedStale`, `fallbackReason`, `wbsLatencyMs`)
 
+## Production Gates
+
+Release gate command:
+
+```bash
+pnpm release:gates
+```
+
+This executes:
+1. Prisma client generation
+2. API build/typecheck
+3. API tests
+4. in-app v2 load smoke gate
+
+Smoke gate configuration:
+- `SMOKE_REQUESTS` (default `1000`)
+- `SMOKE_CONCURRENCY` (default `50`)
+- `SMOKE_MAX_P95_MS` (default `25`)
+- `SMOKE_MIN_CACHE_HIT_RATE` (default `0.80`)
+- `SMOKE_MAX_FALLBACK_RATE` (default `0.00`)
+
+Operational docs:
+- Golden signals: `docs/observability-golden-signals.md`
+- Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
+
 ## Notes for Enterprise Evolution
 
 Current structure intentionally leaves extension points for:
@@ -1015,6 +1040,9 @@ Current structure intentionally leaves extension points for:
 - WBS mapping package: `packages/wbs-mapping/src/index.ts`
 - WBS settings UI: `apps/ui/src/app/settings/wbs/page.tsx`
 - WBS mapping UI: `apps/ui/src/app/settings/wbs-mapping/page.tsx`
+- In-app v2 smoke gate script: `apps/api/scripts/load-smoke-inapp-v2.ts`
+- Observability golden signals: `docs/observability-golden-signals.md`
+- Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
 
 ## Release Notes
 
@@ -1024,3 +1052,4 @@ Current structure intentionally leaves extension points for:
 - New `decision_logs.inputJson` column stores replay-safe input to power Logs replay UX.
 - New In-App Messaging module adds admin CRUD, runtime decisioning (`/v2/inapp/decide`), in-app logs, simulator support, and DEV seed data.
 - Legacy runtime endpoints `POST /v1/inapp/decide` and `POST /v1/inapp/events` now return `410` and should be replaced with v2 endpoints.
+- CI includes release smoke gating for in-app runtime (`pnpm --filter @decisioning/api smoke:inapp`).
