@@ -14,7 +14,6 @@ import type {
   InAppCampaign,
   InAppCampaignReport,
   InAppCampaignVersion,
-  InAppDecideResponse,
   InAppEvent,
   InAppOverviewReport,
   InAppPlacement,
@@ -414,13 +413,13 @@ export const apiClient = {
         )
     },
     decide: (input: Record<string, unknown>) =>
-      apiFetch<InAppDecideResponse>(`/v1/inapp/decide`, {
+      apiFetch<InAppV2DecideResponse>(`/v2/inapp/decide`, {
         method: "POST",
         body: JSON.stringify(input)
       }),
     events: {
       ingest: (input: Record<string, unknown>) =>
-        apiFetch<{ status: "ok" }>(`/v1/inapp/events`, {
+        apiFetch<{ status: "accepted"; stream: string; eventId: string; contextTruncated: boolean }>(`/v2/inapp/events`, {
           method: "POST",
           body: JSON.stringify(input)
         }),

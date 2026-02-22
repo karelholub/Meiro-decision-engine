@@ -52,7 +52,7 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - WBS instance settings API + UI (base URL, query param names, timeout, segment toggle)
 - WBS mapping API + UI (returned_attributes -> attributes/audiences/consents)
 - In-App Messaging module (Applications, Placements, Templates, Campaigns + variants)
-- `/v1/inapp/decide` runtime endpoint with deterministic varianting, holdout, caps, token rendering, tracking payload, cache, timeout fallback, and rate limiting
+- `/v2/inapp/decide` runtime endpoint with deterministic varianting, holdout, token rendering, tracking payload, Redis cache, timeout fallback, and rate limiting
 - In-App measurement ingest (`IMPRESSION`, `CLICK`, `DISMISS`) and reporting APIs (overview, campaign series, CSV export)
 - In-App governance workflow (RBAC roles, approval actions, campaign versions, audit log, rollback, env promotion)
 - DSL validation + formatting with Zod
@@ -95,8 +95,6 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `GET /v1/inapp/campaigns/:id/audit`
   - `POST /v1/inapp/validate/template`
   - `POST /v1/inapp/validate/campaign`
-  - `POST /v1/inapp/decide`
-  - `POST /v1/inapp/events`
   - `POST /v2/inapp/decide`
   - `POST /v2/inapp/events`
   - `GET /v2/inapp/events/monitor`
@@ -187,9 +185,10 @@ Important values:
 - `DATABASE_URL`
 - `API_PORT` (default `3001`)
 - `API_WRITE_KEY` (used for write endpoints via `X-API-KEY`)
+- `API_RUNTIME_ROLE` (`all`, `serve`, `worker`; default `all`)
 - `X-ENV` request header (`DEV`, `STAGE`, `PROD`; defaults to `DEV` when missing)
 - CRUD endpoints also accept `?environment=DEV|STAGE|PROD` (header still supported)
-- `PROTECT_DECIDE` (`true` to protect `/v1/decide` and `/v1/inapp/decide` with API key)
+- `PROTECT_DECIDE` (`true` to protect `/v1/decide` and `/v2/inapp/decide` with API key)
 - `MEIRO_MODE` (`mock` or `real`)
 - `MEIRO_BASE_URL`, `MEIRO_TOKEN` (for real adapter)
 - `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
@@ -211,10 +210,6 @@ Important values:
 - `NEXT_PUBLIC_API_BASE_URL`
 - `NEXT_PUBLIC_API_KEY`
 - `NEXT_PUBLIC_DECISION_WIZARD_V1` (`true` in dev by default; set to `false` to force Advanced JSON editing)
-- `INAPP_RATE_LIMIT_WINDOW_MS` (default `60000`)
-- `INAPP_RATE_LIMIT_PER_API_KEY` (default `240`)
-- `INAPP_RATE_LIMIT_PER_APP_KEY` (default `360`)
-- `INAPP_WBS_TIMEOUT_MS` (default `800`)
 - `INAPP_V2_WBS_TIMEOUT_MS` (default `80`)
 - `INAPP_V2_CACHE_TTL_SECONDS` (default `60`)
 - `INAPP_V2_STALE_TTL_SECONDS` (default `1800`)
@@ -236,6 +231,9 @@ PgBouncer/pooling note for burst traffic:
 - Use PgBouncer in transaction mode for API pods at scale.
 - Keep Prisma pool conservative per pod (`connection_limit`) and scale horizontally with Redis cache hit rate.
 - Size Postgres max connections with headroom for workers and admin sessions.
+
+Refactor backlog is tracked in:
+- `docs/production-refactor-plan.md`
 
 ## Local Setup (pnpm)
 
@@ -869,7 +867,7 @@ curl -X POST "http://localhost:3001/v1/inapp/validate/template" \
 ### Decide in-app message using Meiro demo lookup
 
 ```bash
-curl -X POST "http://localhost:3001/v1/inapp/decide" \
+curl -X POST "http://localhost:3001/v2/inapp/decide" \
   -H "Content-Type: application/json" \
   -H "X-ENV: DEV" \
   -d '{
@@ -896,20 +894,23 @@ Response contract:
     "message_id": "msg_demo_home_top_A_489309",
     "variant_id": "A"
   },
+  "debug": {
+    "cache": { "hit": false, "servedStale": false },
+    "latencyMs": { "total": 24, "wbs": 6, "engine": 2 }
+  },
   "payload": {
     "title": "Hey Alex - quick pick for you",
     "subtitle": "RFM Champions | churn 0.2 | total spend 1240",
     "cta": "See City Sneaker",
     "image": "https://images.unsplash.com/photo-1483985988355-763728e1935b",
-    "deeplink": "meiro-store://products/sku-42",
-    "debug": {}
+    "deeplink": "meiro-store://products/sku-42"
   }
 }
 ```
 
 ### Mobile integration pattern
 
-1. Call `POST /v1/inapp/decide` with `appKey`, `placement`, and either `profileId` or `lookup`.
+1. Call `POST /v2/inapp/decide` with `appKey`, `placement`, and either `profileId` or `lookup`.
 2. If `show=false`, do not render a component for that placement.
 3. If `show=true`, route by `templateId` in the mobile app and render with `payload`.
 4. Use `tracking.message_id`, `tracking.campaign_id`, and `tracking.variant_id` for impressions/click analytics.
@@ -993,5 +994,5 @@ Current structure intentionally leaves extension points for:
 - `/v1/logs` is now environment-scoped and paginated; it returns `{ page, limit, total, totalPages, items }`.
 - `/v1/logs` supports `type=inapp` for in-app decision log browsing and replay.
 - New `decision_logs.inputJson` column stores replay-safe input to power Logs replay UX.
-- New In-App Messaging module adds admin CRUD, runtime decisioning (`/v1/inapp/decide`), in-app logs, simulator support, and DEV seed data.
-- No existing endpoint was removed; previous fields remain available for backwards compatibility.
+- New In-App Messaging module adds admin CRUD, runtime decisioning (`/v2/inapp/decide`), in-app logs, simulator support, and DEV seed data.
+- Legacy runtime endpoints `POST /v1/inapp/decide` and `POST /v1/inapp/events` now return `410` and should be replaced with v2 endpoints.

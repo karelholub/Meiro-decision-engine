@@ -880,6 +880,31 @@ describe("API", () => {
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe("ok");
+    expect(response.json().runtime?.role).toBe("all");
+
+    await app.close();
+  });
+
+  it("exposes configured runtime role in health response", async () => {
+    const { prisma } = makePrisma();
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock",
+        apiRuntimeRole: "serve"
+      }
+    });
+
+    const response = await app.inject({ method: "GET", url: "/health" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().runtime?.role).toBe("serve");
+    expect(typeof response.json().runtime?.workers?.dlq).toBe("boolean");
+    expect(typeof response.json().runtime?.workers?.inappEvents).toBe("boolean");
 
     await app.close();
   });

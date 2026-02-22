@@ -1037,6 +1037,8 @@ const buildTraceEnvelope = (input: {
 export const buildApp = async (deps: BuildAppDeps = {}) => {
   const config = deps.config ?? readConfig();
   const app = Fastify({ logger: true });
+  const apiRuntimeRole = config.apiRuntimeRole === "serve" || config.apiRuntimeRole === "worker" ? config.apiRuntimeRole : "all";
+  const runBackgroundWorkers = apiRuntimeRole === "all" || apiRuntimeRole === "worker";
   const realtimeCacheTtlSeconds =
     typeof config.realtimeCacheTtlSeconds === "number" && Number.isFinite(config.realtimeCacheTtlSeconds)
       ? Math.max(1, Math.floor(config.realtimeCacheTtlSeconds))
@@ -1467,9 +1469,18 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
   });
 
-  if (config.dlqWorkerEnabled !== false && hasDlqStorage) {
+  if (runBackgroundWorkers && config.dlqWorkerEnabled !== false && hasDlqStorage) {
     dlqWorker.start();
-    app.log.info({ dlqPollMs, dlqDueLimit }, "DLQ worker started");
+    app.log.info({ runtimeRole: apiRuntimeRole, dlqPollMs, dlqDueLimit }, "DLQ worker started");
+  } else {
+    app.log.info(
+      {
+        runtimeRole: apiRuntimeRole,
+        configuredEnabled: config.dlqWorkerEnabled !== false,
+        hasDlqStorage
+      },
+      "DLQ worker not started"
+    );
   }
 
   inappEventsWorker = createInAppEventsWorker({
@@ -1488,10 +1499,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       reclaimIdleMs: inappEventsWorkerReclaimIdleMs
     }
   });
-  if (inappEventsWorkerEnabled && cache.enabled) {
+  if (runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled) {
     inappEventsWorker.start();
     app.log.info(
       {
+        runtimeRole: apiRuntimeRole,
         streamKey: inappEventsStreamKey,
         group: inappEventsStreamGroup,
         consumer: inappEventsConsumerName,
@@ -1499,12 +1511,20 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       },
       "In-app events worker started"
     );
+  } else {
+    app.log.info(
+      {
+        runtimeRole: apiRuntimeRole,
+        configuredEnabled: inappEventsWorkerEnabled,
+        cacheEnabled: cache.enabled
+      },
+      "In-app events worker not started"
+    );
   }
 
   await registerInAppRoutes({
     app,
     prisma,
-    dlq: dlqProvider,
     cache,
     meiro,
     wbsAdapter,
@@ -1581,7 +1601,14 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   app.get("/health", async () => {
     return {
       status: "ok",
-      timestamp: now().toISOString()
+      timestamp: now().toISOString(),
+      runtime: {
+        role: apiRuntimeRole,
+        workers: {
+          dlq: runBackgroundWorkers && config.dlqWorkerEnabled !== false && hasDlqStorage,
+          inappEvents: runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled
+        }
+      }
     };
   });
 

@@ -37,6 +37,7 @@ services:
       API_PORT: 3001
       API_WRITE_KEY: local-write-key
       PROTECT_DECIDE: "false"
+      API_RUNTIME_ROLE: all
       MEIRO_MODE: mock
       REDIS_URL: redis://redis:6379
       REALTIME_CACHE_TTL_SECONDS: 60

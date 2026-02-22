@@ -1,7 +1,10 @@
+export type ApiRuntimeRole = "all" | "serve" | "worker";
+
 export interface AppConfig {
   apiPort: number;
   apiWriteKey?: string;
   protectDecide: boolean;
+  apiRuntimeRole?: ApiRuntimeRole;
   meiroMode: "mock" | "real";
   meiroBaseUrl?: string;
   meiroToken?: string;
@@ -68,10 +71,21 @@ const toCsvList = (value: string | undefined, fallback: string[]): string[] => {
   return parsed.length > 0 ? parsed : fallback;
 };
 
+const toRuntimeRole = (value: string | undefined, fallback: ApiRuntimeRole): ApiRuntimeRole => {
+  if (!value) {
+    return fallback;
+  }
+  if (value === "all" || value === "serve" || value === "worker") {
+    return value;
+  }
+  return fallback;
+};
+
 export const readConfig = (): AppConfig => ({
   apiPort: Number.parseInt(process.env.API_PORT ?? "3001", 10),
   apiWriteKey: process.env.API_WRITE_KEY,
   protectDecide: toBool(process.env.PROTECT_DECIDE, false),
+  apiRuntimeRole: toRuntimeRole(process.env.API_RUNTIME_ROLE, "all"),
   meiroMode: process.env.MEIRO_MODE === "real" ? "real" : "mock",
   meiroBaseUrl: process.env.MEIRO_BASE_URL,
   meiroToken: process.env.MEIRO_TOKEN,

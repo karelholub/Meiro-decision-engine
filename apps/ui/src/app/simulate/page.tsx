@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { DecisionStackVersionSummary, DecisionVersionSummary, DecideStackResponse, InAppDecideResponse } from "@decisioning/shared";
-import { ApiError, apiClient } from "../../lib/api";
+import type { DecisionStackVersionSummary, DecisionVersionSummary, DecideStackResponse } from "@decisioning/shared";
+import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
 type SimulationProfile = {
@@ -119,8 +119,8 @@ export default function SimulatePage() {
 
   const [decisionResult, setDecisionResult] = useState<DecisionRunResult | null>(null);
   const [previousDecisionResult, setPreviousDecisionResult] = useState<DecisionRunResult | null>(null);
-  const [inAppResult, setInAppResult] = useState<InAppDecideResponse | null>(null);
-  const [previousInAppResult, setPreviousInAppResult] = useState<InAppDecideResponse | null>(null);
+  const [inAppResult, setInAppResult] = useState<InAppV2DecideResponse | null>(null);
+  const [previousInAppResult, setPreviousInAppResult] = useState<InAppV2DecideResponse | null>(null);
   const [stackResult, setStackResult] = useState<DecideStackResponse | null>(null);
   const [previousStackResult, setPreviousStackResult] = useState<DecideStackResponse | null>(null);
 
@@ -951,11 +951,11 @@ export default function SimulatePage() {
               </>
             ) : null}
 
-            {inAppResult?.payload?.debug ? (
+            {inAppResult?.debug ? (
               <>
                 <p className="font-semibold">Debug</p>
                 <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-                  {pretty(inAppResult.payload.debug)}
+                  {pretty(inAppResult.debug)}
                 </pre>
               </>
             ) : null}
