@@ -20,6 +20,7 @@ import {
 import { z } from "zod";
 import type { DlqProvider } from "./dlq/provider";
 import { redactPayload } from "./dlq/redaction";
+import type { JsonCache } from "./lib/cache";
 
 interface WbsInstanceRecord {
   id: string;
@@ -43,6 +44,7 @@ export interface RegisterInAppRoutesDeps {
   app: FastifyInstance;
   prisma: PrismaClient;
   dlq?: DlqProvider;
+  cache: JsonCache;
   meiro: MeiroAdapter;
   wbsAdapter: WbsLookupAdapter;
   now: () => Date;
@@ -54,6 +56,37 @@ export interface RegisterInAppRoutesDeps {
   fetchActiveWbsInstance: (environment: Environment) => Promise<WbsInstanceRecord | null>;
   fetchActiveWbsMapping: (environment: Environment) => Promise<WbsMappingRecord | null>;
   redactSensitiveFields: (value: unknown, keyHint?: string) => unknown;
+  inappV2: {
+    wbsTimeoutMs: number;
+    cacheTtlSeconds: number;
+    staleTtlSeconds: number;
+    cacheContextKeys: string[];
+    bodyLimitBytes: number;
+    rateLimitPerAppKey: number;
+    rateLimitWindowMs: number;
+  };
+  eventsStream: {
+    streamKey: string;
+    streamMaxLen: number;
+  };
+  getInappEventsWorkerStatus: () => {
+    enabled: boolean;
+    running: boolean;
+    streamKey: string;
+    streamGroup: string;
+    consumerName: string;
+    batchSize: number;
+    blockMs: number;
+    pollMs: number;
+    reclaimIdleMs: number;
+    processed: number;
+    inserted: number;
+    failed: number;
+    dlqEnqueued: number;
+    lastBatchSize: number;
+    lastFlushAt: string | null;
+    lastError: string | null;
+  } | null;
 }
 
 const toInputJson = (value: unknown): Prisma.InputJsonValue => {
@@ -201,6 +234,28 @@ const inAppDecideSchema = z
     message: "profileId or lookup is required"
   });
 
+const inAppV2DecideSchema = z
+  .object({
+    appKey: z.string().min(1),
+    placement: z.string().min(1),
+    decisionKey: z.string().min(1).optional(),
+    stackKey: z.string().min(1).optional(),
+    profileId: z.string().min(1).optional(),
+    lookup: z
+      .object({
+        attribute: z.string().min(1),
+        value: z.string().min(1)
+      })
+      .optional(),
+    context: z.record(z.unknown()).optional()
+  })
+  .refine((value) => Boolean(value.profileId || value.lookup), {
+    message: "profileId or lookup is required"
+  })
+  .refine((value) => !(value.decisionKey && value.stackKey), {
+    message: "decisionKey and stackKey are mutually exclusive"
+  });
+
 interface TemplateValidationResult {
   valid: boolean;
   errors: string[];
@@ -315,6 +370,54 @@ const stableStringify = (value: unknown): string => {
   return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(",")}}`;
 };
 
+const hashLookupValue = (value: string): string => hashSha256(value).slice(0, 16);
+
+const buildInappV2IdentityKey = (input: { profileId?: string; lookup?: { attribute: string; value: string } }) => {
+  if (input.profileId) {
+    return `profile:${input.profileId}`;
+  }
+  return `lookup:${input.lookup?.attribute ?? "unknown"}=${hashLookupValue(input.lookup?.value ?? "unknown")}`;
+};
+
+const pickAllowedContext = (context: Record<string, unknown> | undefined, allowlist: string[]): Record<string, unknown> => {
+  if (!context) {
+    return {};
+  }
+  const next: Record<string, unknown> = {};
+  for (const key of allowlist) {
+    if (key in context) {
+      next[key] = context[key];
+    }
+  }
+  return next;
+};
+
+const buildInappV2CacheKey = (input: {
+  environment: Environment;
+  appKey: string;
+  placement: string;
+  identityKey: string;
+  keyType: "decision" | "stack" | "campaign";
+  key: string;
+  checksum: string;
+  contextHash: string;
+}) => {
+  return [
+    "inapp",
+    "decide",
+    input.environment.toLowerCase(),
+    encodeURIComponent(input.appKey),
+    encodeURIComponent(input.placement),
+    encodeURIComponent(input.identityKey),
+    input.keyType,
+    encodeURIComponent(input.key),
+    input.checksum,
+    input.contextHash
+  ].join(":");
+};
+
+const buildInappV2StaleKey = (cacheKey: string) => `${cacheKey}:stale`;
+
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, timeoutError: string): Promise<T> => {
   let timeoutHandle: NodeJS.Timeout | undefined;
   try {
@@ -395,6 +498,7 @@ class InMemoryRateLimiter {
 
 const perApiKeyLimiter = new InMemoryRateLimiter();
 const perAppKeyLimiter = new InMemoryRateLimiter();
+const perAppKeyLimiterV2 = new InMemoryRateLimiter();
 
 const INAPP_RATE_WINDOW_MS = Number.parseInt(process.env.INAPP_RATE_LIMIT_WINDOW_MS ?? "60000", 10);
 const INAPP_RATE_PER_API_KEY = Number.parseInt(process.env.INAPP_RATE_LIMIT_PER_API_KEY ?? "240", 10);
@@ -782,6 +886,21 @@ interface InAppDecideResponse {
   payload: Record<string, unknown>;
 }
 
+interface InAppV2DecideResponse extends InAppDecideResponse {
+  debug: {
+    cache: {
+      hit: boolean;
+      servedStale: boolean;
+    };
+    latencyMs: {
+      total: number;
+      wbs: number;
+      engine: number;
+    };
+    fallbackReason?: string;
+  };
+}
+
 const buildNoShowResponse = (input: {
   placement: string;
   debug?: Record<string, unknown>;
@@ -798,6 +917,29 @@ const buildNoShowResponse = (input: {
       variant_id: ""
     },
     payload
+  };
+};
+
+const normalizeInAppResponse = (raw: unknown, fallbackPlacement: string): InAppDecideResponse | null => {
+  if (!isObject(raw) || !isObject(raw.tracking)) {
+    return null;
+  }
+
+  const ttlSecondsRaw = Number(raw.ttl_seconds ?? 0);
+  const ttlSeconds = Number.isFinite(ttlSecondsRaw) ? Math.max(0, Math.floor(ttlSecondsRaw)) : 0;
+
+  const payloadRaw = isObject(raw.payload) ? raw.payload : {};
+  return {
+    show: Boolean(raw.show),
+    placement: typeof raw.placement === "string" && raw.placement.length > 0 ? raw.placement : fallbackPlacement,
+    templateId: typeof raw.templateId === "string" && raw.templateId.length > 0 ? raw.templateId : "none",
+    ttl_seconds: ttlSeconds,
+    tracking: {
+      campaign_id: typeof raw.tracking.campaign_id === "string" ? raw.tracking.campaign_id : "",
+      message_id: typeof raw.tracking.message_id === "string" ? raw.tracking.message_id : "",
+      variant_id: typeof raw.tracking.variant_id === "string" ? raw.tracking.variant_id : ""
+    },
+    payload: payloadRaw
   };
 };
 
@@ -909,6 +1051,12 @@ interface CampaignSnapshot {
   }>;
 }
 
+type ActiveCampaignWithVariants = Prisma.InAppCampaignGetPayload<{
+  include: { variants: true };
+}>;
+type InAppPlacementRecord = Prisma.InAppPlacementGetPayload<Record<string, never>>;
+type InAppTemplateRecord = Prisma.InAppTemplateGetPayload<Record<string, never>>;
+
 const makeCampaignSnapshot = (campaign: {
   key: string;
   name: string;
@@ -971,6 +1119,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
   const {
     app,
     prisma,
+    cache,
     meiro,
     wbsAdapter,
     now,
@@ -981,8 +1130,23 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     createRequestId,
     fetchActiveWbsInstance,
     fetchActiveWbsMapping,
-    redactSensitiveFields
+    redactSensitiveFields,
+    inappV2,
+    eventsStream,
+    getInappEventsWorkerStatus
   } = deps;
+
+  const campaignSetCache = new Map<
+    string,
+    {
+      loadedAtMs: number;
+      campaigns: ActiveCampaignWithVariants[];
+      placement: InAppPlacementRecord | null;
+      templatesByKey: Map<string, InAppTemplateRecord>;
+      checksum: string;
+    }
+  >();
+  const CAMPAIGN_SET_CACHE_TTL_MS = 5000;
 
   const ensureRole = async (request: FastifyRequest, reply: FastifyReply, accepted: InAppUserRole[]) => {
     const actor = getActorFromHeaders(request);
@@ -2385,6 +2549,126 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
   app.post("/v1/inapp/events", { preHandler: requireDecideAuth }, ingestInAppEventHandler);
   app.post("/v1/events/inapp", { preHandler: requireDecideAuth }, ingestInAppEventHandler);
 
+  const INAPP_EVENTS_CONTEXT_MAX_BYTES = 16 * 1024;
+  const serializeContextForStream = (value: unknown): { json: string; truncated: boolean } => {
+    if (!isObject(value)) {
+      return { json: "{}", truncated: false };
+    }
+    const safe = redactSensitiveFields(value);
+    const serialized = JSON.stringify(safe);
+    if (Buffer.byteLength(serialized, "utf8") <= INAPP_EVENTS_CONTEXT_MAX_BYTES) {
+      return { json: serialized, truncated: false };
+    }
+    return { json: "{}", truncated: true };
+  };
+
+  app.post("/v2/inapp/events", { preHandler: requireDecideAuth, bodyLimit: inappV2.bodyLimitBytes }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = inAppEventsBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const rate = perAppKeyLimiterV2.check({
+      key: `events:${environment}:${parsed.data.appKey}`,
+      limit: inappV2.rateLimitPerAppKey,
+      windowMs: inappV2.rateLimitWindowMs
+    });
+    if (!rate.allowed) {
+      return buildResponseError(reply, 429, "Rate limit exceeded", {
+        retryAfterMs: rate.retryAfterMs
+      });
+    }
+
+    if (!cache.enabled || !cache.xadd) {
+      return buildResponseError(reply, 503, "Redis stream unavailable");
+    }
+
+    const timestamp = parsed.data.ts ? new Date(parsed.data.ts) : now();
+    if (Number.isNaN(timestamp.getTime())) {
+      return buildResponseError(reply, 400, "Invalid ts value");
+    }
+
+    const context = serializeContextForStream(parsed.data.context);
+    if (context.truncated) {
+      request.log.warn(
+        {
+          appKey: parsed.data.appKey,
+          placement: parsed.data.placement
+        },
+        "In-app event context exceeded 16KB and was dropped"
+      );
+    }
+
+    const lookupValueHash = parsed.data.lookup ? hashSha256(parsed.data.lookup.value) : "";
+    const eventId = await cache.xadd(eventsStream.streamKey, {
+      environment,
+      eventType: parsed.data.eventType,
+      ts: timestamp.toISOString(),
+      appKey: parsed.data.appKey,
+      placement: parsed.data.placement,
+      campaign_id: parsed.data.tracking.campaign_id,
+      message_id: parsed.data.tracking.message_id,
+      variant_id: parsed.data.tracking.variant_id,
+      profileId: parsed.data.profileId ?? "",
+      lookupAttribute: parsed.data.lookup?.attribute ?? "",
+      lookupValueHash,
+      context: context.json
+    }, {
+      maxLen: eventsStream.streamMaxLen
+    });
+
+    if (!eventId) {
+      request.log.error(
+        {
+          appKey: parsed.data.appKey,
+          placement: parsed.data.placement
+        },
+        "Failed to enqueue in-app event into Redis stream"
+      );
+      return buildResponseError(reply, 500, "Failed to enqueue event");
+    }
+
+    return reply.code(202).send({
+      status: "accepted",
+      stream: eventsStream.streamKey,
+      eventId,
+      contextTruncated: context.truncated
+    });
+  });
+
+  app.get("/v2/inapp/events/monitor", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const workerStatus = getInappEventsWorkerStatus();
+    const streamLength = cache.xlen ? await cache.xlen(eventsStream.streamKey) : 0;
+    const pendingSummary =
+      cache.xpending && workerStatus ? await cache.xpending(eventsStream.streamKey, workerStatus.streamGroup) : null;
+    const groups = cache.xinfoGroups ? await cache.xinfoGroups(eventsStream.streamKey) : [];
+    const groupMetrics =
+      workerStatus && groups.length > 0
+        ? groups.find((item) => item.name === workerStatus.streamGroup)
+        : undefined;
+
+    return {
+      environment,
+      stream: {
+        key: eventsStream.streamKey,
+        length: streamLength,
+        pending: pendingSummary?.count ?? 0,
+        lag: typeof groupMetrics?.lag === "number" ? groupMetrics.lag : null
+      },
+      worker: workerStatus
+    };
+  });
+
   app.get("/v1/inapp/events", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -2677,6 +2961,515 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
 
     reply.header("Content-Type", "text/csv");
     return toCsv(csvRows);
+  });
+
+  const loadCampaignSetForV2 = async (input: { environment: Environment; appKey: string; placement: string }) => {
+    const cacheKey = `${input.environment}:${input.appKey}:${input.placement}`;
+    const cached = campaignSetCache.get(cacheKey);
+    const nowMs = Date.now();
+    if (cached && nowMs - cached.loadedAtMs < CAMPAIGN_SET_CACHE_TTL_MS) {
+      return cached;
+    }
+
+    const [campaigns, placement] = await Promise.all([
+      prisma.inAppCampaign.findMany({
+        where: {
+          environment: input.environment,
+          appKey: input.appKey,
+          placementKey: input.placement,
+          status: InAppCampaignStatus.ACTIVE
+        },
+        include: {
+          variants: true
+        },
+        orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
+      }),
+      prisma.inAppPlacement.findFirst({
+        where: {
+          environment: input.environment,
+          key: input.placement
+        }
+      })
+    ]);
+
+    const templateKeys = [...new Set(campaigns.map((campaign) => campaign.templateKey).filter(Boolean))];
+    const templates = templateKeys.length
+      ? await prisma.inAppTemplate.findMany({
+          where: {
+            environment: input.environment,
+            key: {
+              in: templateKeys
+            }
+          }
+        })
+      : [];
+    const templatesByKey = new Map(templates.map((template) => [template.key, template]));
+    const checksum = hashSha256(
+      stableStringify({
+        campaigns: campaigns.map((campaign) => ({
+          key: campaign.key,
+          updatedAt: campaign.updatedAt.toISOString(),
+          activatedAt: campaign.activatedAt?.toISOString() ?? null,
+          priority: campaign.priority,
+          ttlSeconds: campaign.ttlSeconds,
+          templateKey: campaign.templateKey,
+          holdoutEnabled: campaign.holdoutEnabled,
+          holdoutPercentage: campaign.holdoutPercentage,
+          schedule: {
+            startAt: campaign.startAt?.toISOString() ?? null,
+            endAt: campaign.endAt?.toISOString() ?? null
+          },
+          audiences: Array.isArray(campaign.eligibilityAudiencesAny) ? campaign.eligibilityAudiencesAny : [],
+          tokenBindingsJson: isObject(campaign.tokenBindingsJson) ? campaign.tokenBindingsJson : {},
+          variants: campaign.variants
+            .map((variant) => ({
+              variantKey: variant.variantKey,
+              weight: variant.weight,
+              updatedAt: variant.updatedAt.toISOString()
+            }))
+            .sort((a, b) => a.variantKey.localeCompare(b.variantKey))
+        })),
+        placement: placement
+          ? {
+              key: placement.key,
+              defaultTtlSeconds: placement.defaultTtlSeconds,
+              updatedAt: placement.updatedAt.toISOString()
+            }
+          : null,
+        templates: templates
+          .map((template) => ({
+            key: template.key,
+            updatedAt: template.updatedAt.toISOString()
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key))
+      })
+    );
+
+    const snapshot = {
+      loadedAtMs: nowMs,
+      campaigns,
+      placement,
+      templatesByKey,
+      checksum
+    };
+    campaignSetCache.set(cacheKey, snapshot);
+    return snapshot;
+  };
+
+  const evaluateV2InappDecision = async (input: {
+    environment: Environment;
+    body: z.infer<typeof inAppV2DecideSchema>;
+    requestId: string;
+  }): Promise<{
+    response: InAppDecideResponse;
+    wbsMs: number;
+    engineMs: number;
+    fallbackReason?: string;
+  }> => {
+    const startedAtMs = Date.now();
+    let wbsMs = 0;
+    let engineMs = 0;
+
+    const withEngineMs = async <T>(fn: () => Promise<T> | T): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        engineMs += Date.now() - started;
+      }
+    };
+
+    const withWbsMs = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        wbsMs += Date.now() - started;
+      }
+    };
+
+    const campaignSet = await loadCampaignSetForV2({
+      environment: input.environment,
+      appKey: input.body.appKey,
+      placement: input.body.placement
+    });
+
+    const contextNow = (() => {
+      const candidate = input.body.context?.now;
+      if (typeof candidate === "string") {
+        const parsed = new Date(candidate);
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed;
+        }
+      }
+      return now();
+    })();
+
+    let profile: EngineProfile;
+    const lookup = input.body.lookup;
+    if (lookup) {
+      const [activeWbsInstance, activeWbsMapping] = await Promise.all([
+        fetchActiveWbsInstance(input.environment),
+        fetchActiveWbsMapping(input.environment)
+      ]);
+      if (!activeWbsInstance || !activeWbsMapping) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = inappV2.cacheTtlSeconds;
+        return { response, wbsMs, engineMs, fallbackReason: "WBS_NOT_CONFIGURED" };
+      }
+
+      let rawLookup: WbsLookupResponse;
+      try {
+        rawLookup = await withWbsMs(() =>
+          withTimeout(
+            wbsAdapter.lookup(
+              {
+                baseUrl: activeWbsInstance.baseUrl,
+                attributeParamName: activeWbsInstance.attributeParamName,
+                valueParamName: activeWbsInstance.valueParamName,
+                segmentParamName: activeWbsInstance.segmentParamName,
+                includeSegment: activeWbsInstance.includeSegment,
+                defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
+                timeoutMs: Math.min(activeWbsInstance.timeoutMs, inappV2.wbsTimeoutMs)
+              },
+              lookup
+            ),
+            inappV2.wbsTimeoutMs,
+            "WBS_LOOKUP_TIMEOUT"
+          )
+        );
+      } catch (error) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = inappV2.cacheTtlSeconds;
+        return {
+          response,
+          wbsMs,
+          engineMs,
+          fallbackReason: String(error).includes("WBS_LOOKUP_TIMEOUT") ? "WBS_TIMEOUT" : "WBS_ERROR"
+        };
+      }
+
+      const parsedMapping = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
+      if (!parsedMapping.success) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = inappV2.cacheTtlSeconds;
+        return { response, wbsMs, engineMs, fallbackReason: "WBS_MAPPING_INVALID" };
+      }
+
+      const mapped = mapWbsLookupToProfile({
+        raw: rawLookup,
+        lookup,
+        profileIdStrategy: activeWbsMapping.profileIdStrategy,
+        profileIdAttributeKey: activeWbsMapping.profileIdAttributeKey,
+        mapping: parsedMapping.data
+      });
+      profile = mapped.profile;
+    } else {
+      try {
+        profile = await withWbsMs(() =>
+          withTimeout(meiro.getProfile(input.body.profileId as string), inappV2.wbsTimeoutMs, "MEIRO_PROFILE_TIMEOUT")
+        );
+      } catch (error) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = inappV2.cacheTtlSeconds;
+        return {
+          response,
+          wbsMs,
+          engineMs,
+          fallbackReason: String(error).includes("MEIRO_PROFILE_TIMEOUT") ? "WBS_TIMEOUT" : "WBS_ERROR"
+        };
+      }
+    }
+
+    const audiences = new Set(profile.audiences);
+    let selectedCampaign: (typeof campaignSet.campaigns)[number] | null = null;
+    for (const campaign of campaignSet.campaigns) {
+      if (!campaignPassesSchedule(campaign, contextNow)) {
+        continue;
+      }
+
+      const eligibilityAudiences = Array.isArray(campaign.eligibilityAudiencesAny)
+        ? (campaign.eligibilityAudiencesAny as string[])
+        : [];
+      if (eligibilityAudiences.length > 0 && !eligibilityAudiences.some((audience) => audiences.has(audience))) {
+        continue;
+      }
+
+      if (campaign.holdoutEnabled && campaign.holdoutPercentage > 0) {
+        const holdoutBucket = deterministicBucket(`${profile.profileId}:${campaign.key}:${campaign.holdoutSalt}`);
+        if (holdoutBucket < campaign.holdoutPercentage) {
+          continue;
+        }
+      }
+
+      selectedCampaign = campaign;
+      break;
+    }
+
+    if (!selectedCampaign) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, inappV2.cacheTtlSeconds));
+      return { response, wbsMs, engineMs };
+    }
+
+    const selectedTemplate = campaignSet.templatesByKey.get(selectedCampaign.templateKey);
+    if (!selectedTemplate) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, inappV2.cacheTtlSeconds));
+      return { response, wbsMs, engineMs, fallbackReason: "TEMPLATE_NOT_FOUND" };
+    }
+
+    const { values: tokenBindings } = parseTokenBindings(selectedCampaign.tokenBindingsJson);
+    const tokenValues: Record<string, unknown> = {};
+    await withEngineMs(async () => {
+      for (const [token, binding] of Object.entries(tokenBindings)) {
+        let tokenValue = getValueByPath(profile.attributes, binding.sourcePath);
+        for (const transform of binding.transforms) {
+          tokenValue = applyTransform(tokenValue, transform);
+        }
+        tokenValues[token] = tokenValue;
+      }
+    });
+
+    const variantSelection = await withEngineMs(() =>
+      selectVariant({
+        profileId: profile.profileId,
+        campaignKey: selectedCampaign.key,
+        salt: selectedCampaign.holdoutSalt,
+        variants: selectedCampaign.variants
+      })
+    );
+    const selectedVariant = variantSelection.variant;
+    if (!selectedVariant) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, inappV2.cacheTtlSeconds));
+      return { response, wbsMs, engineMs, fallbackReason: "VARIANT_NOT_FOUND" };
+    }
+
+    const renderedPayload = await withEngineMs(() => renderTemplateValue(selectedVariant.contentJson, tokenValues));
+    const ttlSeconds =
+      selectedCampaign.ttlSeconds > 0
+        ? selectedCampaign.ttlSeconds
+        : campaignSet.placement?.defaultTtlSeconds && campaignSet.placement.defaultTtlSeconds > 0
+          ? campaignSet.placement.defaultTtlSeconds
+          : inappV2.cacheTtlSeconds;
+    const messageWindow = Math.floor(contextNow.getTime() / (Math.max(1, ttlSeconds) * 1000));
+    const messageId = `msg_${selectedCampaign.key}_${selectedVariant.variantKey}_${messageWindow}`;
+
+    const payload: Record<string, unknown> = isObject(renderedPayload)
+      ? (renderedPayload as Record<string, unknown>)
+      : { value: renderedPayload };
+
+    const response: InAppDecideResponse = {
+      show: true,
+      placement: input.body.placement,
+      templateId: selectedTemplate.key,
+      ttl_seconds: ttlSeconds,
+      tracking: {
+        campaign_id: selectedCampaign.key,
+        message_id: messageId,
+        variant_id: selectedVariant.variantKey
+      },
+      payload
+    };
+
+    const totalMs = Date.now() - startedAtMs;
+    if (totalMs > 200) {
+      // Keep visibility into miss-path spikes during burst traffic.
+      app.log.warn({ requestId: input.requestId, totalMs, placement: input.body.placement }, "v2 in-app decide exceeded 200ms");
+    }
+
+    return { response, wbsMs, engineMs };
+  };
+
+  app.post("/v2/inapp/decide", { preHandler: requireDecideAuth, bodyLimit: inappV2.bodyLimitBytes }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = inAppV2DecideSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const requestId = createRequestId(request);
+    const startedAtMs = Date.now();
+    const rate = perAppKeyLimiterV2.check({
+      key: `decide:${environment}:${parsed.data.appKey}`,
+      limit: inappV2.rateLimitPerAppKey,
+      windowMs: inappV2.rateLimitWindowMs
+    });
+    if (!rate.allowed) {
+      return buildResponseError(reply, 429, "Rate limit exceeded", {
+        correlationId: requestId,
+        retryAfterMs: rate.retryAfterMs
+      });
+    }
+
+    const campaignSet = await loadCampaignSetForV2({
+      environment,
+      appKey: parsed.data.appKey,
+      placement: parsed.data.placement
+    });
+
+    const keyType = parsed.data.decisionKey ? "decision" : parsed.data.stackKey ? "stack" : "campaign";
+    const key = parsed.data.decisionKey ?? parsed.data.stackKey ?? `${parsed.data.appKey}:${parsed.data.placement}`;
+    const identityKey = buildInappV2IdentityKey({
+      profileId: parsed.data.profileId,
+      lookup: parsed.data.lookup
+    });
+    const contextForKey = pickAllowedContext(parsed.data.context, inappV2.cacheContextKeys);
+    const contextHash = hashSha256(stableStringify(contextForKey)).slice(0, 16);
+    const realtimeCacheKey = buildInappV2CacheKey({
+      environment,
+      appKey: parsed.data.appKey,
+      placement: parsed.data.placement,
+      identityKey,
+      keyType,
+      key,
+      checksum: campaignSet.checksum,
+      contextHash
+    });
+    const staleCacheKey = buildInappV2StaleKey(realtimeCacheKey);
+
+    const finalizeResponse = (input: {
+      response: InAppDecideResponse;
+      cacheHit: boolean;
+      servedStale: boolean;
+      fallbackReason?: string;
+      wbsMs: number;
+      engineMs: number;
+    }): InAppV2DecideResponse => {
+      const totalMs = Date.now() - startedAtMs;
+      const body: InAppV2DecideResponse = {
+        ...input.response,
+        debug: {
+          cache: {
+            hit: input.cacheHit,
+            servedStale: input.servedStale
+          },
+          latencyMs: {
+            total: totalMs,
+            wbs: input.wbsMs,
+            engine: input.engineMs
+          },
+          ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {})
+        }
+      };
+
+      request.log.info(
+        {
+          event: "inapp_v2_runtime",
+          requestId,
+          appKey: parsed.data.appKey,
+          placement: parsed.data.placement,
+          cacheHit: input.cacheHit,
+          servedStale: input.servedStale,
+          fallbackReason: input.fallbackReason,
+          wbsMs: input.wbsMs,
+          engineMs: input.engineMs,
+          totalMs
+        },
+        "In-app v2 decide completed"
+      );
+
+      return body;
+    };
+
+    const persistCaches = async (response: InAppDecideResponse) => {
+      if (!cache.enabled) {
+        return;
+      }
+      const freshTtl = response.ttl_seconds > 0 ? response.ttl_seconds : inappV2.cacheTtlSeconds;
+      await cache.setJson(realtimeCacheKey, response, freshTtl);
+      if (inappV2.staleTtlSeconds > 0) {
+        await cache.setJson(staleCacheKey, response, freshTtl + inappV2.staleTtlSeconds);
+      }
+    };
+
+    if (cache.enabled) {
+      const fresh = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+      const freshResponse = normalizeInAppResponse(fresh, parsed.data.placement);
+      if (freshResponse) {
+        return finalizeResponse({
+          response: freshResponse,
+          cacheHit: true,
+          servedStale: false,
+          wbsMs: 0,
+          engineMs: 0
+        });
+      }
+
+      const stale = await cache.getJson<Record<string, unknown>>(staleCacheKey);
+      const staleResponse = normalizeInAppResponse(stale, parsed.data.placement);
+      if (staleResponse) {
+        const swrLock = await cache.lock(`lock:${realtimeCacheKey}:swr`, 5000);
+        if (swrLock) {
+          void (async () => {
+            try {
+              const refreshed = await evaluateV2InappDecision({
+                environment,
+                body: parsed.data,
+                requestId
+              });
+              await persistCaches(refreshed.response);
+            } catch (error) {
+              request.log.warn({ err: error, requestId }, "Failed SWR refresh for in-app v2 decide");
+            } finally {
+              await swrLock.release();
+            }
+          })();
+        }
+        return finalizeResponse({
+          response: staleResponse,
+          cacheHit: false,
+          servedStale: true,
+          fallbackReason: "STALE_CACHE",
+          wbsMs: 0,
+          engineMs: 0
+        });
+      }
+    }
+
+    let lock: Awaited<ReturnType<typeof cache.lock>> = null;
+    try {
+      if (cache.enabled) {
+        lock = await cache.lock(`lock:${realtimeCacheKey}`, 5000);
+        if (!lock) {
+          const retryFresh = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+          const retryResponse = normalizeInAppResponse(retryFresh, parsed.data.placement);
+          if (retryResponse) {
+            return finalizeResponse({
+              response: retryResponse,
+              cacheHit: true,
+              servedStale: false,
+              wbsMs: 0,
+              engineMs: 0
+            });
+          }
+        }
+      }
+
+      const evaluated = await evaluateV2InappDecision({
+        environment,
+        body: parsed.data,
+        requestId
+      });
+      await persistCaches(evaluated.response);
+      return finalizeResponse({
+        response: evaluated.response,
+        cacheHit: false,
+        servedStale: false,
+        fallbackReason: evaluated.fallbackReason,
+        wbsMs: evaluated.wbsMs,
+        engineMs: evaluated.engineMs
+      });
+    } finally {
+      if (lock) {
+        await lock.release();
+      }
+    }
   });
 
   app.post("/v1/inapp/decide", { preHandler: requireDecideAuth }, async (request, reply) => {

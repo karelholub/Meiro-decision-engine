@@ -97,6 +97,9 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `POST /v1/inapp/validate/campaign`
   - `POST /v1/inapp/decide`
   - `POST /v1/inapp/events`
+  - `POST /v2/inapp/decide`
+  - `POST /v2/inapp/events`
+  - `GET /v2/inapp/events/monitor`
   - `GET /v1/inapp/events`
   - `GET /v1/inapp/reports/overview`
   - `GET /v1/inapp/reports/campaign/:key`
@@ -212,6 +215,27 @@ Important values:
 - `INAPP_RATE_LIMIT_PER_API_KEY` (default `240`)
 - `INAPP_RATE_LIMIT_PER_APP_KEY` (default `360`)
 - `INAPP_WBS_TIMEOUT_MS` (default `800`)
+- `INAPP_V2_WBS_TIMEOUT_MS` (default `80`)
+- `INAPP_V2_CACHE_TTL_SECONDS` (default `60`)
+- `INAPP_V2_STALE_TTL_SECONDS` (default `1800`)
+- `INAPP_V2_CACHE_CONTEXT_KEYS` (default `locale,deviceType`)
+- `INAPP_V2_BODY_LIMIT_BYTES` (default `65536`)
+- `INAPP_V2_RATE_LIMIT_PER_APP_KEY` (default `3000`)
+- `INAPP_V2_RATE_LIMIT_WINDOW_MS` (default `1000`)
+- `INAPP_EVENTS_STREAM_KEY` (default `inapp_events`)
+- `INAPP_EVENTS_STREAM_GROUP` (default `inapp_events_group`)
+- `INAPP_EVENTS_CONSUMER_NAME` (default `api-1`)
+- `INAPP_EVENTS_STREAM_MAXLEN` (default `200000`)
+- `INAPP_EVENTS_WORKER_ENABLED` (default `true`)
+- `INAPP_EVENTS_WORKER_BATCH_SIZE` (default `500`)
+- `INAPP_EVENTS_WORKER_BLOCK_MS` (default `1000`)
+- `INAPP_EVENTS_WORKER_POLL_MS` (default `250`)
+- `INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS` (default `15000`)
+
+PgBouncer/pooling note for burst traffic:
+- Use PgBouncer in transaction mode for API pods at scale.
+- Keep Prisma pool conservative per pod (`connection_limit`) and scale horizontally with Redis cache hit rate.
+- Size Postgres max connections with headroom for workers and admin sessions.
 
 ## Local Setup (pnpm)
 
@@ -331,7 +355,7 @@ Defined in:
 ### Runtime decision
 
 ```bash
-curl -X POST "http://localhost:3001/v1/inapp/decide" \
+curl -X POST "http://localhost:3001/v2/inapp/decide" \
   -H "Content-Type: application/json" \
   -H "X-ENV: DEV" \
   -H "X-API-KEY: local-write-key" \
@@ -377,7 +401,7 @@ curl -X POST "http://localhost:3001/v1/inapp/decide" \
 ### Event ingest
 
 ```bash
-curl -X POST "http://localhost:3001/v1/inapp/events" \
+curl -X POST "http://localhost:3001/v2/inapp/events" \
   -H "Content-Type: application/json" \
   -H "X-ENV: DEV" \
   -H "X-API-KEY: local-write-key" \
@@ -394,12 +418,21 @@ curl -X POST "http://localhost:3001/v1/inapp/events" \
   }'
 ```
 
+### Events monitor
+
+```bash
+curl "http://localhost:3001/v2/inapp/events/monitor" \
+  -H "X-ENV: DEV" \
+  -H "X-API-KEY: local-write-key"
+```
+
 ### Mobile integration notes
 
-1. Call `POST /v1/inapp/decide` on placement render (for example, app home top slot).
+1. Call `POST /v2/inapp/decide` on placement render (for example, app home top slot).
 2. Route by `templateId` in app code to your local rendering component.
 3. Render `payload` fields directly from the contract.
-4. Track `IMPRESSION`, `CLICK`, `DISMISS` with `POST /v1/inapp/events` using `tracking` IDs returned by decide.
+4. Track `IMPRESSION`, `CLICK`, `DISMISS` with `POST /v2/inapp/events` using `tracking` IDs returned by decide.
+5. Use `GET /v2/inapp/events/monitor` for stream lag and worker health during load tests.
 
 ## Example Decision DSL JSON
 

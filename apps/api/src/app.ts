@@ -57,6 +57,7 @@ import {
 } from "./lib/cacheKey";
 import { deriveDecisionRequiredAttributes, deriveStackRequiredAttributes } from "./lib/requiredAttributes";
 import { isTimeoutError, withTimeout } from "./lib/timeout";
+import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { registerCacheRoutes } from "./routes/cache";
 import { registerDlqRoutes } from "./routes/dlq";
@@ -1088,6 +1089,58 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     typeof config.dlqDueLimit === "number" && Number.isFinite(config.dlqDueLimit)
       ? Math.max(1, Math.min(500, Math.floor(config.dlqDueLimit)))
       : 50;
+  const inappV2WbsTimeoutMs =
+    typeof config.inappV2WbsTimeoutMs === "number" && Number.isFinite(config.inappV2WbsTimeoutMs)
+      ? Math.max(20, Math.min(2000, Math.floor(config.inappV2WbsTimeoutMs)))
+      : 80;
+  const inappV2CacheTtlSeconds =
+    typeof config.inappV2CacheTtlSeconds === "number" && Number.isFinite(config.inappV2CacheTtlSeconds)
+      ? Math.max(1, Math.min(86_400, Math.floor(config.inappV2CacheTtlSeconds)))
+      : 60;
+  const inappV2StaleTtlSeconds =
+    typeof config.inappV2StaleTtlSeconds === "number" && Number.isFinite(config.inappV2StaleTtlSeconds)
+      ? Math.max(0, Math.min(604_800, Math.floor(config.inappV2StaleTtlSeconds)))
+      : 1800;
+  const inappV2CacheContextKeys =
+    Array.isArray(config.inappV2CacheContextKeys) && config.inappV2CacheContextKeys.length > 0
+      ? config.inappV2CacheContextKeys
+      : ["locale", "deviceType"];
+  const inappV2BodyLimitBytes =
+    typeof config.inappV2BodyLimitBytes === "number" && Number.isFinite(config.inappV2BodyLimitBytes)
+      ? Math.max(1024, Math.min(512 * 1024, Math.floor(config.inappV2BodyLimitBytes)))
+      : 64 * 1024;
+  const inappV2RateLimitPerAppKey =
+    typeof config.inappV2RateLimitPerAppKey === "number" && Number.isFinite(config.inappV2RateLimitPerAppKey)
+      ? Math.max(10, Math.floor(config.inappV2RateLimitPerAppKey))
+      : 3000;
+  const inappV2RateLimitWindowMs =
+    typeof config.inappV2RateLimitWindowMs === "number" && Number.isFinite(config.inappV2RateLimitWindowMs)
+      ? Math.max(100, Math.floor(config.inappV2RateLimitWindowMs))
+      : 1000;
+  const inappEventsStreamKey = config.inappEventsStreamKey ?? "inapp_events";
+  const inappEventsStreamGroup = config.inappEventsStreamGroup ?? "inapp_events_group";
+  const inappEventsConsumerName = config.inappEventsConsumerName ?? "api-1";
+  const inappEventsStreamMaxLen =
+    typeof config.inappEventsStreamMaxLen === "number" && Number.isFinite(config.inappEventsStreamMaxLen)
+      ? Math.max(1000, Math.floor(config.inappEventsStreamMaxLen))
+      : 200000;
+  const inappEventsWorkerEnabled = config.inappEventsWorkerEnabled !== false;
+  const inappEventsWorkerBatchSize =
+    typeof config.inappEventsWorkerBatchSize === "number" && Number.isFinite(config.inappEventsWorkerBatchSize)
+      ? Math.max(1, Math.min(2000, Math.floor(config.inappEventsWorkerBatchSize)))
+      : 500;
+  const inappEventsWorkerBlockMs =
+    typeof config.inappEventsWorkerBlockMs === "number" && Number.isFinite(config.inappEventsWorkerBlockMs)
+      ? Math.max(0, Math.floor(config.inappEventsWorkerBlockMs))
+      : 1000;
+  const inappEventsWorkerPollMs =
+    typeof config.inappEventsWorkerPollMs === "number" && Number.isFinite(config.inappEventsWorkerPollMs)
+      ? Math.max(100, Math.floor(config.inappEventsWorkerPollMs))
+      : 250;
+  const inappEventsWorkerReclaimIdleMs =
+    typeof config.inappEventsWorkerReclaimIdleMs === "number" && Number.isFinite(config.inappEventsWorkerReclaimIdleMs)
+      ? Math.max(1000, Math.floor(config.inappEventsWorkerReclaimIdleMs))
+      : 15000;
 
   await app.register(cors, { origin: true });
 
@@ -1131,6 +1184,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     deps.dlqProvider ??
     (hasDlqStorage ? createDbDlqProvider(prisma as PrismaClient) : createNoopDlqProvider());
   let dlqWorker: ReturnType<typeof createDlqWorker> | null = null;
+  let inappEventsWorker: ReturnType<typeof createInAppEventsWorker> | null = null;
 
   const now = deps.now ?? (() => new Date());
   const stackNowMs = deps.stackNowMs;
@@ -1298,6 +1352,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   app.addHook("onClose", async () => {
     dlqWorker?.stop();
+    inappEventsWorker?.stop();
   });
 
   app.addHook("onClose", async () => {
@@ -1417,10 +1472,40 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     app.log.info({ dlqPollMs, dlqDueLimit }, "DLQ worker started");
   }
 
+  inappEventsWorker = createInAppEventsWorker({
+    cache,
+    prisma,
+    dlq: dlqProvider,
+    logger: app.log,
+    config: {
+      enabled: inappEventsWorkerEnabled,
+      streamKey: inappEventsStreamKey,
+      streamGroup: inappEventsStreamGroup,
+      consumerName: inappEventsConsumerName,
+      batchSize: inappEventsWorkerBatchSize,
+      blockMs: inappEventsWorkerBlockMs,
+      pollMs: inappEventsWorkerPollMs,
+      reclaimIdleMs: inappEventsWorkerReclaimIdleMs
+    }
+  });
+  if (inappEventsWorkerEnabled && cache.enabled) {
+    inappEventsWorker.start();
+    app.log.info(
+      {
+        streamKey: inappEventsStreamKey,
+        group: inappEventsStreamGroup,
+        consumer: inappEventsConsumerName,
+        batchSize: inappEventsWorkerBatchSize
+      },
+      "In-app events worker started"
+    );
+  }
+
   await registerInAppRoutes({
     app,
     prisma,
     dlq: dlqProvider,
+    cache,
     meiro,
     wbsAdapter,
     now,
@@ -1431,7 +1516,21 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     createRequestId,
     fetchActiveWbsInstance,
     fetchActiveWbsMapping,
-    redactSensitiveFields
+    redactSensitiveFields,
+    inappV2: {
+      wbsTimeoutMs: inappV2WbsTimeoutMs,
+      cacheTtlSeconds: inappV2CacheTtlSeconds,
+      staleTtlSeconds: inappV2StaleTtlSeconds,
+      cacheContextKeys: inappV2CacheContextKeys,
+      bodyLimitBytes: inappV2BodyLimitBytes,
+      rateLimitPerAppKey: inappV2RateLimitPerAppKey,
+      rateLimitWindowMs: inappV2RateLimitWindowMs
+    },
+    eventsStream: {
+      streamKey: inappEventsStreamKey,
+      streamMaxLen: inappEventsStreamMaxLen
+    },
+    getInappEventsWorkerStatus: () => inappEventsWorker?.getStatus() ?? null
   });
 
   await registerCacheRoutes({

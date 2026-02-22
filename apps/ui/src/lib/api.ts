@@ -80,6 +80,59 @@ export type DlqMessage = {
   dueNow: boolean;
 };
 
+export type InAppV2DecideResponse = {
+  show: boolean;
+  placement: string;
+  templateId: string;
+  ttl_seconds: number;
+  tracking: {
+    campaign_id: string;
+    message_id: string;
+    variant_id: string;
+  };
+  payload: Record<string, unknown>;
+  debug: {
+    cache: {
+      hit: boolean;
+      servedStale: boolean;
+    };
+    latencyMs: {
+      total: number;
+      wbs: number;
+      engine: number;
+    };
+    fallbackReason?: string;
+  };
+};
+
+export type InAppV2EventsMonitorResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  stream: {
+    key: string;
+    length: number;
+    pending: number;
+    lag: number | null;
+  };
+  worker: {
+    enabled: boolean;
+    running: boolean;
+    streamKey: string;
+    streamGroup: string;
+    consumerName: string;
+    batchSize: number;
+    blockMs: number;
+    pollMs: number;
+    reclaimIdleMs: number;
+    processed: number;
+    inserted: number;
+    failed: number;
+    dlqEnqueued: number;
+    lastBatchSize: number;
+    lastFlushAt: string | null;
+    lastError: string | null;
+  } | null;
+};
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   if (!headers.has("Content-Type") && init?.body) {
@@ -373,6 +426,19 @@ export const apiClient = {
         }),
       list: (params: { campaignKey?: string; messageId?: string; profileId?: string; from?: string; to?: string; limit?: number } = {}) =>
         apiFetch<{ items: InAppEvent[] }>(`/v1/inapp/events${toQuery(params)}`)
+    },
+    v2: {
+      decide: (input: Record<string, unknown>) =>
+        apiFetch<InAppV2DecideResponse>(`/v2/inapp/decide`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      ingestEvent: (input: Record<string, unknown>) =>
+        apiFetch<{ status: "accepted"; stream: string; eventId: string; contextTruncated: boolean }>(`/v2/inapp/events`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      monitor: () => apiFetch<InAppV2EventsMonitorResponse>(`/v2/inapp/events/monitor`)
     },
     reports: {
       overview: (params: { from?: string; to?: string; appKey?: string; placement?: string; campaignKey?: string } = {}) =>

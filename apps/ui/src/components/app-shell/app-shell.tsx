@@ -52,7 +52,9 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/engagement/inapp/placements", label: "Placements" },
       { href: "/engagement/inapp/templates", label: "Templates" },
       { href: "/engagement/inapp/reports", label: "Reports" },
-      { href: "/engagement/inapp/events", label: "Events" }
+      { href: "/engagement/inapp/events", label: "Events" },
+      { href: "/engagement/inapp/decide-debugger", label: "Decide Debugger" },
+      { href: "/engagement/inapp/events-monitor", label: "Events Monitor" }
     ]
   },
   {

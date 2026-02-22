@@ -8,6 +8,40 @@ export interface JsonCache {
   del(key: string | string[]): Promise<number>;
   lock(key: string, ttlMs: number): Promise<CacheLock | null>;
   scanKeys(pattern: string): Promise<string[]>;
+  xadd?(stream: string, fields: Record<string, string>, options?: { maxLen?: number }): Promise<string | null>;
+  xgroupCreate?(stream: string, group: string, options?: { startId?: string; mkstream?: boolean }): Promise<"OK" | "BUSYGROUP" | null>;
+  xreadgroup?(input: {
+    stream: string;
+    group: string;
+    consumer: string;
+    count?: number;
+    blockMs?: number;
+    id?: string;
+  }): Promise<Array<{ id: string; fields: Record<string, string> }>>;
+  xack?(stream: string, group: string, ids: string[]): Promise<number>;
+  xpending?(stream: string, group: string): Promise<{
+    count: number;
+    smallestId: string | null;
+    largestId: string | null;
+    consumers: Array<{ name: string; pending: number }>;
+  } | null>;
+  xpendingRange?(input: {
+    stream: string;
+    group: string;
+    start?: string;
+    end?: string;
+    count: number;
+    consumer?: string;
+  }): Promise<Array<{ id: string; consumer: string; idleMs: number; deliveries: number }>>;
+  xclaim?(input: {
+    stream: string;
+    group: string;
+    consumer: string;
+    minIdleMs: number;
+    ids: string[];
+  }): Promise<Array<{ id: string; fields: Record<string, string> }>>;
+  xlen?(stream: string): Promise<number>;
+  xinfoGroups?(stream: string): Promise<Array<Record<string, string | number | null>>>;
   quit(): Promise<void>;
 }
 
@@ -127,6 +161,69 @@ class NoopCache implements JsonCache {
     return [];
   }
 
+  async xadd(_stream: string, _fields: Record<string, string>, _options?: { maxLen?: number }): Promise<string | null> {
+    return null;
+  }
+
+  async xgroupCreate(
+    _stream: string,
+    _group: string,
+    _options?: { startId?: string; mkstream?: boolean }
+  ): Promise<"OK" | "BUSYGROUP" | null> {
+    return null;
+  }
+
+  async xreadgroup(_input: {
+    stream: string;
+    group: string;
+    consumer: string;
+    count?: number;
+    blockMs?: number;
+    id?: string;
+  }): Promise<Array<{ id: string; fields: Record<string, string> }>> {
+    return [];
+  }
+
+  async xack(_stream: string, _group: string, _ids: string[]): Promise<number> {
+    return 0;
+  }
+
+  async xpending(
+    _stream: string,
+    _group: string
+  ): Promise<{ count: number; smallestId: string | null; largestId: string | null; consumers: Array<{ name: string; pending: number }> } | null> {
+    return null;
+  }
+
+  async xpendingRange(_input: {
+    stream: string;
+    group: string;
+    start?: string;
+    end?: string;
+    count: number;
+    consumer?: string;
+  }): Promise<Array<{ id: string; consumer: string; idleMs: number; deliveries: number }>> {
+    return [];
+  }
+
+  async xclaim(_input: {
+    stream: string;
+    group: string;
+    consumer: string;
+    minIdleMs: number;
+    ids: string[];
+  }): Promise<Array<{ id: string; fields: Record<string, string> }>> {
+    return [];
+  }
+
+  async xlen(_stream: string): Promise<number> {
+    return 0;
+  }
+
+  async xinfoGroups(_stream: string): Promise<Array<Record<string, string | number | null>>> {
+    return [];
+  }
+
   async quit(): Promise<void> {}
 }
 
@@ -215,6 +312,32 @@ class SocketRedisCache implements JsonCache {
     }
   }
 
+  private parseStreamEntries(raw: RedisResponse): Array<{ id: string; fields: Record<string, string> }> {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    const entries: Array<{ id: string; fields: Record<string, string> }> = [];
+    for (const item of raw) {
+      if (!Array.isArray(item) || item.length < 2) {
+        continue;
+      }
+      const [idRaw, fieldsRaw] = item;
+      if (typeof idRaw !== "string" || !Array.isArray(fieldsRaw)) {
+        continue;
+      }
+      const fields: Record<string, string> = {};
+      for (let index = 0; index < fieldsRaw.length; index += 2) {
+        const key = fieldsRaw[index];
+        const value = fieldsRaw[index + 1];
+        if (typeof key === "string" && typeof value === "string") {
+          fields[key] = value;
+        }
+      }
+      entries.push({ id: idRaw, fields });
+    }
+    return entries;
+  }
+
   async getJson<T>(key: string): Promise<T | null> {
     const response = await this.command(["GET", key]);
     if (typeof response !== "string") {
@@ -275,6 +398,218 @@ class SocketRedisCache implements JsonCache {
       }
     } while (cursor !== "0");
     return keys;
+  }
+
+  async xadd(stream: string, fields: Record<string, string>, options?: { maxLen?: number }): Promise<string | null> {
+    const args: string[] = ["XADD", stream];
+    if (options?.maxLen && Number.isFinite(options.maxLen) && options.maxLen > 0) {
+      args.push("MAXLEN", "~", String(Math.floor(options.maxLen)));
+    }
+    args.push("*");
+    for (const [field, value] of Object.entries(fields)) {
+      args.push(field, value);
+    }
+    const response = await this.command(args);
+    return typeof response === "string" ? response : null;
+  }
+
+  async xgroupCreate(
+    stream: string,
+    group: string,
+    options?: { startId?: string; mkstream?: boolean }
+  ): Promise<"OK" | "BUSYGROUP" | null> {
+    const args = ["XGROUP", "CREATE", stream, group, options?.startId ?? "$"];
+    if (options?.mkstream ?? true) {
+      args.push("MKSTREAM");
+    }
+
+    try {
+      const responses = await this.exec([args]);
+      const [first] = responses;
+      if (first === "OK") {
+        return "OK";
+      }
+      if (first instanceof Error && first.message.toUpperCase().includes("BUSYGROUP")) {
+        return "BUSYGROUP";
+      }
+      if (first instanceof Error) {
+        throw first;
+      }
+      return null;
+    } catch (error) {
+      if (error instanceof Error && error.message.toUpperCase().includes("BUSYGROUP")) {
+        return "BUSYGROUP";
+      }
+      this.onError?.("Redis XGROUP CREATE failed", error);
+      return null;
+    }
+  }
+
+  async xreadgroup(input: {
+    stream: string;
+    group: string;
+    consumer: string;
+    count?: number;
+    blockMs?: number;
+    id?: string;
+  }): Promise<Array<{ id: string; fields: Record<string, string> }>> {
+    const args = [
+      "XREADGROUP",
+      "GROUP",
+      input.group,
+      input.consumer,
+      "COUNT",
+      String(Math.max(1, Math.floor(input.count ?? 100)))
+    ];
+    if (typeof input.blockMs === "number" && Number.isFinite(input.blockMs) && input.blockMs >= 0) {
+      args.push("BLOCK", String(Math.floor(input.blockMs)));
+    }
+    args.push("STREAMS", input.stream, input.id ?? ">");
+    const response = await this.command(args);
+    if (!Array.isArray(response) || response.length === 0) {
+      return [];
+    }
+    const firstStream = response[0];
+    if (!Array.isArray(firstStream) || firstStream.length < 2) {
+      return [];
+    }
+    const entriesRaw = firstStream[1];
+    if (entriesRaw === undefined) {
+      return [];
+    }
+    return this.parseStreamEntries(entriesRaw);
+  }
+
+  async xack(stream: string, group: string, ids: string[]): Promise<number> {
+    if (ids.length === 0) {
+      return 0;
+    }
+    const response = await this.command(["XACK", stream, group, ...ids]);
+    return typeof response === "number" ? response : 0;
+  }
+
+  async xpending(
+    stream: string,
+    group: string
+  ): Promise<{ count: number; smallestId: string | null; largestId: string | null; consumers: Array<{ name: string; pending: number }> } | null> {
+    const response = await this.command(["XPENDING", stream, group]);
+    if (!Array.isArray(response) || response.length < 4) {
+      return null;
+    }
+    const [countRaw, smallestRaw, largestRaw, consumersRaw] = response;
+    const consumers: Array<{ name: string; pending: number }> = [];
+    if (Array.isArray(consumersRaw)) {
+      for (const consumerRaw of consumersRaw) {
+        if (!Array.isArray(consumerRaw) || consumerRaw.length < 2) {
+          continue;
+        }
+        const [nameRaw, pendingRaw] = consumerRaw;
+        if (typeof nameRaw === "string" && typeof pendingRaw === "number") {
+          consumers.push({ name: nameRaw, pending: pendingRaw });
+        }
+      }
+    }
+    return {
+      count: typeof countRaw === "number" ? countRaw : 0,
+      smallestId: typeof smallestRaw === "string" ? smallestRaw : null,
+      largestId: typeof largestRaw === "string" ? largestRaw : null,
+      consumers
+    };
+  }
+
+  async xpendingRange(input: {
+    stream: string;
+    group: string;
+    start?: string;
+    end?: string;
+    count: number;
+    consumer?: string;
+  }): Promise<Array<{ id: string; consumer: string; idleMs: number; deliveries: number }>> {
+    const args = [
+      "XPENDING",
+      input.stream,
+      input.group,
+      input.start ?? "-",
+      input.end ?? "+",
+      String(Math.max(1, Math.floor(input.count)))
+    ];
+    if (input.consumer) {
+      args.push(input.consumer);
+    }
+    const response = await this.command(args);
+    if (!Array.isArray(response)) {
+      return [];
+    }
+    const items: Array<{ id: string; consumer: string; idleMs: number; deliveries: number }> = [];
+    for (const row of response) {
+      if (!Array.isArray(row) || row.length < 4) {
+        continue;
+      }
+      const [idRaw, consumerRaw, idleRaw, deliveriesRaw] = row;
+      if (typeof idRaw === "string" && typeof consumerRaw === "string") {
+        items.push({
+          id: idRaw,
+          consumer: consumerRaw,
+          idleMs: typeof idleRaw === "number" ? idleRaw : 0,
+          deliveries: typeof deliveriesRaw === "number" ? deliveriesRaw : 0
+        });
+      }
+    }
+    return items;
+  }
+
+  async xclaim(input: {
+    stream: string;
+    group: string;
+    consumer: string;
+    minIdleMs: number;
+    ids: string[];
+  }): Promise<Array<{ id: string; fields: Record<string, string> }>> {
+    if (input.ids.length === 0) {
+      return [];
+    }
+    const response = await this.command([
+      "XCLAIM",
+      input.stream,
+      input.group,
+      input.consumer,
+      String(Math.max(0, Math.floor(input.minIdleMs))),
+      ...input.ids
+    ]);
+    return this.parseStreamEntries(response);
+  }
+
+  async xlen(stream: string): Promise<number> {
+    const response = await this.command(["XLEN", stream]);
+    return typeof response === "number" ? response : 0;
+  }
+
+  async xinfoGroups(stream: string): Promise<Array<Record<string, string | number | null>>> {
+    const response = await this.command(["XINFO", "GROUPS", stream]);
+    if (!Array.isArray(response)) {
+      return [];
+    }
+    const groups: Array<Record<string, string | number | null>> = [];
+    for (const row of response) {
+      if (!Array.isArray(row)) {
+        continue;
+      }
+      const item: Record<string, string | number | null> = {};
+      for (let index = 0; index < row.length; index += 2) {
+        const key = row[index];
+        const value = row[index + 1];
+        if (typeof key !== "string") {
+          continue;
+        }
+        if (typeof value === "string" || typeof value === "number") {
+          item[key] = value;
+        } else {
+          item[key] = null;
+        }
+      }
+      groups.push(item);
+    }
+    return groups;
   }
 
   async quit(): Promise<void> {
