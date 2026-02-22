@@ -10,7 +10,7 @@
     "test": "vitest run",
     "bench:decide": "tsx scripts/bench-decide.ts",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate": "sh -c 'set -a; [ -f ../../.env ] && . ../../.env; set +a; prisma migrate deploy'",
     "prisma:seed": "tsx prisma/seed.ts",
     "start:docker": "prisma migrate deploy && prisma generate && tsx prisma/seed.ts && tsx src/index.ts"
   },

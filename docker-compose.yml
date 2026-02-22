@@ -11,6 +11,21 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d decisioning"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   api:
     build:
@@ -23,10 +38,20 @@ services:
       API_WRITE_KEY: local-write-key
       PROTECT_DECIDE: "false"
       MEIRO_MODE: mock
+      REDIS_URL: redis://redis:6379
+      REALTIME_CACHE_TTL_SECONDS: 60
+      PROFILE_CACHE_TTL_SECONDS: 30
       NEXT_PUBLIC_API_BASE_URL: http://api:3001
       NEXT_PUBLIC_API_KEY: local-write-key
+      DECISION_DEFAULT_TIMEOUT_MS: 120
+      DECISION_DEFAULT_WBS_TIMEOUT_MS: 80
+      DECISION_DEFAULT_CACHE_TTL_SECONDS: 60
+      DECISION_DEFAULT_STALE_TTL_SECONDS: 1800
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "3001:3001"
 
@@ -43,7 +68,8 @@ services:
       NEXT_PUBLIC_API_KEY: local-write-key
       PORT: 3000
     depends_on:
-      - api
+      api:
+        condition: service_started
     ports:
       - "3000:3000"
 

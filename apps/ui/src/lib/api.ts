@@ -335,6 +335,144 @@ export const apiClient = {
         apiFetchText(`/v1/inapp/reports/export.csv${toQuery(params)}`)
     }
   },
+  execution: {
+    cache: {
+      stats: () =>
+        apiFetch<{
+          environment: "DEV" | "STAGE" | "PROD";
+          redisEnabled: boolean;
+          ttlSecondsDefault: number;
+          importantContextKeys: string[];
+          hits: number;
+          misses: number;
+          hitRate: number;
+        }>(`/v1/cache/stats`),
+      invalidate: (input: {
+        scope: "profile" | "lookup" | "prefix";
+        profileId?: string;
+        lookup?: { attribute: string; value: string };
+        prefix?: string;
+        reasons?: string[];
+        alsoExpireDecisionResults?: boolean;
+      }) =>
+        apiFetch<{ status: string; deletedKeys: number; expiredResults: number }>(`/v1/cache/invalidate`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    },
+    precompute: {
+      create: (input: {
+        runKey: string;
+        mode: "decision" | "stack";
+        key: string;
+        cohort:
+          | { type: "profiles"; profiles: string[] }
+          | { type: "lookups"; lookups: Array<{ attribute: string; value: string }> }
+          | { type: "segment"; segment: { attribute: string; value: string } };
+        context?: Record<string, unknown>;
+        ttlSecondsDefault?: number;
+        overwrite?: boolean;
+      }) =>
+        apiFetch<{ status: string; runKey: string }>(`/v1/precompute`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      listRuns: (params: { status?: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELED"; limit?: number } = {}) =>
+        apiFetch<{
+          items: Array<{
+            runKey: string;
+            mode: "decision" | "stack";
+            key: string;
+            status: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELED";
+            total: number;
+            processed: number;
+            succeeded: number;
+            noop: number;
+            suppressed: number;
+            errors: number;
+            startedAt: string | null;
+            finishedAt: string | null;
+            createdAt: string;
+            parameters: unknown;
+          }>;
+        }>(`/v1/precompute/runs${toQuery(params)}`),
+      getRun: (runKey: string) =>
+        apiFetch<{
+          item: {
+            runKey: string;
+            mode: "decision" | "stack";
+            key: string;
+            status: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELED";
+            total: number;
+            processed: number;
+            succeeded: number;
+            noop: number;
+            suppressed: number;
+            errors: number;
+            startedAt: string | null;
+            finishedAt: string | null;
+            createdAt: string;
+            parameters: unknown;
+          };
+        }>(`/v1/precompute/runs/${runKey}`),
+      listResults: (runKey: string, params: { status?: "READY" | "SUPPRESSED" | "NOOP" | "ERROR"; limit?: number; cursor?: string } = {}) =>
+        apiFetch<{
+          items: Array<{
+            id: string;
+            runKey: string;
+            decisionKey: string | null;
+            stackKey: string | null;
+            profileId: string | null;
+            lookupAttribute: string | null;
+            lookupValue: string | null;
+            actionType: string;
+            payload: Record<string, unknown>;
+            reasonCode: string | null;
+            status: "READY" | "SUPPRESSED" | "NOOP" | "ERROR";
+            errorMessage: string | null;
+            expiresAt: string;
+            createdAt: string;
+          }>;
+          nextCursor: string | null;
+        }>(`/v1/precompute/runs/${runKey}/results${toQuery(params)}`),
+      deleteRun: (runKey: string) => apiFetch<{ status: string; runKey: string }>(`/v1/precompute/runs/${runKey}`, { method: "DELETE" })
+    },
+    results: {
+      latest: (params: {
+        mode: "decision" | "stack";
+        key: string;
+        profileId?: string;
+        lookupAttribute?: string;
+        lookupValue?: string;
+      }) => apiFetch<{ item: Record<string, unknown> | null }>(`/v1/results/latest${toQuery(params)}`),
+      cleanup: (olderThanDays?: number) =>
+        apiFetch<{ status: string; deleted: number; olderThanDays: number }>(`/v1/results/cleanup`, {
+          method: "POST",
+          body: JSON.stringify(olderThanDays ? { olderThanDays } : {})
+        })
+    },
+    webhooks: {
+      getRules: () => apiFetch<{ rules: Array<Record<string, unknown>> }>(`/v1/settings/webhook-rules`),
+      saveRules: (rules: Array<Record<string, unknown>>) =>
+        apiFetch<{ rules: Array<Record<string, unknown>> }>(`/v1/settings/webhook-rules`, {
+          method: "PUT",
+          body: JSON.stringify({ rules })
+        }),
+      triggerPipesEvent: (input: {
+        eventType: string;
+        profileId?: string;
+        lookup?: { attribute: string; value: string };
+        context?: Record<string, unknown>;
+      }) =>
+        apiFetch<{ status: string; matchedRules: number; deletedKeys?: number; expiredResults?: number; triggeredRuns?: string[] }>(
+          `/v1/webhooks/pipes`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        )
+    }
+  },
   settings: {
     getWbs: () => apiFetch<{ item: WbsInstanceSettings | null }>(`/v1/settings/wbs`),
     saveWbs: (input: Record<string, unknown>) =>

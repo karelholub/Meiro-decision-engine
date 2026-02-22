@@ -159,7 +159,8 @@ describe("mapValidationErrors", () => {
     const mapped = mapValidationErrors([
       "eligibility.attributes.0.field required",
       "flow.rules.2.then required",
-      "caps.perProfilePerDay must be positive"
+      "caps.perProfilePerDay must be positive",
+      "performance.timeoutMs must be less than 5000"
     ]);
 
     expect(mapped[0]?.step).toBe("eligibility");
@@ -169,5 +170,6 @@ describe("mapValidationErrors", () => {
     expect(mapped[1]?.fieldLabel).toContain("Rule #3");
 
     expect(mapped[2]?.step).toBe("guardrails");
+    expect(mapped[3]?.step).toBe("fallback");
   });
 });

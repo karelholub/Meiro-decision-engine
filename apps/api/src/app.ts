@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import { Environment, Prisma, PrismaClient } from "@prisma/client";
@@ -12,6 +12,7 @@ import {
   validateDecisionDefinition,
   validateDecisionStackDefinition,
   type DecisionDefinition,
+  type DecisionOutput,
   type DecisionStackDefinition,
   type DecisionStatus
 } from "@decisioning/dsl";
@@ -37,6 +38,20 @@ import { z } from "zod";
 import { readConfig, type AppConfig } from "./config";
 import { seedMockProfiles } from "./data/mockProfiles";
 import { registerInAppRoutes } from "./inapp";
+import { createCache, type JsonCache } from "./lib/cache";
+import {
+  buildProfileCacheKey,
+  buildRealtimeCacheKey,
+  buildRealtimeLockKey,
+  sha256,
+  stableStringify
+} from "./lib/cacheKey";
+import { deriveDecisionRequiredAttributes, deriveStackRequiredAttributes } from "./lib/requiredAttributes";
+import { isTimeoutError, withTimeout } from "./lib/timeout";
+import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
+import { registerCacheRoutes } from "./routes/cache";
+import { registerPrecomputeRoutes } from "./routes/precompute";
+import { registerWebhooksRoutes } from "./routes/webhooks";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -51,9 +66,11 @@ export interface BuildAppDeps {
   prisma?: PrismaClient;
   meiroAdapter?: MeiroAdapter;
   wbsAdapter?: WbsLookupAdapter;
+  cache?: JsonCache;
   config?: AppConfig;
   now?: () => Date;
   stackNowMs?: () => number;
+  segmentResolver?: SegmentResolver;
   policyHook?: PolicyHook;
   rankerHook?: RankerHook;
 }
@@ -74,10 +91,15 @@ const decideBodySchema = z
         now: z.string().datetime().optional(),
         channel: z.string().optional(),
         device: z.string().optional(),
+        deviceType: z.string().optional(),
         locale: z.string().optional(),
+        appKey: z.string().optional(),
+        placement: z.string().optional(),
+        policyKey: z.string().optional(),
         requestId: z.string().optional(),
         sessionId: z.string().optional()
       })
+      .passthrough()
       .optional(),
     debug: z.boolean().optional()
   })
@@ -203,10 +225,15 @@ const decideStackBodySchema = z
         now: z.string().datetime().optional(),
         channel: z.string().optional(),
         device: z.string().optional(),
+        deviceType: z.string().optional(),
         locale: z.string().optional(),
+        appKey: z.string().optional(),
+        placement: z.string().optional(),
+        policyKey: z.string().optional(),
         requestId: z.string().optional(),
         sessionId: z.string().optional()
       })
+      .passthrough()
       .optional(),
     debug: z.boolean().optional()
   })
@@ -285,8 +312,149 @@ const buildResponseError = (reply: FastifyReply, statusCode: number, error: stri
 };
 
 const hashSha256 = (value: string): string => {
-  return createHash("sha256").update(value).digest("hex");
+  return sha256(value);
 };
+
+const pickImportantContext = (
+  context: Record<string, unknown> | undefined,
+  keys: string[] | undefined
+): Record<string, unknown> => {
+  if (!context || !Array.isArray(keys) || keys.length === 0) {
+    return {};
+  }
+  const selected: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(context, key)) {
+      selected[key] = context[key];
+    }
+  }
+  return selected;
+};
+
+const computeVersionChecksum = (value: unknown): string => {
+  return sha256(stableStringify(value));
+};
+
+const DECISION_CACHE_CONTEXT_DEFAULT_KEYS = ["appKey", "placement"];
+const DECISION_CACHE_MODE_VALUES = ["disabled", "normal", "stale_if_error", "stale_while_revalidate"] as const;
+type DecisionCacheMode = (typeof DECISION_CACHE_MODE_VALUES)[number];
+
+interface DecisionReliabilityDefaults {
+  timeoutMs: number;
+  wbsTimeoutMs: number;
+  cacheTtlSeconds: number;
+  staleTtlSeconds: number;
+}
+
+interface DecisionReliabilityConfig {
+  performance: {
+    timeoutMs: number;
+    wbsTimeoutMs: number;
+    wbsTimeoutClamped: boolean;
+  };
+  cachePolicy: {
+    mode: DecisionCacheMode;
+    ttlSeconds: number;
+    staleTtlSeconds: number;
+    keyContextAllowlist: string[];
+  };
+  fallback: {
+    preferStaleCache: boolean;
+    defaultOutput: string;
+    onTimeout?: {
+      actionType: DecisionOutput["actionType"];
+      payload: Record<string, unknown>;
+      ttl_seconds?: number;
+      tracking?: Record<string, unknown>;
+    };
+    onError?: {
+      actionType: DecisionOutput["actionType"];
+      payload: Record<string, unknown>;
+      ttl_seconds?: number;
+      tracking?: Record<string, unknown>;
+    };
+  };
+}
+
+const clampInt = (value: unknown, min: number, max: number, fallback: number): number => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(value)));
+};
+
+const resolveCacheMode = (value: string | undefined): DecisionCacheMode => {
+  const normalized = value?.trim();
+  if (normalized && DECISION_CACHE_MODE_VALUES.includes(normalized as DecisionCacheMode)) {
+    return normalized as DecisionCacheMode;
+  }
+  return "normal";
+};
+
+const uniqueContextKeys = (keys: string[] | undefined, fallback: string[]): string[] => {
+  if (!Array.isArray(keys)) {
+    return [...fallback];
+  }
+  const normalized = [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
+  return normalized.length > 0 ? normalized : [...fallback];
+};
+
+const resolveDecisionReliabilityConfig = (
+  definition: DecisionDefinition,
+  defaults: DecisionReliabilityDefaults
+): DecisionReliabilityConfig => {
+  const timeoutMs = clampInt(definition.performance?.timeoutMs, 20, 5000, defaults.timeoutMs);
+  const requestedWbsTimeout = clampInt(definition.performance?.wbsTimeoutMs, 10, 4000, defaults.wbsTimeoutMs);
+  const wbsTimeoutMs = Math.min(requestedWbsTimeout, timeoutMs);
+
+  return {
+    performance: {
+      timeoutMs,
+      wbsTimeoutMs,
+      wbsTimeoutClamped: requestedWbsTimeout > timeoutMs
+    },
+    cachePolicy: {
+      mode: resolveCacheMode(definition.cachePolicy?.mode),
+      ttlSeconds: clampInt(definition.cachePolicy?.ttlSeconds, 1, 86_400, defaults.cacheTtlSeconds),
+      staleTtlSeconds: clampInt(definition.cachePolicy?.staleTtlSeconds, 0, 604_800, defaults.staleTtlSeconds),
+      keyContextAllowlist: uniqueContextKeys(
+        definition.cachePolicy?.keyContextAllowlist,
+        DECISION_CACHE_CONTEXT_DEFAULT_KEYS
+      )
+    },
+    fallback: {
+      preferStaleCache: Boolean(definition.fallback?.preferStaleCache),
+      defaultOutput: definition.fallback?.defaultOutput?.trim() || "default",
+      onTimeout: definition.fallback?.onTimeout,
+      onError: definition.fallback?.onError
+    }
+  };
+};
+
+const getFallbackOutputByKey = (definition: DecisionDefinition, key: string): DecisionOutput | null => {
+  if (!definition.outputs || typeof definition.outputs !== "object") {
+    return null;
+  }
+  const output = (definition.outputs as Record<string, unknown>)[key];
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return null;
+  }
+  const parsed = z
+    .object({
+      actionType: z.enum(["noop", "personalize", "message", "suppress"]),
+      payload: z.record(z.unknown()).default({})
+    })
+    .safeParse(output);
+  if (!parsed.success) {
+    return null;
+  }
+  return {
+    actionType: parsed.data.actionType,
+    payload: parsed.data.payload
+  };
+};
+
+const buildStaleRealtimeCacheKey = (cacheKey: string): string => `${cacheKey}:stale`;
 
 const parseDefinition = (json: unknown): DecisionDefinition => {
   return DecisionDefinitionSchema.parse(json);
@@ -457,7 +625,6 @@ const resolveEnvironment = (request: FastifyRequest, reply: FastifyReply): Envir
   return parsed.data;
 };
 
-const PROFILE_CACHE_TTL_MS = 30_000;
 const PROFILE_CACHE_MAX_ITEMS = 500;
 
 interface CachedProfileEntry {
@@ -854,6 +1021,50 @@ const buildTraceEnvelope = (input: {
 export const buildApp = async (deps: BuildAppDeps = {}) => {
   const config = deps.config ?? readConfig();
   const app = Fastify({ logger: true });
+  const realtimeCacheTtlSeconds =
+    typeof config.realtimeCacheTtlSeconds === "number" && Number.isFinite(config.realtimeCacheTtlSeconds)
+      ? Math.max(1, Math.floor(config.realtimeCacheTtlSeconds))
+      : 60;
+  const realtimeCacheLockTtlMs =
+    typeof config.realtimeCacheLockTtlMs === "number" && Number.isFinite(config.realtimeCacheLockTtlMs)
+      ? Math.max(50, Math.floor(config.realtimeCacheLockTtlMs))
+      : 3000;
+  const realtimeCacheImportantContextKeys =
+    Array.isArray(config.realtimeCacheImportantContextKeys) && config.realtimeCacheImportantContextKeys.length > 0
+      ? config.realtimeCacheImportantContextKeys
+      : ["appKey", "placement", "locale", "deviceType"];
+  const profileCacheTtlSeconds =
+    typeof config.profileCacheTtlSeconds === "number" && Number.isFinite(config.profileCacheTtlSeconds)
+      ? Math.max(1, Math.floor(config.profileCacheTtlSeconds))
+      : 30;
+  const precomputeConcurrency =
+    typeof config.precomputeConcurrency === "number" && Number.isFinite(config.precomputeConcurrency)
+      ? Math.max(1, Math.floor(config.precomputeConcurrency))
+      : 20;
+  const precomputeMaxRetries =
+    typeof config.precomputeMaxRetries === "number" && Number.isFinite(config.precomputeMaxRetries)
+      ? Math.max(0, Math.floor(config.precomputeMaxRetries))
+      : 2;
+  const precomputeLookupDelayMs =
+    typeof config.precomputeLookupDelayMs === "number" && Number.isFinite(config.precomputeLookupDelayMs)
+      ? Math.max(0, Math.floor(config.precomputeLookupDelayMs))
+      : 25;
+  const decisionDefaultTimeoutMs =
+    typeof config.decisionDefaultTimeoutMs === "number" && Number.isFinite(config.decisionDefaultTimeoutMs)
+      ? Math.max(20, Math.min(5000, Math.floor(config.decisionDefaultTimeoutMs)))
+      : 120;
+  const decisionDefaultWbsTimeoutMs =
+    typeof config.decisionDefaultWbsTimeoutMs === "number" && Number.isFinite(config.decisionDefaultWbsTimeoutMs)
+      ? Math.max(10, Math.min(4000, Math.floor(config.decisionDefaultWbsTimeoutMs)))
+      : 80;
+  const decisionDefaultCacheTtlSeconds =
+    typeof config.decisionDefaultCacheTtlSeconds === "number" && Number.isFinite(config.decisionDefaultCacheTtlSeconds)
+      ? Math.max(1, Math.min(86_400, Math.floor(config.decisionDefaultCacheTtlSeconds)))
+      : 60;
+  const decisionDefaultStaleTtlSeconds =
+    typeof config.decisionDefaultStaleTtlSeconds === "number" && Number.isFinite(config.decisionDefaultStaleTtlSeconds)
+      ? Math.max(0, Math.min(604_800, Math.floor(config.decisionDefaultStaleTtlSeconds)))
+      : 1800;
 
   await app.register(cors, { origin: true });
 
@@ -873,7 +1084,21 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       seedMockProfiles
     );
   const wbsAdapter = deps.wbsAdapter ?? new WbsMeiroAdapter();
-  const profileCache = new ProfileCache(PROFILE_CACHE_MAX_ITEMS, PROFILE_CACHE_TTL_MS);
+  const cache =
+    deps.cache ??
+    createCache({
+      redisUrl: config.redisUrl,
+      onError: (message, error) => {
+        app.log.error({ err: error }, message);
+      }
+    });
+  const profileCache = new ProfileCache(PROFILE_CACHE_MAX_ITEMS, profileCacheTtlSeconds * 1000);
+  const realtimeCacheStats = {
+    hits: 0,
+    misses: 0,
+    fallbackCount: 0,
+    staleServedCount: 0
+  };
   const activeDecisionCache = new TtlCache<CachedDecisionVersion>(10_000);
   const activeStackCache = new TtlCache<CachedStackVersion>(10_000);
   const wbsInstanceCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsInstance.findFirst>>>(10_000);
@@ -1006,11 +1231,46 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     return mapping;
   };
 
+  const fetchProfileWithCaching = async (input: {
+    environment: Environment;
+    profileId: string;
+    requiredAttributes: string[];
+  }): Promise<EngineProfile> => {
+    const profileCacheKey = buildProfileCacheKey({
+      environment: input.environment,
+      profileId: input.profileId,
+      requiredAttributes: input.requiredAttributes
+    });
+    const localCached = profileCache.get(profileCacheKey);
+    if (localCached) {
+      return localCached;
+    }
+
+    const redisCached = await cache.getJson<EngineProfile>(profileCacheKey);
+    if (redisCached) {
+      profileCache.set(profileCacheKey, redisCached);
+      return redisCached;
+    }
+
+    const profile = await meiro.getProfile(input.profileId, {
+      requiredAttributes: input.requiredAttributes
+    });
+    profileCache.set(profileCacheKey, profile);
+    if (cache.enabled) {
+      await cache.setJson(profileCacheKey, profile, profileCacheTtlSeconds);
+    }
+    return profile;
+  };
+
   if (ownsPrisma) {
     app.addHook("onClose", async () => {
       await prisma.$disconnect();
     });
   }
+
+  app.addHook("onClose", async () => {
+    await cache.quit();
+  });
 
   app.addHook("onRequest", async (request, reply) => {
     const requestId = createRequestId(request);
@@ -1019,6 +1279,16 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   const requireWriteAuth = createWriteAuth(config);
   const requireDecideAuth = createDecideAuth(config);
+  const precomputeRunner = createPrecomputeRunner({
+    app,
+    prisma,
+    logger: app.log,
+    apiWriteKey: config.apiWriteKey,
+    concurrency: precomputeConcurrency,
+    maxRetries: precomputeMaxRetries,
+    lookupDelayMs: precomputeLookupDelayMs,
+    segmentResolver: deps.segmentResolver
+  });
 
   await registerInAppRoutes({
     app,
@@ -1034,6 +1304,37 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     fetchActiveWbsInstance,
     fetchActiveWbsMapping,
     redactSensitiveFields
+  });
+
+  await registerCacheRoutes({
+    app,
+    prisma,
+    cache,
+    defaultTtlSeconds: realtimeCacheTtlSeconds,
+    importantContextKeys: realtimeCacheImportantContextKeys,
+    resolveEnvironment,
+    buildResponseError,
+    requireWriteAuth,
+    getStats: () => ({ ...realtimeCacheStats })
+  });
+
+  await registerPrecomputeRoutes({
+    app,
+    prisma,
+    runner: precomputeRunner,
+    resolveEnvironment,
+    buildResponseError,
+    requireWriteAuth
+  });
+
+  await registerWebhooksRoutes({
+    app,
+    prisma,
+    cache,
+    precomputeRunner,
+    requireWriteAuth,
+    resolveEnvironment,
+    buildResponseError
   });
 
   app.get("/health", async () => {
@@ -2479,10 +2780,109 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       return buildResponseError(reply, 500, "Active stack definition is invalid", String(error));
     }
 
-    let profile: EngineProfile;
-    let lookupSummary: Record<string, unknown> | undefined;
-    let lookupValueHash: string | null = null;
-    let lookupAttribute: string | null = null;
+    const decisionKeys = [...new Set(stackDefinition.steps.map((step) => step.decisionKey))];
+    const activeDecisions = await prisma.decisionVersion.findMany({
+      where: {
+        status: "ACTIVE",
+        decision: {
+          environment,
+          key: {
+            in: decisionKeys
+          }
+        }
+      },
+      include: {
+        decision: true
+      },
+      orderBy: [{ decisionId: "asc" }, { version: "desc" }]
+    });
+
+    const decisionsByKey: Record<string, DecisionDefinition> = {};
+    const decisionIdByKey: Record<string, string> = {};
+    for (const row of activeDecisions) {
+      if (!decisionsByKey[row.decision.key]) {
+        decisionsByKey[row.decision.key] = parseDefinition(row.definitionJson);
+        decisionIdByKey[row.decision.key] = row.decisionId;
+      }
+    }
+
+    const requiredAttributes = deriveStackRequiredAttributes(stackDefinition, decisionsByKey);
+    const versionChecksum = computeVersionChecksum({
+      stackKey: stackDefinition.key,
+      stackVersion: stackDefinition.version,
+      stack: stackDefinition,
+      decisions: activeDecisions.map((row) => ({
+        key: row.decision.key,
+        version: row.version,
+        checksum: computeVersionChecksum(row.definitionJson)
+      }))
+    });
+
+    const realtimeIdentity = parsed.data.lookup
+      ? {
+          type: "lookup" as const,
+          attribute: parsed.data.lookup.attribute,
+          value: parsed.data.lookup.value
+        }
+      : {
+          type: "profile" as const,
+          profileId: parsed.data.profileId as string
+        };
+    const realtimeCacheKey = buildRealtimeCacheKey({
+      mode: "stack",
+      environment,
+      key: stackDefinition.key,
+      versionChecksum,
+      identity: realtimeIdentity,
+      context: pickImportantContext(
+        (parsed.data.context ?? {}) as Record<string, unknown>,
+        realtimeCacheImportantContextKeys
+      ),
+      policyKey: parsed.data.context?.policyKey
+    });
+    let realtimeCacheLock: Awaited<ReturnType<typeof cache.lock>> = null;
+    if (cache.enabled) {
+      const cachedResponse = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+      if (cachedResponse) {
+        realtimeCacheStats.hits += 1;
+        request.log.info({ event: "realtime_cache", mode: "stack", status: "hit", key: realtimeCacheKey }, "cache hit");
+        return {
+          ...cachedResponse,
+          debug: {
+            ...(isPlainObject(cachedResponse.debug) ? cachedResponse.debug : {}),
+            cache: { hit: true }
+          }
+        };
+      }
+
+      realtimeCacheStats.misses += 1;
+      request.log.info({ event: "realtime_cache", mode: "stack", status: "miss", key: realtimeCacheKey }, "cache miss");
+      const lockKey = buildRealtimeLockKey(realtimeCacheKey);
+      realtimeCacheLock = await cache.lock(lockKey, realtimeCacheLockTtlMs);
+      if (!realtimeCacheLock) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          const retryHit = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+          if (retryHit) {
+            realtimeCacheStats.hits += 1;
+            request.log.info({ event: "realtime_cache", mode: "stack", status: "hit_after_wait", key: realtimeCacheKey }, "cache hit");
+            return {
+              ...retryHit,
+              debug: {
+                ...(isPlainObject(retryHit.debug) ? retryHit.debug : {}),
+                cache: { hit: true }
+              }
+            };
+          }
+        }
+      }
+    }
+
+    try {
+      let profile: EngineProfile;
+      let lookupSummary: Record<string, unknown> | undefined;
+      let lookupValueHash: string | null = null;
+      let lookupAttribute: string | null = null;
 
     if (parsed.data.lookup) {
       const activeWbsInstance = await fetchActiveWbsInstance(environment);
@@ -2536,43 +2936,14 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         : undefined;
     } else {
       const targetProfileId = parsed.data.profileId as string;
-      const cacheKey = `${environment}:${targetProfileId}`;
-      const cachedProfile = profileCache.get(cacheKey);
-      if (cachedProfile) {
-        profile = cachedProfile;
-      } else {
-        try {
-          profile = await meiro.getProfile(targetProfileId);
-          profileCache.set(cacheKey, profile);
-        } catch (error) {
-          return buildResponseError(reply, 502, "Profile fetch failed", String(error));
-        }
-      }
-    }
-
-    const decisionKeys = [...new Set(stackDefinition.steps.map((step) => step.decisionKey))];
-    const activeDecisions = await prisma.decisionVersion.findMany({
-      where: {
-        status: "ACTIVE",
-        decision: {
+      try {
+        profile = await fetchProfileWithCaching({
           environment,
-          key: {
-            in: decisionKeys
-          }
-        }
-      },
-      include: {
-        decision: true
-      },
-      orderBy: [{ decisionId: "asc" }, { version: "desc" }]
-    });
-
-    const decisionsByKey: Record<string, DecisionDefinition> = {};
-    const decisionIdByKey: Record<string, string> = {};
-    for (const row of activeDecisions) {
-      if (!decisionsByKey[row.decision.key]) {
-        decisionsByKey[row.decision.key] = parseDefinition(row.definitionJson);
-        decisionIdByKey[row.decision.key] = row.decisionId;
+          profileId: targetProfileId,
+          requiredAttributes
+        });
+      } catch (error) {
+        return buildResponseError(reply, 502, "Profile fetch failed", String(error));
       }
     }
 
@@ -2647,9 +3018,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         version: stackDefinition.version,
         totalMs: stackResult.meta.totalMs
       },
-      ...(parsed.data.debug
-        ? {
-            debug: {
+      debug: {
+        cache: { hit: false },
+        ...(parsed.data.debug
+          ? {
               exports: stackResult.exports ?? {},
               profileSummary: redactSensitiveFields({
                 profileId: profile.profileId,
@@ -2659,11 +3031,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
               }),
               ...(lookupSummary ? { lookup: lookupSummary } : {})
             }
-          }
-        : {})
+          : {})
+      }
     };
 
-    await prisma.decisionStackLog.create({
+      await prisma.decisionStackLog.create({
       data: {
         environment,
         requestId,
@@ -2690,7 +3062,31 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       }
     });
 
-    return response;
+      const responsePayload = response as Record<string, unknown>;
+      const ttlFromPayload =
+        typeof response.final.payload.ttl_seconds === "number" && response.final.payload.ttl_seconds > 0
+          ? Math.floor(response.final.payload.ttl_seconds)
+          : realtimeCacheTtlSeconds;
+      if (cache.enabled) {
+        await cache.setJson(realtimeCacheKey, responsePayload, ttlFromPayload);
+      }
+
+      return response;
+    } finally {
+      if (realtimeCacheLock) {
+        await realtimeCacheLock.release();
+      }
+    }
+  });
+
+  app.post("/v1/nba", { preHandler: requireDecideAuth }, async (request, reply) => {
+    const proxied = await (app as any).inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: request.headers as Record<string, string | string[] | undefined>,
+      payload: request.body as any
+    });
+    return reply.code(proxied.statusCode).send(proxied.json());
   });
 
   app.post("/v1/simulate", async (request, reply) => {
@@ -2779,6 +3175,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
     const requestId = parsed.data.context?.requestId ?? createRequestId(request);
     const started = process.hrtime.bigint();
+    const internalRefresh = request.headers["x-internal-refresh"] === "1";
 
     const activeVersion = await fetchActiveDecision({
       environment,
@@ -2791,17 +3188,341 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const decisionDefinition = parseDefinition(activeVersion.definitionJson);
+    const reliabilityConfig = resolveDecisionReliabilityConfig(decisionDefinition, {
+      timeoutMs: decisionDefaultTimeoutMs,
+      wbsTimeoutMs: decisionDefaultWbsTimeoutMs,
+      cacheTtlSeconds: decisionDefaultCacheTtlSeconds,
+      staleTtlSeconds: decisionDefaultStaleTtlSeconds
+    });
+    if (reliabilityConfig.performance.wbsTimeoutClamped) {
+      request.log.warn(
+        {
+          decisionKey: decisionDefinition.key,
+          timeoutMs: reliabilityConfig.performance.timeoutMs,
+          wbsTimeoutMs: reliabilityConfig.performance.wbsTimeoutMs
+        },
+        "wbsTimeoutMs exceeded timeoutMs and was clamped"
+      );
+    }
+    const requiredAttributes = deriveDecisionRequiredAttributes(decisionDefinition);
+    const versionChecksum = computeVersionChecksum({
+      decisionId: activeVersion.decisionId,
+      version: activeVersion.version,
+      definition: decisionDefinition
+    });
+    const realtimeIdentity = parsed.data.lookup
+      ? {
+          type: "lookup" as const,
+          attribute: parsed.data.lookup.attribute,
+          value: parsed.data.lookup.value
+        }
+      : {
+          type: "profile" as const,
+          profileId: parsed.data.profileId as string
+        };
+    const realtimeCacheKey = buildRealtimeCacheKey({
+      mode: "decision",
+      environment,
+      key: decisionDefinition.key,
+      versionChecksum,
+      identity: realtimeIdentity,
+      context: pickImportantContext(
+        (parsed.data.context ?? {}) as Record<string, unknown>,
+        reliabilityConfig.cachePolicy.keyContextAllowlist
+      ),
+      policyKey: parsed.data.context?.policyKey
+    });
+    const staleRealtimeCacheKey = buildStaleRealtimeCacheKey(realtimeCacheKey);
+    const cacheEnabledForDecision = cache.enabled && reliabilityConfig.cachePolicy.mode !== "disabled";
+    const canUseStaleCache =
+      cacheEnabledForDecision &&
+      reliabilityConfig.cachePolicy.mode !== "normal" &&
+      reliabilityConfig.cachePolicy.staleTtlSeconds > 0;
+
+    const logDecisionTelemetry = (input: {
+      cacheHit: boolean;
+      servedStale: boolean;
+      fallbackReason?: "WBS_TIMEOUT" | "WBS_ERROR";
+      wbsLatencyMs?: number;
+      engineLatencyMs?: number;
+    }) => {
+      const totalLatencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
+      request.log.info(
+        {
+          event: "decision_runtime",
+          decisionKey: decisionDefinition.key,
+          version: activeVersion.version,
+          cacheHit: input.cacheHit,
+          servedStale: input.servedStale,
+          fallbackReason: input.fallbackReason,
+          wbsLatencyMs: input.wbsLatencyMs ?? null,
+          engineLatencyMs: input.engineLatencyMs ?? null,
+          totalLatencyMs
+        },
+        "decision completed"
+      );
+    };
+
+    const loadOutputFallback = (): {
+      actionType: DecisionOutput["actionType"];
+      payload: Record<string, unknown>;
+      tracking?: Record<string, unknown>;
+      ttl_seconds?: number;
+    } | null => {
+      if (!decisionDefinition.fallback) {
+        return null;
+      }
+      const namedOutput = getFallbackOutputByKey(decisionDefinition, reliabilityConfig.fallback.defaultOutput);
+      if (namedOutput) {
+        return {
+          actionType: namedOutput.actionType,
+          payload: namedOutput.payload
+        };
+      }
+      return {
+        actionType: "noop",
+        payload: {}
+      };
+    };
+
+    const buildFallbackResponse = (input: {
+      reason: "WBS_TIMEOUT" | "WBS_ERROR";
+      wbsLatencyMs: number;
+      timeoutBudgetMs: number;
+    }) => {
+      const configuredFallback =
+        input.reason === "WBS_TIMEOUT" ? reliabilityConfig.fallback.onTimeout : reliabilityConfig.fallback.onError;
+      const outputFallback = loadOutputFallback();
+      const selected = configuredFallback ?? outputFallback;
+      if (!selected) {
+        return null;
+      }
+      const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
+      return {
+        requestId,
+        decisionId: activeVersion.decisionId,
+        version: activeVersion.version,
+        actionType: selected.actionType,
+        payload: selected.payload,
+        tracking: selected.tracking,
+        ttl_seconds: selected.ttl_seconds,
+        outcome: "ELIGIBLE" as const,
+        reasons: [{ code: input.reason }],
+        latencyMs,
+        trace: undefined,
+        debug: {
+          cache: {
+            hit: false,
+            servedStale: false
+          },
+          fallbackReason: input.reason,
+          wbsLatencyMs: input.wbsLatencyMs,
+          timeoutBudgetMs: input.timeoutBudgetMs
+        }
+      };
+    };
+
+    const persistFallbackLog = async (input: {
+      profileId: string;
+      response: {
+        actionType: string;
+        payload: Record<string, unknown>;
+        outcome: "ELIGIBLE";
+        reasons: Array<{ code: string; detail?: string }>;
+        latencyMs: number;
+      };
+    }) => {
+      if (internalRefresh) {
+        return;
+      }
+      await prisma.decisionLog.create({
+        data: {
+          requestId,
+          decisionId: activeVersion.decisionId,
+          version: activeVersion.version,
+          profileId: input.profileId,
+          actionType: input.response.actionType,
+          payloadJson: toInputJson(input.response.payload),
+          outcome: input.response.outcome,
+          reasonsJson: toInputJson(input.response.reasons),
+          debugTraceJson: undefined,
+          inputJson: toInputJson({
+            decisionId: parsed.data.decisionId,
+            decisionKey: parsed.data.decisionKey,
+            profileId: parsed.data.profileId,
+            lookup: parsed.data.lookup,
+            context: parsed.data.context
+          }),
+          latencyMs: input.response.latencyMs
+        }
+      });
+    };
+
+    const persistRealtimeCache = async (input: {
+      response: Record<string, unknown>;
+      ttlSeconds: number;
+    }) => {
+      if (!cacheEnabledForDecision) {
+        return;
+      }
+      await cache.setJson(realtimeCacheKey, input.response, input.ttlSeconds);
+      if (canUseStaleCache) {
+        await cache.setJson(
+          staleRealtimeCacheKey,
+          input.response,
+          input.ttlSeconds + reliabilityConfig.cachePolicy.staleTtlSeconds
+        );
+      }
+    };
+
+    let staleCachedResponse: Record<string, unknown> | null | undefined = undefined;
+    const loadStaleCachedResponse = async () => {
+      if (staleCachedResponse !== undefined) {
+        return staleCachedResponse;
+      }
+      if (!canUseStaleCache) {
+        staleCachedResponse = null;
+        return staleCachedResponse;
+      }
+      staleCachedResponse = await cache.getJson<Record<string, unknown>>(staleRealtimeCacheKey);
+      return staleCachedResponse;
+    };
+
+    const maybeServeStale = async (input: {
+      fallbackReason?: "WBS_TIMEOUT" | "WBS_ERROR";
+      wbsLatencyMs?: number;
+      timeoutBudgetMs?: number;
+    }) => {
+      const stale = await loadStaleCachedResponse();
+      if (!stale) {
+        return null;
+      }
+      realtimeCacheStats.staleServedCount += 1;
+      if (input.fallbackReason) {
+        realtimeCacheStats.fallbackCount += 1;
+      }
+      const staleResponse = {
+        ...stale,
+        debug: {
+          ...(isPlainObject(stale.debug) ? stale.debug : {}),
+          cache: {
+            hit: false,
+            servedStale: true
+          },
+          ...(input.fallbackReason
+            ? {
+                fallbackReason: input.fallbackReason,
+                wbsLatencyMs: input.wbsLatencyMs,
+                timeoutBudgetMs: input.timeoutBudgetMs
+              }
+            : {})
+        }
+      };
+      logDecisionTelemetry({
+        cacheHit: false,
+        servedStale: true,
+        fallbackReason: input.fallbackReason,
+        wbsLatencyMs: input.wbsLatencyMs
+      });
+      return staleResponse;
+    };
+
+    let realtimeCacheLock: Awaited<ReturnType<typeof cache.lock>> = null;
+    if (cacheEnabledForDecision && !internalRefresh) {
+      const cachedResponse = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+      if (cachedResponse) {
+        realtimeCacheStats.hits += 1;
+        request.log.info({ event: "realtime_cache", mode: "decision", status: "hit", key: realtimeCacheKey }, "cache hit");
+        logDecisionTelemetry({
+          cacheHit: true,
+          servedStale: false
+        });
+        return {
+          ...cachedResponse,
+          debug: {
+            ...(isPlainObject(cachedResponse.debug) ? cachedResponse.debug : {}),
+            cache: {
+              hit: true,
+              servedStale: false
+            }
+          }
+        };
+      }
+
+      realtimeCacheStats.misses += 1;
+      request.log.info({ event: "realtime_cache", mode: "decision", status: "miss", key: realtimeCacheKey }, "cache miss");
+
+      if (reliabilityConfig.cachePolicy.mode === "stale_while_revalidate") {
+        const staleResponse = await maybeServeStale({});
+        if (staleResponse) {
+          const swrLockKey = buildRealtimeLockKey(`${realtimeCacheKey}:swr`);
+          const swrLock = await cache.lock(swrLockKey, realtimeCacheLockTtlMs);
+          if (swrLock) {
+            void (async () => {
+              try {
+                await (app as any).inject({
+                  method: "POST",
+                  url: "/v1/decide",
+                  headers: {
+                    ...(request.headers as Record<string, string | string[] | undefined>),
+                    "x-internal-refresh": "1"
+                  },
+                  payload: request.body as any
+                });
+              } catch (error) {
+                request.log.warn({ err: error, decisionKey: decisionDefinition.key }, "SWR background refresh failed");
+              } finally {
+                await swrLock.release();
+              }
+            })();
+          }
+          return staleResponse;
+        }
+      }
+
+      const lockKey = buildRealtimeLockKey(realtimeCacheKey);
+      realtimeCacheLock = await cache.lock(lockKey, realtimeCacheLockTtlMs);
+      if (!realtimeCacheLock) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          const retryHit = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+          if (retryHit) {
+            realtimeCacheStats.hits += 1;
+            request.log.info(
+              { event: "realtime_cache", mode: "decision", status: "hit_after_wait", key: realtimeCacheKey },
+              "cache hit"
+            );
+            logDecisionTelemetry({
+              cacheHit: true,
+              servedStale: false
+            });
+            return {
+              ...retryHit,
+              debug: {
+                ...(isPlainObject(retryHit.debug) ? retryHit.debug : {}),
+                cache: {
+                  hit: true,
+                  servedStale: false
+                }
+              }
+            };
+          }
+        }
+      }
+    }
+
     const fallbackProfileId =
       parsed.data.profileId ?? (parsed.data.lookup ? `lookup:${parsed.data.lookup.attribute}:${parsed.data.lookup.value}` : "unknown");
 
-    const persistErrorAndReturn = async (input: {
+    try {
+      const persistErrorAndReturn = async (input: {
       code: string;
       detail: string;
-      trace?: unknown;
-      profileId?: string;
-    }) => {
-      const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
-      const reasons = [{ code: input.code, detail: input.detail }];
+        trace?: unknown;
+        profileId?: string;
+      }) => {
+        const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
+        const reasons = [{ code: input.code, detail: input.detail }];
       const traceEnvelope = parsed.data.debug
         ? buildTraceEnvelope({
             requestId,
@@ -2813,36 +3534,42 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             integration: isPlainObject(input.trace) ? (input.trace as Record<string, unknown>) : undefined
           })
         : undefined;
-      await prisma.decisionLog.create({
-        data: {
+        if (!internalRefresh) {
+          await prisma.decisionLog.create({
+            data: {
+              requestId,
+              decisionId: activeVersion.decisionId,
+              version: activeVersion.version,
+              profileId: input.profileId ?? fallbackProfileId,
+              actionType: "noop",
+              payloadJson: toInputJson({}),
+              outcome: "ERROR",
+              reasonsJson: toInputJson(reasons),
+              debugTraceJson: parsed.data.debug
+                ? traceEnvelope
+                  ? toInputJson(sanitizeDebugTraceForLog(traceEnvelope))
+                  : Prisma.JsonNull
+                : undefined,
+              inputJson: toInputJson({
+                decisionId: parsed.data.decisionId,
+                decisionKey: parsed.data.decisionKey,
+                profileId: parsed.data.profileId,
+                lookup: parsed.data.lookup,
+                context: parsed.data.context
+              }),
+              latencyMs
+            }
+          });
+        }
+
+        logDecisionTelemetry({
+          cacheHit: false,
+          servedStale: false
+        });
+        return {
           requestId,
           decisionId: activeVersion.decisionId,
           version: activeVersion.version,
-          profileId: input.profileId ?? fallbackProfileId,
-          actionType: "noop",
-          payloadJson: toInputJson({}),
-          outcome: "ERROR",
-          reasonsJson: toInputJson(reasons),
-          debugTraceJson: parsed.data.debug
-            ? traceEnvelope
-              ? toInputJson(sanitizeDebugTraceForLog(traceEnvelope))
-              : Prisma.JsonNull
-            : undefined,
-          inputJson: toInputJson({
-            decisionId: parsed.data.decisionId,
-            decisionKey: parsed.data.decisionKey,
-            profileId: parsed.data.profileId,
-            lookup: parsed.data.lookup,
-            context: parsed.data.context
-          }),
-          latencyMs
-        }
-      });
-
-      return {
-        requestId,
-        decisionId: activeVersion.decisionId,
-        version: activeVersion.version,
         actionType: "noop",
         payload: {},
         outcome: "ERROR" as const,
@@ -2852,91 +3579,196 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       };
     };
 
-    let profile: EngineProfile;
-    let lookupDebugTrace: Record<string, unknown> = {};
+      let profile: EngineProfile;
+      let lookupDebugTrace: Record<string, unknown> = {};
+      let wbsLatencyMs = 0;
 
-    if (parsed.data.lookup) {
-      const activeWbsInstance = await fetchActiveWbsInstance(environment);
+      if (parsed.data.lookup) {
+        const activeWbsInstance = await fetchActiveWbsInstance(environment);
 
-      if (!activeWbsInstance) {
-        return persistErrorAndReturn({
-          code: "WBS_INSTANCE_NOT_CONFIGURED",
-          detail: `No active WBS instance for environment ${environment}`
-        });
-      }
+        if (!activeWbsInstance) {
+          return persistErrorAndReturn({
+            code: "WBS_INSTANCE_NOT_CONFIGURED",
+            detail: `No active WBS instance for environment ${environment}`
+          });
+        }
 
-      const activeWbsMapping = await fetchActiveWbsMapping(environment);
+        const activeWbsMapping = await fetchActiveWbsMapping(environment);
 
-      if (!activeWbsMapping) {
-        return persistErrorAndReturn({
-          code: "WBS_MAPPING_NOT_CONFIGURED",
-          detail: `No active WBS mapping for environment ${environment}`
-        });
-      }
+        if (!activeWbsMapping) {
+          return persistErrorAndReturn({
+            code: "WBS_MAPPING_NOT_CONFIGURED",
+            detail: `No active WBS mapping for environment ${environment}`
+          });
+        }
 
-      let rawLookup: WbsLookupResponse;
-      try {
-        rawLookup = await wbsAdapter.lookup(
-          {
-            baseUrl: activeWbsInstance.baseUrl,
-            attributeParamName: activeWbsInstance.attributeParamName,
-            valueParamName: activeWbsInstance.valueParamName,
-            segmentParamName: activeWbsInstance.segmentParamName,
-            includeSegment: activeWbsInstance.includeSegment,
-            defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
-            timeoutMs: activeWbsInstance.timeoutMs
-          },
-          parsed.data.lookup
+        const elapsedBeforeLookupMs = Number((process.hrtime.bigint() - started) / 1000000n);
+        const timeoutBudgetMs = Math.max(
+          10,
+          Math.min(reliabilityConfig.performance.wbsTimeoutMs, reliabilityConfig.performance.timeoutMs - elapsedBeforeLookupMs)
         );
-      } catch (error) {
-        return persistErrorAndReturn({
-          code: "WBS_LOOKUP_FAILED",
-          detail: String(error),
-          trace: parsed.data.debug ? { wbsLookupError: String(error) } : undefined
-        });
-      }
+        const lookupStarted = process.hrtime.bigint();
 
-      const mappingConfig = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
-      if (!mappingConfig.success) {
-        return persistErrorAndReturn({
-          code: "WBS_MAPPING_INVALID",
-          detail: mappingConfig.error.issues.map((issue) => issue.message).join("; ")
-        });
-      }
-
-      try {
-        const mappingResult = mapWbsLookupToProfile({
-          raw: rawLookup,
-          lookup: parsed.data.lookup,
-          profileIdStrategy: activeWbsMapping.profileIdStrategy,
-          profileIdAttributeKey: activeWbsMapping.profileIdAttributeKey,
-          mapping: mappingConfig.data
-        });
-        profile = mappingResult.profile;
-        lookupDebugTrace = parsed.data.debug
-          ? {
-              rawWbsResponse: redactSensitiveFields(rawLookup),
-              mappingSummary: mappingResult.summary
-            }
-          : {};
-      } catch (error) {
-        return persistErrorAndReturn({
-          code: "WBS_MAPPING_FAILED",
-          detail: String(error),
-          trace: parsed.data.debug ? { mappingError: String(error) } : undefined
-        });
-      }
-    } else {
-      const profileId = parsed.data.profileId as string;
-      const profileCacheKey = `${environment}:${profileId}`;
-      const cached = profileCache.get(profileCacheKey);
-      if (cached) {
-        profile = cached;
-      } else {
+        let rawLookup: WbsLookupResponse;
         try {
-          profile = await meiro.getProfile(profileId);
-          profileCache.set(profileCacheKey, profile);
+          rawLookup = await withTimeout({
+            timeoutMs: timeoutBudgetMs,
+            timeoutMessage: "WBS lookup timed out",
+            task: async () =>
+              wbsAdapter.lookup(
+                {
+                  baseUrl: activeWbsInstance.baseUrl,
+                  attributeParamName: activeWbsInstance.attributeParamName,
+                  valueParamName: activeWbsInstance.valueParamName,
+                  segmentParamName: activeWbsInstance.segmentParamName,
+                  includeSegment: activeWbsInstance.includeSegment,
+                  defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
+                  timeoutMs: Math.min(activeWbsInstance.timeoutMs, timeoutBudgetMs)
+                },
+                parsed.data.lookup as { attribute: string; value: string }
+              )
+          });
         } catch (error) {
+          wbsLatencyMs = Number((process.hrtime.bigint() - lookupStarted) / 1000000n);
+          const fallbackReason: "WBS_TIMEOUT" | "WBS_ERROR" = isTimeoutError(error) ? "WBS_TIMEOUT" : "WBS_ERROR";
+          const canAttemptStale =
+            reliabilityConfig.fallback.preferStaleCache || reliabilityConfig.cachePolicy.mode === "stale_if_error";
+          if (canAttemptStale) {
+            const staleResponse = await maybeServeStale({
+              fallbackReason,
+              wbsLatencyMs,
+              timeoutBudgetMs
+            });
+            if (staleResponse) {
+              return staleResponse;
+            }
+          }
+          const fallbackResponse = buildFallbackResponse({
+            reason: fallbackReason,
+            wbsLatencyMs,
+            timeoutBudgetMs
+          });
+          if (fallbackResponse) {
+            await persistFallbackLog({
+              profileId: fallbackProfileId,
+              response: fallbackResponse
+            });
+            const ttlFromFallback =
+              typeof fallbackResponse.ttl_seconds === "number" && fallbackResponse.ttl_seconds > 0
+                ? Math.floor(fallbackResponse.ttl_seconds)
+                : reliabilityConfig.cachePolicy.ttlSeconds;
+            await persistRealtimeCache({
+              response: fallbackResponse as Record<string, unknown>,
+              ttlSeconds: ttlFromFallback
+            });
+            logDecisionTelemetry({
+              cacheHit: false,
+              servedStale: false,
+              fallbackReason,
+              wbsLatencyMs
+            });
+            realtimeCacheStats.fallbackCount += 1;
+            return fallbackResponse;
+          }
+          return persistErrorAndReturn({
+            code: "WBS_LOOKUP_FAILED",
+            detail: String(error),
+            trace: parsed.data.debug ? { wbsLookupError: String(error) } : undefined
+          });
+        }
+        wbsLatencyMs = Number((process.hrtime.bigint() - lookupStarted) / 1000000n);
+
+        const mappingConfig = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
+        if (!mappingConfig.success) {
+          return persistErrorAndReturn({
+            code: "WBS_MAPPING_INVALID",
+            detail: mappingConfig.error.issues.map((issue) => issue.message).join("; ")
+          });
+        }
+
+        try {
+          const mappingResult = mapWbsLookupToProfile({
+            raw: rawLookup,
+            lookup: parsed.data.lookup,
+            profileIdStrategy: activeWbsMapping.profileIdStrategy,
+            profileIdAttributeKey: activeWbsMapping.profileIdAttributeKey,
+            mapping: mappingConfig.data
+          });
+          profile = mappingResult.profile;
+          lookupDebugTrace = parsed.data.debug
+            ? {
+                rawWbsResponse: redactSensitiveFields(rawLookup),
+                mappingSummary: mappingResult.summary
+              }
+            : {};
+        } catch (error) {
+          return persistErrorAndReturn({
+            code: "WBS_MAPPING_FAILED",
+            detail: String(error),
+            trace: parsed.data.debug ? { mappingError: String(error) } : undefined
+          });
+        }
+      } else {
+        const profileId = parsed.data.profileId as string;
+        const elapsedBeforeProfileMs = Number((process.hrtime.bigint() - started) / 1000000n);
+        const timeoutBudgetMs = Math.max(
+          10,
+          Math.min(reliabilityConfig.performance.wbsTimeoutMs, reliabilityConfig.performance.timeoutMs - elapsedBeforeProfileMs)
+        );
+        const profileStarted = process.hrtime.bigint();
+        try {
+          profile = await withTimeout({
+            timeoutMs: timeoutBudgetMs,
+            timeoutMessage: "Profile fetch timed out",
+            task: async () =>
+              fetchProfileWithCaching({
+                environment,
+                profileId,
+                requiredAttributes
+              })
+          });
+        } catch (error) {
+          wbsLatencyMs = Number((process.hrtime.bigint() - profileStarted) / 1000000n);
+          const fallbackReason: "WBS_TIMEOUT" | "WBS_ERROR" = isTimeoutError(error) ? "WBS_TIMEOUT" : "WBS_ERROR";
+          const canAttemptStale =
+            reliabilityConfig.fallback.preferStaleCache || reliabilityConfig.cachePolicy.mode === "stale_if_error";
+          if (canAttemptStale) {
+            const staleResponse = await maybeServeStale({
+              fallbackReason,
+              wbsLatencyMs,
+              timeoutBudgetMs
+            });
+            if (staleResponse) {
+              return staleResponse;
+            }
+          }
+          const fallbackResponse = buildFallbackResponse({
+            reason: fallbackReason,
+            wbsLatencyMs,
+            timeoutBudgetMs
+          });
+          if (fallbackResponse) {
+            await persistFallbackLog({
+              profileId,
+              response: fallbackResponse
+            });
+            const ttlFromFallback =
+              typeof fallbackResponse.ttl_seconds === "number" && fallbackResponse.ttl_seconds > 0
+                ? Math.floor(fallbackResponse.ttl_seconds)
+                : reliabilityConfig.cachePolicy.ttlSeconds;
+            await persistRealtimeCache({
+              response: fallbackResponse as Record<string, unknown>,
+              ttlSeconds: ttlFromFallback
+            });
+            logDecisionTelemetry({
+              cacheHit: false,
+              servedStale: false,
+              fallbackReason,
+              wbsLatencyMs
+            });
+            realtimeCacheStats.fallbackCount += 1;
+            return fallbackResponse;
+          }
           return persistErrorAndReturn({
             code: "MEIRO_PROFILE_FETCH_FAILED",
             detail: String(error),
@@ -2944,139 +3776,143 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             profileId
           });
         }
+        wbsLatencyMs = Number((process.hrtime.bigint() - profileStarted) / 1000000n);
       }
-    }
 
-    if (deps.policyHook?.preDecision) {
-      await deps.policyHook.preDecision({ definition: decisionDefinition, profile });
-    }
+      if (deps.policyHook?.preDecision) {
+        await deps.policyHook.preDecision({ definition: decisionDefinition, profile });
+      }
 
-    const nowDate = parseDateOrNow(parsed.data.context?.now, now);
-    const dayStart = new Date(nowDate);
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const weekStart = getWeekStart(nowDate);
+      const nowDate = parseDateOrNow(parsed.data.context?.now, now);
+      const dayStart = new Date(nowDate);
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const weekStart = getWeekStart(nowDate);
 
-    const [perDay, perWeek] = await Promise.all([
-      prisma.decisionLog.count({
-        where: {
-          decisionId: activeVersion.decisionId,
-          profileId: profile.profileId,
-          outcome: "ELIGIBLE",
-          timestamp: {
-            gte: dayStart
+      const [perDay, perWeek] = await Promise.all([
+        prisma.decisionLog.count({
+          where: {
+            decisionId: activeVersion.decisionId,
+            profileId: profile.profileId,
+            outcome: "ELIGIBLE",
+            timestamp: {
+              gte: dayStart
+            }
           }
-        }
-      }),
-      prisma.decisionLog.count({
-        where: {
-          decisionId: activeVersion.decisionId,
-          profileId: profile.profileId,
-          outcome: "ELIGIBLE",
-          timestamp: {
-            gte: weekStart
+        }),
+        prisma.decisionLog.count({
+          where: {
+            decisionId: activeVersion.decisionId,
+            profileId: profile.profileId,
+            outcome: "ELIGIBLE",
+            timestamp: {
+              gte: weekStart
+            }
           }
-        }
-      })
-    ]);
+        })
+      ]);
 
-    const context: EngineContext = {
-      now: nowDate.toISOString(),
-      ...parsed.data.context,
-      requestId
-    };
+      const context: EngineContext = {
+        now: nowDate.toISOString(),
+        ...parsed.data.context,
+        requestId
+      };
 
-    let engineResult;
-    try {
-      engineResult = evaluateDecision({
-        definition: decisionDefinition,
-        profile,
-        context,
-        history: {
-          perProfilePerDay: perDay,
-          perProfilePerWeek: perWeek
-        },
-        debug: Boolean(parsed.data.debug)
-      });
-    } catch (error) {
-      const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
-      const traceEnvelope = buildTraceEnvelope({
+      let engineResult;
+      const engineStarted = process.hrtime.bigint();
+      try {
+        engineResult = evaluateDecision({
+          definition: decisionDefinition,
+          profile,
+          context,
+          history: {
+            perProfilePerDay: perDay,
+            perProfilePerWeek: perWeek
+          },
+          debug: Boolean(parsed.data.debug)
+        });
+      } catch (error) {
+        const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
+        const traceEnvelope = buildTraceEnvelope({
         requestId,
         environment,
         source: "decide",
         decisionId: activeVersion.decisionId,
         version: activeVersion.version,
         engineTrace: null,
-        integration: {
-          engineError: String(error)
-        }
-      });
-      await prisma.decisionLog.create({
-        data: {
-          requestId,
-          decisionId: activeVersion.decisionId,
-          version: activeVersion.version,
-          profileId: profile.profileId,
-          actionType: "noop",
-          payloadJson: toInputJson({}),
-          outcome: "ERROR",
-          reasonsJson: toInputJson([{ code: "ENGINE_ERROR", detail: String(error) }]),
-          debugTraceJson: toInputJson(traceEnvelope),
-          inputJson: toInputJson({
-            decisionId: parsed.data.decisionId,
-            decisionKey: parsed.data.decisionKey,
-            profileId: parsed.data.profileId,
-            lookup: parsed.data.lookup,
-            context: parsed.data.context
-          }),
-          latencyMs
-        }
-      });
-
-      return buildResponseError(reply, 500, "Decision evaluation failed", String(error));
-    }
-
-    if (deps.rankerHook?.rankCandidates && Array.isArray(engineResult.payload.candidates)) {
-      const ranked = await deps.rankerHook.rankCandidates(
-        engineResult.payload.candidates as unknown[],
-        profile,
-        context
-      );
-      engineResult = {
-        ...engineResult,
-        payload: {
-          ...engineResult.payload,
-          candidates: ranked
-        }
-      };
-    }
-
-    const policyOutcome =
-      engineResult.outcome === "ELIGIBLE"
-        ? applyPolicies({
-            policies: createDefaultPolicies(),
-            context: {
-              decisionVersion: decisionDefinition,
-              profile,
-              context,
-              evaluationDraft: {
-                actionType: engineResult.actionType,
-                payload: engineResult.payload,
-                outcome: engineResult.outcome,
-                reasons: engineResult.reasons
-              }
-            }
-          })
-        : null;
-
-    const finalResult =
-      policyOutcome && !policyOutcome.allow
-        ? {
-            ...engineResult,
-            actionType: "noop" as const,
-            payload: {},
-            outcome: "NOT_ELIGIBLE" as const,
-            reasons: [...engineResult.reasons, ...policyOutcome.reasons]
+          integration: {
+            engineError: String(error)
           }
+        });
+        if (!internalRefresh) {
+          await prisma.decisionLog.create({
+            data: {
+              requestId,
+              decisionId: activeVersion.decisionId,
+              version: activeVersion.version,
+              profileId: profile.profileId,
+              actionType: "noop",
+              payloadJson: toInputJson({}),
+              outcome: "ERROR",
+              reasonsJson: toInputJson([{ code: "ENGINE_ERROR", detail: String(error) }]),
+              debugTraceJson: toInputJson(traceEnvelope),
+              inputJson: toInputJson({
+                decisionId: parsed.data.decisionId,
+                decisionKey: parsed.data.decisionKey,
+                profileId: parsed.data.profileId,
+                lookup: parsed.data.lookup,
+                context: parsed.data.context
+              }),
+              latencyMs
+            }
+          });
+        }
+
+        return buildResponseError(reply, 500, "Decision evaluation failed", String(error));
+      }
+      const engineLatencyMs = Number((process.hrtime.bigint() - engineStarted) / 1000000n);
+
+      if (deps.rankerHook?.rankCandidates && Array.isArray(engineResult.payload.candidates)) {
+        const ranked = await deps.rankerHook.rankCandidates(
+          engineResult.payload.candidates as unknown[],
+          profile,
+          context
+        );
+        engineResult = {
+          ...engineResult,
+          payload: {
+            ...engineResult.payload,
+            candidates: ranked
+          }
+        };
+      }
+
+      const policyOutcome =
+        engineResult.outcome === "ELIGIBLE"
+          ? applyPolicies({
+              policies: createDefaultPolicies(),
+              context: {
+                decisionVersion: decisionDefinition,
+                profile,
+                context,
+                evaluationDraft: {
+                  actionType: engineResult.actionType,
+                  payload: engineResult.payload,
+                  outcome: engineResult.outcome,
+                  reasons: engineResult.reasons
+                }
+              }
+            })
+          : null;
+
+      const finalResult =
+        policyOutcome && !policyOutcome.allow
+          ? {
+              ...engineResult,
+              actionType: "noop" as const,
+              payload: {},
+              outcome: "NOT_ELIGIBLE" as const,
+              reasons: [...engineResult.reasons, ...policyOutcome.reasons]
+            }
           : policyOutcome
             ? {
                 ...engineResult,
@@ -3085,111 +3921,145 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
               }
             : engineResult;
 
-    const responseReasons = [...finalResult.reasons];
-    const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
-    if (parsed.data.debug) {
-      integrationTrace.resolvedProfile = redactSensitiveFields({
-        profileId: profile.profileId,
-        attributes: profile.attributes,
-        audiences: profile.audiences,
-        consents: profile.consents ?? []
-      });
-    }
-
-    if (finalResult.outcome !== "ERROR" && decisionDefinition.writeback?.enabled) {
-      try {
-        if (!meiro.writebackOutcome) {
-          throw new Error("Meiro adapter does not implement writebackOutcome");
-        }
-
-        await meiro.writebackOutcome(profile.profileId, {
-          mode: decisionDefinition.writeback.mode,
-          key: decisionDefinition.writeback.key,
-          ttlDays: decisionDefinition.writeback.ttlDays,
-          value: finalResult.outcome
+      const responseReasons = [...finalResult.reasons];
+      const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
+      if (parsed.data.debug) {
+        integrationTrace.resolvedProfile = redactSensitiveFields({
+          profileId: profile.profileId,
+          attributes: profile.attributes,
+          audiences: profile.audiences,
+          consents: profile.consents ?? []
         });
+      }
 
-        if (parsed.data.debug && meiro.getWritebackRecords) {
-          const records = meiro.getWritebackRecords(profile.profileId);
-          const latest = records.at(-1);
-          if (latest) {
-            integrationTrace.writeback = latest;
+      if (!internalRefresh && finalResult.outcome !== "ERROR" && decisionDefinition.writeback?.enabled) {
+        try {
+          if (!meiro.writebackOutcome) {
+            throw new Error("Meiro adapter does not implement writebackOutcome");
+          }
+
+          await meiro.writebackOutcome(profile.profileId, {
+            mode: decisionDefinition.writeback.mode,
+            key: decisionDefinition.writeback.key,
+            ttlDays: decisionDefinition.writeback.ttlDays,
+            value: finalResult.outcome
+          });
+
+          if (parsed.data.debug && meiro.getWritebackRecords) {
+            const records = meiro.getWritebackRecords(profile.profileId);
+            const latest = records.at(-1);
+            if (latest) {
+              integrationTrace.writeback = latest;
+            }
+          }
+        } catch (error) {
+          request.log.warn(
+            {
+              err: error,
+              decisionId: activeVersion.decisionId,
+              profileId: profile.profileId
+            },
+            "Writeback failed"
+          );
+          responseReasons.push({
+            code: "WRITEBACK_FAILED",
+            detail: String(error)
+          });
+
+          if (parsed.data.debug) {
+            integrationTrace.writebackError = String(error);
           }
         }
-      } catch (error) {
-        request.log.warn(
-          {
-            err: error,
+      }
+
+      if (deps.policyHook?.postDecision) {
+        await deps.policyHook.postDecision({ result: finalResult });
+      }
+
+      const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
+      const traceEnvelope = parsed.data.debug
+        ? buildTraceEnvelope({
+            requestId,
+            environment,
+            source: "decide",
+            decisionId: finalResult.decisionId,
+            version: finalResult.version,
+            engineTrace: finalResult.trace,
+            integration: integrationTrace
+          })
+        : undefined;
+
+      if (!internalRefresh) {
+        await prisma.decisionLog.create({
+          data: {
+            requestId,
             decisionId: activeVersion.decisionId,
-            profileId: profile.profileId
-          },
-          "Writeback failed"
-        );
-        responseReasons.push({
-          code: "WRITEBACK_FAILED",
-          detail: String(error)
+            version: activeVersion.version,
+            profileId: profile.profileId,
+            actionType: finalResult.actionType,
+            payloadJson: toInputJson(finalResult.payload),
+            outcome: finalResult.outcome,
+            reasonsJson: toInputJson(responseReasons),
+            debugTraceJson: parsed.data.debug
+              ? traceEnvelope
+                ? toInputJson(sanitizeDebugTraceForLog(traceEnvelope))
+                : Prisma.JsonNull
+              : undefined,
+            inputJson: toInputJson({
+              decisionId: parsed.data.decisionId,
+              decisionKey: parsed.data.decisionKey,
+              profileId: parsed.data.profileId,
+              lookup: parsed.data.lookup,
+              context: parsed.data.context
+            }),
+            latencyMs
+          }
         });
-
-        if (parsed.data.debug) {
-          integrationTrace.writebackError = String(error);
-        }
       }
-    }
 
-    if (deps.policyHook?.postDecision) {
-      await deps.policyHook.postDecision({ result: finalResult });
-    }
-
-    const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
-    const traceEnvelope = parsed.data.debug
-      ? buildTraceEnvelope({
-          requestId,
-          environment,
-          source: "decide",
-          decisionId: finalResult.decisionId,
-          version: finalResult.version,
-          engineTrace: finalResult.trace,
-          integration: integrationTrace
-        })
-      : undefined;
-
-    await prisma.decisionLog.create({
-      data: {
+      const response = {
         requestId,
-        decisionId: activeVersion.decisionId,
-        version: activeVersion.version,
-        profileId: profile.profileId,
+        decisionId: finalResult.decisionId,
+        version: finalResult.version,
         actionType: finalResult.actionType,
-        payloadJson: toInputJson(finalResult.payload),
+        payload: finalResult.payload,
         outcome: finalResult.outcome,
-        reasonsJson: toInputJson(responseReasons),
-        debugTraceJson: parsed.data.debug
-          ? traceEnvelope
-            ? toInputJson(sanitizeDebugTraceForLog(traceEnvelope))
-            : Prisma.JsonNull
-          : undefined,
-        inputJson: toInputJson({
-          decisionId: parsed.data.decisionId,
-          decisionKey: parsed.data.decisionKey,
-          profileId: parsed.data.profileId,
-          lookup: parsed.data.lookup,
-          context: parsed.data.context
-        }),
-        latencyMs
-      }
-    });
+        reasons: responseReasons,
+        latencyMs,
+        trace: parsed.data.debug ? traceEnvelope : undefined,
+        debug: {
+          cache: {
+            hit: false,
+            servedStale: false
+          },
+          wbsLatencyMs,
+          timeoutBudgetMs: reliabilityConfig.performance.wbsTimeoutMs
+        }
+      };
 
-    return {
-      requestId,
-      decisionId: finalResult.decisionId,
-      version: finalResult.version,
-      actionType: finalResult.actionType,
-      payload: finalResult.payload,
-      outcome: finalResult.outcome,
-      reasons: responseReasons,
-      latencyMs,
-      trace: parsed.data.debug ? traceEnvelope : undefined
-    };
+      if (finalResult.outcome !== "ERROR") {
+        const ttlFromPayload =
+          typeof finalResult.payload.ttl_seconds === "number" && finalResult.payload.ttl_seconds > 0
+            ? Math.floor(finalResult.payload.ttl_seconds)
+            : reliabilityConfig.cachePolicy.ttlSeconds;
+        await persistRealtimeCache({
+          response: response as Record<string, unknown>,
+          ttlSeconds: ttlFromPayload
+        });
+      }
+
+      logDecisionTelemetry({
+        cacheHit: false,
+        servedStale: false,
+        wbsLatencyMs,
+        engineLatencyMs
+      });
+      return response;
+    } finally {
+      if (realtimeCacheLock) {
+        await realtimeCacheLock.release();
+      }
+    }
   });
 
   app.post("/v1/conversions", { preHandler: requireWriteAuth }, async (request, reply) => {

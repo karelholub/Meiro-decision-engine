@@ -18,7 +18,8 @@ export interface MeiroWritebackRecord extends MeiroWritebackInput {
 }
 
 export interface MeiroAdapter {
-  getProfile(profileId: string): Promise<MeiroProfile>;
+  supportsPartialAttributes?: boolean;
+  getProfile(profileId: string, options?: { requiredAttributes?: string[] }): Promise<MeiroProfile>;
   writebackOutcome?: (profileId: string, input: MeiroWritebackInput) => Promise<void>;
   getWritebackRecords?: (profileId: string) => MeiroWritebackRecord[];
   writeProfileLabel?: (profileId: string, key: string, value: string) => Promise<void>;
@@ -159,6 +160,7 @@ const parseJsonResponse = async <T>(response: Response): Promise<T> => {
 };
 
 export class MockMeiroAdapter implements MeiroAdapter {
+  supportsPartialAttributes = false;
   private readonly profiles: Map<string, MeiroProfile>;
   private readonly writebacks: Map<string, MeiroWritebackRecord[]>;
 
@@ -167,12 +169,26 @@ export class MockMeiroAdapter implements MeiroAdapter {
     this.writebacks = new Map();
   }
 
-  async getProfile(profileId: string): Promise<MeiroProfile> {
+  async getProfile(profileId: string, options?: { requiredAttributes?: string[] }): Promise<MeiroProfile> {
     const profile = this.profiles.get(profileId);
     if (!profile) {
       throw new Error(`Profile not found: ${profileId}`);
     }
-    return profile;
+    if (!options?.requiredAttributes || options.requiredAttributes.length === 0) {
+      return profile;
+    }
+
+    const projected: Record<string, unknown> = {};
+    for (const key of options.requiredAttributes) {
+      if (Object.prototype.hasOwnProperty.call(profile.attributes, key)) {
+        projected[key] = profile.attributes[key];
+      }
+    }
+
+    return {
+      ...profile,
+      attributes: projected
+    };
   }
 
   async writebackOutcome(profileId: string, input: MeiroWritebackInput): Promise<void> {
@@ -199,6 +215,7 @@ export class MockMeiroAdapter implements MeiroAdapter {
 }
 
 export class RealMeiroAdapter implements MeiroAdapter {
+  supportsPartialAttributes = true;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
 
@@ -264,9 +281,14 @@ export class RealMeiroAdapter implements MeiroAdapter {
     throw new Error(`Meiro request failed after retries: ${String(lastError)}`);
   }
 
-  private async fetchProfilePayload(profileId: string): Promise<MeiroProfileApiPayload> {
+  private async fetchProfilePayload(profileId: string, requiredAttributes?: string[]): Promise<MeiroProfileApiPayload> {
     const { baseUrl, token } = this.resolveBaseUrlAndToken();
-    const url = `${baseUrl}/profiles/${encodeURIComponent(profileId)}`;
+    const query = new URLSearchParams();
+    if (requiredAttributes && requiredAttributes.length > 0) {
+      query.set("attributes", requiredAttributes.join(","));
+    }
+    const queryString = query.toString();
+    const url = `${baseUrl}/profiles/${encodeURIComponent(profileId)}${queryString ? `?${queryString}` : ""}`;
     return this.requestWithRetries<MeiroProfileApiPayload>({
       method: "GET",
       url,
@@ -274,8 +296,20 @@ export class RealMeiroAdapter implements MeiroAdapter {
     });
   }
 
-  async getProfile(profileId: string): Promise<MeiroProfile> {
-    const payload = await this.fetchProfilePayload(profileId);
+  async getProfile(profileId: string, options?: { requiredAttributes?: string[] }): Promise<MeiroProfile> {
+    const required = options?.requiredAttributes?.filter((value) => value.trim().length > 0) ?? [];
+
+    let payload: MeiroProfileApiPayload;
+    if (required.length === 0) {
+      payload = await this.fetchProfilePayload(profileId);
+    } else {
+      try {
+        payload = await this.fetchProfilePayload(profileId, required);
+      } catch {
+        // Backward-compatible fallback for adapters/endpoints that do not support attribute projection.
+        payload = await this.fetchProfilePayload(profileId);
+      }
+    }
 
     const resolvedProfileId = payload.profileId ?? payload.id ?? payload.profile?.profileId ?? payload.profile?.id ?? profileId;
     const attributes = payload.attributes ?? payload.profile?.attributes ?? {};

@@ -40,6 +40,10 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
           <li>
             Caps: daily {definition.caps.perProfilePerDay ?? "none"}, weekly {definition.caps.perProfilePerWeek ?? "none"}
           </li>
+          <li>
+            Timeout: {definition.performance?.timeoutMs ?? 120}ms total, {definition.performance?.wbsTimeoutMs ?? 80}ms WBS
+          </li>
+          <li>Cache mode: {definition.cachePolicy?.mode ?? "normal"}</li>
           <li>Default action: {definition.outputs.default?.actionType ?? "noop"}</li>
         </ul>
         <p className="text-xs text-stone-600">

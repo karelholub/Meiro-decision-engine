@@ -117,6 +117,44 @@ export const ReasonSchema = z.object({
 });
 export type Reason = z.infer<typeof ReasonSchema>;
 
+export const DecisionPerformanceSchema = z.object({
+  timeoutMs: z.number().int().min(20).max(5000).optional(),
+  wbsTimeoutMs: z.number().int().min(10).max(4000).optional()
+});
+export type DecisionPerformance = z.infer<typeof DecisionPerformanceSchema>;
+
+export const DecisionCachePolicyModeSchema = z.enum([
+  "disabled",
+  "normal",
+  "stale_if_error",
+  "stale_while_revalidate"
+]);
+export type DecisionCachePolicyMode = z.infer<typeof DecisionCachePolicyModeSchema>;
+
+export const DecisionCachePolicySchema = z.object({
+  mode: DecisionCachePolicyModeSchema.optional(),
+  ttlSeconds: z.number().int().min(1).max(86_400).optional(),
+  staleTtlSeconds: z.number().int().min(0).max(604_800).optional(),
+  keyContextAllowlist: z.array(z.string().min(1)).optional()
+});
+export type DecisionCachePolicy = z.infer<typeof DecisionCachePolicySchema>;
+
+export const DecisionFallbackActionSchema = z.object({
+  actionType: ActionTypeSchema,
+  payload: z.record(z.unknown()).default({}),
+  ttl_seconds: z.number().int().positive().max(86_400).optional(),
+  tracking: z.record(z.unknown()).optional()
+});
+export type DecisionFallbackAction = z.infer<typeof DecisionFallbackActionSchema>;
+
+export const DecisionFallbackConfigSchema = z.object({
+  preferStaleCache: z.boolean().optional(),
+  onTimeout: DecisionFallbackActionSchema.optional(),
+  onError: DecisionFallbackActionSchema.optional(),
+  defaultOutput: z.string().min(1).optional()
+});
+export type DecisionFallbackConfig = z.infer<typeof DecisionFallbackConfigSchema>;
+
 export const DecisionDefinitionSchema = z.object({
   id: z.string().uuid(),
   key: z.string().regex(/^[a-zA-Z0-9_-]+$/),
@@ -129,6 +167,10 @@ export const DecisionDefinitionSchema = z.object({
   activatedAt: z.string().datetime().nullable().optional(),
   holdout: HoldoutSchema,
   eligibility: EligibilitySchema.default({}),
+  requiredAttributes: z.array(z.string().min(1)).optional(),
+  performance: DecisionPerformanceSchema.optional(),
+  cachePolicy: DecisionCachePolicySchema.optional(),
+  fallback: DecisionFallbackConfigSchema.optional(),
   caps: CapsSchema.default({}),
   policies: PoliciesConfigSchema.optional(),
   writeback: WritebackConfigSchema.optional(),
@@ -139,6 +181,7 @@ export const DecisionDefinitionSchema = z.object({
     .object({
       default: DecisionOutputSchema.optional()
     })
+    .catchall(DecisionOutputSchema)
     .default({})
 });
 export type DecisionDefinition = z.infer<typeof DecisionDefinitionSchema>;
@@ -201,6 +244,7 @@ export const DecisionStackDefinitionSchema = z.object({
     maxSteps: 10,
     maxTotalMs: 250
   }),
+  requiredAttributes: z.array(z.string().min(1)).optional(),
   steps: z.array(DecisionStackStepSchema).min(1).max(20),
   finalOutputMode: StackFinalOutputModeSchema.default("FIRST_NON_NOOP"),
   outputs: z
@@ -262,6 +306,7 @@ export const createDefaultDecisionDefinition = ({
       salt
     },
     eligibility: {},
+    requiredAttributes: [],
     caps: {
       perProfilePerDay: null,
       perProfilePerWeek: null
@@ -320,6 +365,7 @@ export const createDefaultDecisionStackDefinition = ({
       maxSteps: 10,
       maxTotalMs: 250
     },
+    requiredAttributes: [],
     steps: [
       {
         id: "step-1",
@@ -366,6 +412,14 @@ export const validateDecisionDefinition = (input: unknown): ValidationResult => 
 
   if (!definition.outputs.default) {
     warnings.push("No default output is set. Non-matching traffic will return noop.");
+  }
+
+  if (
+    typeof definition.performance?.timeoutMs === "number" &&
+    typeof definition.performance?.wbsTimeoutMs === "number" &&
+    definition.performance.wbsTimeoutMs > definition.performance.timeoutMs
+  ) {
+    warnings.push("performance.wbsTimeoutMs exceeds performance.timeoutMs and will be clamped at runtime.");
   }
 
   const priorities = definition.flow.rules.map((rule) => rule.priority);

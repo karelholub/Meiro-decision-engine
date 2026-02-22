@@ -44,6 +44,9 @@ const SUPPORTED_TOP_LEVEL_KEYS = new Set([
   "activatedAt",
   "holdout",
   "eligibility",
+  "performance",
+  "cachePolicy",
+  "fallback",
   "caps",
   "flow",
   "outputs"
@@ -51,6 +54,9 @@ const SUPPORTED_TOP_LEVEL_KEYS = new Set([
 
 const SUPPORTED_HOLDOUT_KEYS = new Set(["enabled", "percentage", "salt"]);
 const SUPPORTED_CAP_KEYS = new Set(["perProfilePerDay", "perProfilePerWeek"]);
+const SUPPORTED_PERFORMANCE_KEYS = new Set(["timeoutMs", "wbsTimeoutMs"]);
+const SUPPORTED_CACHE_POLICY_KEYS = new Set(["mode", "ttlSeconds", "staleTtlSeconds", "keyContextAllowlist"]);
+const SUPPORTED_FALLBACK_KEYS = new Set(["preferStaleCache", "onTimeout", "onError", "defaultOutput"]);
 const SUPPORTED_ELIGIBILITY_KEYS = new Set(["audiencesAny", "attributes"]);
 const SUPPORTED_RULE_KEYS = new Set(["id", "priority", "when", "then"]);
 const SUPPORTED_THEN_KEYS = new Set(["actionType", "payload"]);
@@ -381,6 +387,22 @@ export const ensureDecisionDefinitionDefaults = (definition: DecisionDefinition)
       perProfilePerDay: definition.caps?.perProfilePerDay ?? null,
       perProfilePerWeek: definition.caps?.perProfilePerWeek ?? null
     },
+    performance: {
+      timeoutMs: definition.performance?.timeoutMs ?? 120,
+      wbsTimeoutMs: definition.performance?.wbsTimeoutMs ?? 80
+    },
+    cachePolicy: {
+      mode: definition.cachePolicy?.mode ?? "normal",
+      ttlSeconds: definition.cachePolicy?.ttlSeconds ?? 60,
+      staleTtlSeconds: definition.cachePolicy?.staleTtlSeconds ?? 1800,
+      keyContextAllowlist: definition.cachePolicy?.keyContextAllowlist ?? ["appKey", "placement"]
+    },
+    fallback: {
+      preferStaleCache: definition.fallback?.preferStaleCache ?? false,
+      defaultOutput: definition.fallback?.defaultOutput ?? "default",
+      onTimeout: definition.fallback?.onTimeout,
+      onError: definition.fallback?.onError
+    },
     flow: {
       rules: normalizedRules
     },
@@ -481,6 +503,42 @@ export const detectWizardUnsupported = (decisionJson: unknown): WizardUnsupporte
     checkKnownKeys(decisionJson.caps, SUPPORTED_CAP_KEYS, reasons, "Caps");
   }
 
+  if (decisionJson.performance !== undefined) {
+    if (!isRecord(decisionJson.performance)) {
+      addReason(reasons, "Performance configuration must be a JSON object");
+    } else {
+      checkKnownKeys(decisionJson.performance, SUPPORTED_PERFORMANCE_KEYS, reasons, "Performance");
+    }
+  }
+
+  if (decisionJson.cachePolicy !== undefined) {
+    if (!isRecord(decisionJson.cachePolicy)) {
+      addReason(reasons, "Cache policy configuration must be a JSON object");
+    } else {
+      checkKnownKeys(decisionJson.cachePolicy, SUPPORTED_CACHE_POLICY_KEYS, reasons, "Cache policy");
+    }
+  }
+
+  if (decisionJson.fallback !== undefined) {
+    if (!isRecord(decisionJson.fallback)) {
+      addReason(reasons, "Fallback configuration must be a JSON object");
+    } else {
+      checkKnownKeys(decisionJson.fallback, SUPPORTED_FALLBACK_KEYS, reasons, "Fallback");
+      if (decisionJson.fallback.onTimeout && !isRecord(decisionJson.fallback.onTimeout)) {
+        addReason(reasons, "fallback.onTimeout must be a JSON object");
+      }
+      if (decisionJson.fallback.onError && !isRecord(decisionJson.fallback.onError)) {
+        addReason(reasons, "fallback.onError must be a JSON object");
+      }
+      if (isRecord(decisionJson.fallback.onTimeout)) {
+        checkKnownKeys(decisionJson.fallback.onTimeout, new Set(["actionType", "payload", "ttl_seconds", "tracking"]), reasons, "Fallback onTimeout");
+      }
+      if (isRecord(decisionJson.fallback.onError)) {
+        checkKnownKeys(decisionJson.fallback.onError, new Set(["actionType", "payload", "ttl_seconds", "tracking"]), reasons, "Fallback onError");
+      }
+    }
+  }
+
   if (!isRecord(decisionJson.eligibility)) {
     addReason(reasons, "Missing eligibility configuration");
   } else {
@@ -574,6 +632,9 @@ const humanizeFieldToken = (value: string) => {
 };
 
 const pathToStep = (path: string): WizardStepId => {
+  if (path.startsWith("performance.") || path.startsWith("cachePolicy.") || path.startsWith("fallback.")) {
+    return "fallback";
+  }
   if (path.startsWith("eligibility.")) {
     return "eligibility";
   }
@@ -615,6 +676,18 @@ const buildFieldLabel = (path: string, message: string): string => {
 
   if (path.startsWith("outputs.default")) {
     return `Fallback -> Default output ${message || "is invalid"}`;
+  }
+
+  if (path.startsWith("performance.")) {
+    return `Fallback -> Performance ${message || "is invalid"}`;
+  }
+
+  if (path.startsWith("cachePolicy.")) {
+    return `Fallback -> Cache policy ${message || "is invalid"}`;
+  }
+
+  if (path.startsWith("fallback.")) {
+    return `Fallback -> Runtime fallback ${message || "is invalid"}`;
   }
 
   if (path.startsWith("holdout.")) {
@@ -692,6 +765,8 @@ export const getDecisionSummaryText = (definition: DecisionDefinition): string =
   const conditionCount = definition.eligibility.attributes?.length ?? 0;
   const rulesCount = definition.flow.rules.length;
   const holdout = definition.holdout.enabled ? `${definition.holdout.percentage}% holdout` : "no holdout";
+  const timeout = definition.performance?.timeoutMs ?? 120;
+  const cacheMode = definition.cachePolicy?.mode ?? "normal";
 
-  return `This decision evaluates ${conditionCount} eligibility condition${conditionCount === 1 ? "" : "s"} ${audienceSummary}, applies ${rulesCount} rule${rulesCount === 1 ? "" : "s"}, and runs with ${holdout}.`;
+  return `This decision evaluates ${conditionCount} eligibility condition${conditionCount === 1 ? "" : "s"} ${audienceSummary}, applies ${rulesCount} rule${rulesCount === 1 ? "" : "s"}, runs with ${holdout}, timeout ${timeout}ms, and cache mode ${cacheMode}.`;
 };

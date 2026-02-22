@@ -37,7 +37,7 @@ const STEP_PREFIX: Record<WizardStepId, string[]> = {
   eligibility: ["eligibility."],
   rules: ["flow.rules"],
   guardrails: ["caps", "holdout"],
-  fallback: ["outputs.default"],
+  fallback: ["outputs.default", "performance.", "cachePolicy.", "fallback."],
   test_activate: []
 };
 
@@ -63,13 +63,17 @@ const STEP_HINTS: Record<WizardStepId, { title: string; tip: string }> = {
     tip: "Use holdout and caps to limit exposure while validating impact."
   },
   fallback: {
-    title: "Always define a safe default",
-    tip: "Fallback output runs when no rule matches. Use noop or another explicit safe behavior."
+    title: "Tune runtime reliability",
+    tip: "Set timeout budgets, cache strategy, and timeout/error defaults so experiences stay fast when upstream is slow."
   },
   test_activate: {
     title: "Test before activation",
     tip: "Run simulation on realistic profiles and verify reasons/payload before checking activation boxes."
   }
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 };
 
 const isStepComplete = (step: WizardStepId, definition: DecisionDefinition, hasSimulation: boolean) => {
@@ -125,10 +129,30 @@ export function DecisionWizard({
   const [simulationError, setSimulationError] = useState<string | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [timeoutPayloadJson, setTimeoutPayloadJson] = useState("{}");
+  const [timeoutTrackingJson, setTimeoutTrackingJson] = useState("{}");
+  const [timeoutJsonError, setTimeoutJsonError] = useState<string | null>(null);
+  const [errorPayloadJson, setErrorPayloadJson] = useState("{}");
+  const [errorTrackingJson, setErrorTrackingJson] = useState("{}");
+  const [errorJsonError, setErrorJsonError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(ensureDecisionDefinitionDefaults(initialDefinition));
   }, [initialDefinition]);
+
+  useEffect(() => {
+    const timeoutPayload = draft.fallback?.onTimeout?.payload;
+    const timeoutTracking = draft.fallback?.onTimeout?.tracking;
+    const errorPayload = draft.fallback?.onError?.payload;
+    const errorTracking = draft.fallback?.onError?.tracking;
+
+    setTimeoutPayloadJson(JSON.stringify(isRecord(timeoutPayload) ? timeoutPayload : {}, null, 2));
+    setTimeoutTrackingJson(JSON.stringify(isRecord(timeoutTracking) ? timeoutTracking : {}, null, 2));
+    setErrorPayloadJson(JSON.stringify(isRecord(errorPayload) ? errorPayload : {}, null, 2));
+    setErrorTrackingJson(JSON.stringify(isRecord(errorTracking) ? errorTracking : {}, null, 2));
+    setTimeoutJsonError(null);
+    setErrorJsonError(null);
+  }, [draft.fallback?.onTimeout, draft.fallback?.onError]);
 
   useEffect(() => {
     onDraftChange(draft);
@@ -295,6 +319,29 @@ export function DecisionWizard({
     } finally {
       setActivating(false);
     }
+  };
+
+  const updateFallback = (updater: (current: NonNullable<DecisionDefinition["fallback"]>) => DecisionDefinition["fallback"]) => {
+    setDraft((current) => {
+      const base: NonNullable<DecisionDefinition["fallback"]> = {
+        preferStaleCache: current.fallback?.preferStaleCache ?? false,
+        defaultOutput: current.fallback?.defaultOutput ?? "default",
+        onTimeout: current.fallback?.onTimeout,
+        onError: current.fallback?.onError
+      };
+      return {
+        ...current,
+        fallback: updater(base)
+      };
+    });
+  };
+
+  const parseObjectJson = (raw: string): Record<string, unknown> => {
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      throw new Error("Expected a JSON object.");
+    }
+    return parsed;
   };
 
   const readOnly = readOnlyReasons.length > 0;
@@ -511,23 +558,414 @@ export function DecisionWizard({
 
         {activeStep === "fallback" ? (
           <section className="panel space-y-3 p-4">
-            <h3 className="font-semibold">Fallback</h3>
-            <p className="text-xs text-stone-600">Used when no rule matches or no treatment is selected.</p>
-            <ActionTemplatePicker
-              value={draft.outputs.default ?? { actionType: "noop", payload: {} }}
-              onChange={(output) =>
-                setDraft((current) => ({
-                  ...current,
-                  outputs: {
-                    ...current.outputs,
-                    default: output
+            <h3 className="font-semibold">Performance & Defaults</h3>
+            <p className="text-xs text-stone-600">
+              Fail-open: return stale/default action on timeout. Fail-closed: disable fallback and return runtime errors.
+            </p>
+
+            <div className="rounded-md border border-stone-200 p-3">
+              <h4 className="font-semibold text-sm">Timeout budgets</h4>
+              <div className="mt-2 grid gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-1 text-xs" data-error-path="performance.timeoutMs">
+                  Overall timeout (ms)
+                  <input
+                    type="number"
+                    min={20}
+                    max={5000}
+                    value={draft.performance?.timeoutMs ?? 120}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        performance: {
+                          timeoutMs: Number(event.target.value) || 120,
+                          wbsTimeoutMs: current.performance?.wbsTimeoutMs ?? 80
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  />
+                  {errorByPath["performance.timeoutMs"] ? (
+                    <span className="text-red-700">{errorByPath["performance.timeoutMs"]}</span>
+                  ) : null}
+                </label>
+                <label className="flex flex-col gap-1 text-xs" data-error-path="performance.wbsTimeoutMs">
+                  WBS timeout (ms)
+                  <input
+                    type="number"
+                    min={10}
+                    max={4000}
+                    value={draft.performance?.wbsTimeoutMs ?? 80}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        performance: {
+                          timeoutMs: current.performance?.timeoutMs ?? 120,
+                          wbsTimeoutMs: Number(event.target.value) || 80
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  />
+                  {errorByPath["performance.wbsTimeoutMs"] ? (
+                    <span className="text-red-700">{errorByPath["performance.wbsTimeoutMs"]}</span>
+                  ) : null}
+                </label>
+              </div>
+            </div>
+
+            <div className="rounded-md border border-stone-200 p-3">
+              <h4 className="font-semibold text-sm">Cache policy</h4>
+              <div className="mt-2 grid gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-1 text-xs" data-error-path="cachePolicy.mode">
+                  Mode
+                  <select
+                    value={draft.cachePolicy?.mode ?? "normal"}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cachePolicy: {
+                          mode: event.target.value as "disabled" | "normal" | "stale_if_error" | "stale_while_revalidate",
+                          ttlSeconds: current.cachePolicy?.ttlSeconds ?? 60,
+                          staleTtlSeconds: current.cachePolicy?.staleTtlSeconds ?? 1800,
+                          keyContextAllowlist: current.cachePolicy?.keyContextAllowlist ?? ["appKey", "placement"]
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  >
+                    <option value="normal">normal</option>
+                    <option value="stale_if_error">stale_if_error</option>
+                    <option value="stale_while_revalidate">stale_while_revalidate</option>
+                    <option value="disabled">disabled</option>
+                  </select>
+                </label>
+
+                <label className="flex flex-col gap-1 text-xs" data-error-path="cachePolicy.ttlSeconds">
+                  Fresh TTL (seconds)
+                  <input
+                    type="number"
+                    min={1}
+                    max={86400}
+                    value={draft.cachePolicy?.ttlSeconds ?? 60}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cachePolicy: {
+                          mode: current.cachePolicy?.mode ?? "normal",
+                          ttlSeconds: Number(event.target.value) || 60,
+                          staleTtlSeconds: current.cachePolicy?.staleTtlSeconds ?? 1800,
+                          keyContextAllowlist: current.cachePolicy?.keyContextAllowlist ?? ["appKey", "placement"]
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-xs" data-error-path="cachePolicy.staleTtlSeconds">
+                  Stale TTL (seconds)
+                  <input
+                    type="number"
+                    min={0}
+                    max={604800}
+                    value={draft.cachePolicy?.staleTtlSeconds ?? 1800}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cachePolicy: {
+                          mode: current.cachePolicy?.mode ?? "normal",
+                          ttlSeconds: current.cachePolicy?.ttlSeconds ?? 60,
+                          staleTtlSeconds: Number(event.target.value) || 0,
+                          keyContextAllowlist: current.cachePolicy?.keyContextAllowlist ?? ["appKey", "placement"]
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-xs" data-error-path="cachePolicy.keyContextAllowlist">
+                  Cache key context keys (CSV)
+                  <input
+                    value={(draft.cachePolicy?.keyContextAllowlist ?? ["appKey", "placement"]).join(", ")}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cachePolicy: {
+                          mode: current.cachePolicy?.mode ?? "normal",
+                          ttlSeconds: current.cachePolicy?.ttlSeconds ?? 60,
+                          staleTtlSeconds: current.cachePolicy?.staleTtlSeconds ?? 1800,
+                          keyContextAllowlist: event.target.value
+                            .split(",")
+                            .map((entry) => entry.trim())
+                            .filter(Boolean)
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                    placeholder="appKey, placement"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="rounded-md border border-stone-200 p-3">
+              <h4 className="font-semibold text-sm">Timeout/error fallback</h4>
+              <label className="mt-2 flex items-center gap-2 text-xs" data-error-path="fallback.preferStaleCache">
+                <input
+                  type="checkbox"
+                  checked={Boolean(draft.fallback?.preferStaleCache)}
+                  onChange={(event) =>
+                    updateFallback((current) => ({
+                      ...current,
+                      preferStaleCache: event.target.checked
+                    }))
                   }
-                }))
-              }
-              readOnly={readOnly}
-              errorByPath={errorByPath}
-              pathPrefix="outputs.default"
-            />
+                  disabled={readOnly}
+                />
+                Prefer stale cache when fetch fails
+              </label>
+
+              <div className="mt-3 grid gap-4 md:grid-cols-2">
+                <div className="space-y-2 rounded-md border border-stone-200 p-3">
+                  <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-700">On timeout</h5>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Behavior
+                    <select
+                      value={draft.fallback?.onTimeout ? "custom" : "default_output"}
+                      onChange={(event) =>
+                        updateFallback((current) => ({
+                          ...current,
+                          onTimeout:
+                            event.target.value === "custom"
+                              ? current.onTimeout ?? { actionType: "noop", payload: {} }
+                              : undefined
+                        }))
+                      }
+                      disabled={readOnly}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                    >
+                      <option value="default_output">Use outputs.default</option>
+                      <option value="custom">Custom action</option>
+                    </select>
+                  </label>
+
+                  {draft.fallback?.onTimeout ? (
+                    <div className="space-y-2">
+                      <label className="flex flex-col gap-1 text-xs">
+                        Action type
+                        <select
+                          value={draft.fallback.onTimeout.actionType}
+                          onChange={(event) =>
+                            updateFallback((current) => ({
+                              ...current,
+                              onTimeout: {
+                                ...(current.onTimeout ?? { payload: {} }),
+                                actionType: event.target.value as "noop" | "suppress" | "message" | "personalize",
+                                payload: current.onTimeout?.payload ?? {}
+                              }
+                            }))
+                          }
+                          disabled={readOnly}
+                          className="rounded-md border border-stone-300 px-2 py-1"
+                        >
+                          <option value="noop">noop</option>
+                          <option value="suppress">suppress</option>
+                          <option value="message">message</option>
+                          <option value="personalize">personalize</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1 text-xs">
+                        Payload (JSON object)
+                        <textarea
+                          value={timeoutPayloadJson}
+                          onChange={(event) => setTimeoutPayloadJson(event.target.value)}
+                          onBlur={() => {
+                            try {
+                              const payload = parseObjectJson(timeoutPayloadJson);
+                              updateFallback((current) => ({
+                                ...current,
+                                onTimeout: {
+                                  ...(current.onTimeout ?? { actionType: "noop" }),
+                                  actionType: current.onTimeout?.actionType ?? "noop",
+                                  payload,
+                                  tracking: current.onTimeout?.tracking
+                                }
+                              }));
+                              setTimeoutJsonError(null);
+                            } catch (error) {
+                              setTimeoutJsonError(error instanceof Error ? error.message : "Invalid JSON");
+                            }
+                          }}
+                          disabled={readOnly}
+                          className="min-h-20 rounded-md border border-stone-300 px-2 py-1 font-mono"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-xs">
+                        Tracking (JSON object, optional)
+                        <textarea
+                          value={timeoutTrackingJson}
+                          onChange={(event) => setTimeoutTrackingJson(event.target.value)}
+                          onBlur={() => {
+                            try {
+                              const tracking = parseObjectJson(timeoutTrackingJson);
+                              updateFallback((current) => ({
+                                ...current,
+                                onTimeout: {
+                                  ...(current.onTimeout ?? { actionType: "noop", payload: {} }),
+                                  actionType: current.onTimeout?.actionType ?? "noop",
+                                  payload: current.onTimeout?.payload ?? {},
+                                  tracking
+                                }
+                              }));
+                              setTimeoutJsonError(null);
+                            } catch (error) {
+                              setTimeoutJsonError(error instanceof Error ? error.message : "Invalid JSON");
+                            }
+                          }}
+                          disabled={readOnly}
+                          className="min-h-20 rounded-md border border-stone-300 px-2 py-1 font-mono"
+                        />
+                      </label>
+                      {timeoutJsonError ? <p className="text-xs text-red-700">{timeoutJsonError}</p> : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2 rounded-md border border-stone-200 p-3">
+                  <h5 className="text-xs font-semibold uppercase tracking-wide text-stone-700">On error</h5>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Behavior
+                    <select
+                      value={draft.fallback?.onError ? "custom" : "default_output"}
+                      onChange={(event) =>
+                        updateFallback((current) => ({
+                          ...current,
+                          onError:
+                            event.target.value === "custom"
+                              ? current.onError ?? { actionType: "noop", payload: {} }
+                              : undefined
+                        }))
+                      }
+                      disabled={readOnly}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                    >
+                      <option value="default_output">Use outputs.default</option>
+                      <option value="custom">Custom action</option>
+                    </select>
+                  </label>
+
+                  {draft.fallback?.onError ? (
+                    <div className="space-y-2">
+                      <label className="flex flex-col gap-1 text-xs">
+                        Action type
+                        <select
+                          value={draft.fallback.onError.actionType}
+                          onChange={(event) =>
+                            updateFallback((current) => ({
+                              ...current,
+                              onError: {
+                                ...(current.onError ?? { payload: {} }),
+                                actionType: event.target.value as "noop" | "suppress" | "message" | "personalize",
+                                payload: current.onError?.payload ?? {}
+                              }
+                            }))
+                          }
+                          disabled={readOnly}
+                          className="rounded-md border border-stone-300 px-2 py-1"
+                        >
+                          <option value="noop">noop</option>
+                          <option value="suppress">suppress</option>
+                          <option value="message">message</option>
+                          <option value="personalize">personalize</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1 text-xs">
+                        Payload (JSON object)
+                        <textarea
+                          value={errorPayloadJson}
+                          onChange={(event) => setErrorPayloadJson(event.target.value)}
+                          onBlur={() => {
+                            try {
+                              const payload = parseObjectJson(errorPayloadJson);
+                              updateFallback((current) => ({
+                                ...current,
+                                onError: {
+                                  ...(current.onError ?? { actionType: "noop" }),
+                                  actionType: current.onError?.actionType ?? "noop",
+                                  payload,
+                                  tracking: current.onError?.tracking
+                                }
+                              }));
+                              setErrorJsonError(null);
+                            } catch (error) {
+                              setErrorJsonError(error instanceof Error ? error.message : "Invalid JSON");
+                            }
+                          }}
+                          disabled={readOnly}
+                          className="min-h-20 rounded-md border border-stone-300 px-2 py-1 font-mono"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-xs">
+                        Tracking (JSON object, optional)
+                        <textarea
+                          value={errorTrackingJson}
+                          onChange={(event) => setErrorTrackingJson(event.target.value)}
+                          onBlur={() => {
+                            try {
+                              const tracking = parseObjectJson(errorTrackingJson);
+                              updateFallback((current) => ({
+                                ...current,
+                                onError: {
+                                  ...(current.onError ?? { actionType: "noop", payload: {} }),
+                                  actionType: current.onError?.actionType ?? "noop",
+                                  payload: current.onError?.payload ?? {},
+                                  tracking
+                                }
+                              }));
+                              setErrorJsonError(null);
+                            } catch (error) {
+                              setErrorJsonError(error instanceof Error ? error.message : "Invalid JSON");
+                            }
+                          }}
+                          disabled={readOnly}
+                          className="min-h-20 rounded-md border border-stone-300 px-2 py-1 font-mono"
+                        />
+                      </label>
+                      {errorJsonError ? <p className="text-xs text-red-700">{errorJsonError}</p> : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-md border border-stone-200 p-3">
+              <h4 className="font-semibold text-sm">Rule-miss default output</h4>
+              <p className="mt-1 text-xs text-stone-600">Used when no rule matches during normal deterministic evaluation.</p>
+              <div className="mt-2">
+                <ActionTemplatePicker
+                  value={draft.outputs.default ?? { actionType: "noop", payload: {} }}
+                  onChange={(output) =>
+                    setDraft((current) => ({
+                      ...current,
+                      outputs: {
+                        ...current.outputs,
+                        default: output
+                      }
+                    }))
+                  }
+                  readOnly={readOnly}
+                  errorByPath={errorByPath}
+                  pathPrefix="outputs.default"
+                />
+              </div>
+            </div>
           </section>
         ) : null}
 

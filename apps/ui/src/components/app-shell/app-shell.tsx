@@ -12,10 +12,7 @@ const coreNavItems = [
   { href: "/stacks", label: "Decision Stacks" },
   { href: "/simulate", label: "Simulator" },
   { href: "/logs", label: "Logs" },
-  { href: "/docs", label: "Help & Docs" },
-  { href: "/settings/app", label: "App Settings" },
-  { href: "/settings/wbs", label: "WBS Settings" },
-  { href: "/settings/wbs-mapping", label: "WBS Mapping" }
+  { href: "/docs", label: "Help & Docs" }
 ];
 
 const engagementNavItems = [
@@ -27,17 +24,46 @@ const engagementNavItems = [
   { href: "/engagement/inapp/events", label: "Events" }
 ];
 
+const settingsNavItems = [
+  { href: "/settings/app", label: "General" },
+  { href: "/settings/wbs", label: "WBS Settings" },
+  { href: "/settings/wbs-mapping", label: "WBS Mapping" }
+];
+
+const executionNavItems = [
+  { href: "/execution/cache", label: "Realtime Cache" },
+  { href: "/execution/precompute", label: "Precompute Runs" },
+  { href: "/execution/results", label: "Decision Results" },
+  { href: "/execution/webhooks", label: "Webhook Rules" }
+];
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const onEngagementRoute = pathname.startsWith("/engagement/");
+  const onSettingsRoute = pathname.startsWith("/settings/");
+  const onExecutionRoute = pathname.startsWith("/execution/");
   const [engagementOpen, setEngagementOpen] = useState(onEngagementRoute);
+  const [settingsOpen, setSettingsOpen] = useState(onSettingsRoute);
+  const [executionOpen, setExecutionOpen] = useState(onExecutionRoute);
 
   useEffect(() => {
     if (onEngagementRoute) {
       setEngagementOpen(true);
     }
   }, [onEngagementRoute]);
+
+  useEffect(() => {
+    if (onSettingsRoute) {
+      setSettingsOpen(true);
+    }
+  }, [onSettingsRoute]);
+
+  useEffect(() => {
+    if (onExecutionRoute) {
+      setExecutionOpen(true);
+    }
+  }, [onExecutionRoute]);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1400px] gap-4 px-3 py-4 md:px-6 md:py-6">
@@ -88,6 +114,76 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {engagementOpen ? (
               <div className="space-y-1 pl-3">
                 {engagementNavItems.map((item) => {
+                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        "block rounded-md px-3 py-2 transition",
+                        active ? "bg-ink text-white" : "hover:bg-stone-100"
+                      )}
+                      onClick={() => setSidebarOpen(false)}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="space-y-1">
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition",
+                onSettingsRoute ? "bg-ink text-white" : "hover:bg-stone-100"
+              )}
+              onClick={() => setSettingsOpen((prev) => !prev)}
+            >
+              <span>App Settings</span>
+              <span className="text-xs">{settingsOpen ? "▾" : "▸"}</span>
+            </button>
+
+            {settingsOpen ? (
+              <div className="space-y-1 pl-3">
+                {settingsNavItems.map((item) => {
+                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        "block rounded-md px-3 py-2 transition",
+                        active ? "bg-ink text-white" : "hover:bg-stone-100"
+                      )}
+                      onClick={() => setSidebarOpen(false)}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="space-y-1">
+            <button
+              type="button"
+              className={cn(
+                "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition",
+                onExecutionRoute ? "bg-ink text-white" : "hover:bg-stone-100"
+              )}
+              onClick={() => setExecutionOpen((prev) => !prev)}
+            >
+              <span>Execution</span>
+              <span className="text-xs">{executionOpen ? "▾" : "▸"}</span>
+            </button>
+
+            {executionOpen ? (
+              <div className="space-y-1 pl-3">
+                {executionNavItems.map((item) => {
                   const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
                     <Link

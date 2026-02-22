@@ -33,7 +33,15 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - Policy enforcement on `/v1/decide` (consent gate, payload allowlist, PII redaction)
 - Optional DSL writeback config to persist decision outcome as Meiro label/attribute
 - Real Meiro adapter with timeout/retry and typed response mapping
-- In-memory profile cache (LRU + TTL) for `/v1/decide`
+- Hybrid execution model:
+  - realtime decision endpoints with Redis cache + lock-based stampede protection
+  - precompute pipeline writing `DecisionResult` records for bulk activations
+  - event/webhook-driven invalidation with optional targeted recompute
+- Reliability & defaults v1 for `/v1/decide`:
+  - decision-level timeout budgets (`performance.timeoutMs`, `performance.wbsTimeoutMs`)
+  - decision-level cache policy (fresh + stale modes: `normal`, `stale_if_error`, `stale_while_revalidate`, `disabled`)
+  - optional fallback outputs for timeout/error (`fallback.onTimeout`, `fallback.onError`, `fallback.preferStaleCache`)
+- Profile fetch optimization using `requiredAttributes` projection + Redis profile cache
 - Decision reporting endpoint (outcomes, action distribution, holdout vs treatment)
 - Conversion ingestion endpoint + conversion proxy uplift estimate
 - WBS instance settings API + UI (base URL, query param names, timeout, segment toggle)
@@ -51,6 +59,7 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - API endpoints:
   - `GET /` basic API root status
   - `POST /v1/decide`
+  - `POST /v1/nba` (alias of stack realtime endpoint)
   - `/v1/decide` supports either `profileId` or `lookup: { attribute, value }`
   - `/v1/decide` returns `outcome: ERROR` (and logs it) if profile fetch from Meiro fails
   - decision CRUD/versioning + activate/archive
@@ -87,6 +96,17 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `GET /v1/inapp/reports/overview`
   - `GET /v1/inapp/reports/campaign/:key`
   - `GET /v1/inapp/reports/export.csv`
+  - `GET /v1/cache/stats`
+  - `POST /v1/cache/invalidate`
+  - `POST /v1/precompute`
+  - `GET /v1/precompute/runs`
+  - `GET /v1/precompute/runs/:runKey`
+  - `GET /v1/precompute/runs/:runKey/results`
+  - `DELETE /v1/precompute/runs/:runKey`
+  - `GET /v1/results/latest`
+  - `POST /v1/results/cleanup`
+  - `GET/PUT /v1/settings/webhook-rules`
+  - `POST /v1/webhooks/pipes`
   - paginated logs list + log details + NDJSON export
   - `GET /v1/logs/:id` for payload/trace/replay input
   - environment selection via `X-ENV` header (defaults to `DEV`)
@@ -122,6 +142,9 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `InAppUser` (`inapp_users`)
 - `InAppCampaignVersion` (`inapp_campaign_versions`)
 - `InAppAuditLog` (`inapp_audit_logs`)
+- `PrecomputeRun` (`precompute_runs`)
+- `DecisionResult` (`decision_results`)
+- `AppSetting` (`app_settings`)
 
 Migration is included at:
 - `apps/api/prisma/migrations/202602190001_init/migration.sql`
@@ -131,6 +154,7 @@ Migration is included at:
 - `apps/api/prisma/migrations/202602190005_log_replay_and_indexes/migration.sql`
 - `apps/api/prisma/migrations/202602191700_inapp_mvp/migration.sql`
 - `apps/api/prisma/migrations/202602191900_inapp_v2_hardening/migration.sql`
+- `apps/api/prisma/migrations/202602221310_hybrid_execution_v1/migration.sql`
 
 ## Environment Variables
 
@@ -151,6 +175,18 @@ Important values:
 - `MEIRO_MODE` (`mock` or `real`)
 - `MEIRO_BASE_URL`, `MEIRO_TOKEN` (for real adapter)
 - `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
+- `REDIS_URL` (Redis cache for realtime decisions/profile projection cache)
+- `REALTIME_CACHE_TTL_SECONDS` (default `60`)
+- `REALTIME_CACHE_LOCK_TTL_MS` (default `3000`)
+- `REALTIME_CACHE_CONTEXT_KEYS` (default `appKey,placement,locale,deviceType`)
+- `PROFILE_CACHE_TTL_SECONDS` (default `30`)
+- `PRECOMPUTE_CONCURRENCY` (default `20`)
+- `PRECOMPUTE_MAX_RETRIES` (default `2`)
+- `PRECOMPUTE_LOOKUP_DELAY_MS` (default `25`)
+- `DECISION_DEFAULT_TIMEOUT_MS` (default `120`)
+- `DECISION_DEFAULT_WBS_TIMEOUT_MS` (default `80`)
+- `DECISION_DEFAULT_CACHE_TTL_SECONDS` (default `60`)
+- `DECISION_DEFAULT_STALE_TTL_SECONDS` (default `1800`)
 - `NEXT_PUBLIC_API_BASE_URL`
 - `NEXT_PUBLIC_API_KEY`
 - `NEXT_PUBLIC_DECISION_WIZARD_V1` (`true` in dev by default; set to `false` to force Advanced JSON editing)
@@ -213,6 +249,7 @@ The Dockerfiles are multi-stage and use BuildKit cache mounts for the pnpm store
 Services:
 
 - `postgres` on `5432`
+- `redis` on `6379`
 - `api` on `3001` (runs migrations + seed on start)
 - `ui` on `3000`
 
@@ -287,6 +324,36 @@ curl -X POST "http://localhost:3001/v1/inapp/decide" \
     "context": { "channel": "mobile" },
     "debug": true
   }'
+```
+
+### Decision reliability config example
+
+```json
+{
+  "performance": {
+    "timeoutMs": 120,
+    "wbsTimeoutMs": 80
+  },
+  "cachePolicy": {
+    "mode": "stale_if_error",
+    "ttlSeconds": 60,
+    "staleTtlSeconds": 1800,
+    "keyContextAllowlist": ["appKey", "placement"]
+  },
+  "fallback": {
+    "preferStaleCache": true,
+    "onTimeout": {
+      "actionType": "message",
+      "payload": { "templateId": "safe_default" },
+      "ttl_seconds": 60
+    },
+    "onError": {
+      "actionType": "noop",
+      "payload": {}
+    },
+    "defaultOutput": "default"
+  }
+}
 ```
 
 ### Event ingest
@@ -486,6 +553,69 @@ curl -X POST "http://localhost:3001/v1/decide" \
 
 When `debug=true` in lookup mode, the response includes redacted `rawWbsResponse` and mapping summary.  
 Keys containing `email` or `phone` are redacted. Raw WBS payload is never persisted in `decision_logs`.
+
+### Queue a precompute run
+
+```bash
+curl -X POST "http://localhost:3001/v1/precompute" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "runKey": "nightly_winback_2026-02-22T01",
+    "mode": "decision",
+    "key": "cart_recovery",
+    "cohort": {
+      "type": "profiles",
+      "profiles": ["p-1001", "p-1002"]
+    },
+    "context": {
+      "appKey": "meiro_store",
+      "placement": "home_top"
+    },
+    "ttlSecondsDefault": 86400,
+    "overwrite": false
+  }'
+```
+
+### Fetch precompute run results
+
+```bash
+curl "http://localhost:3001/v1/precompute/runs/nightly_winback_2026-02-22T01/results?status=READY&limit=50" \
+  -H "X-ENV: DEV"
+```
+
+### Invalidate realtime cache entries
+
+```bash
+curl -X POST "http://localhost:3001/v1/cache/invalidate" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "scope": "profile",
+    "profileId": "p-1001",
+    "reasons": ["purchase"],
+    "alsoExpireDecisionResults": true
+  }'
+```
+
+### Pipes webhook event (invalidate + optional recompute)
+
+```bash
+curl -X POST "http://localhost:3001/v1/webhooks/pipes" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "eventType": "purchase",
+    "profileId": "p-1001",
+    "context": {
+      "appKey": "meiro_store",
+      "placement": "home_top"
+    }
+  }'
+```
 
 ### Get WBS settings
 

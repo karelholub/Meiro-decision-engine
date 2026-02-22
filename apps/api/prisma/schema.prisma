@@ -53,6 +53,21 @@ enum InAppUserRole {
   ADMIN
 }
 
+enum PrecomputeRunStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  CANCELED
+}
+
+enum DecisionResultStatus {
+  READY
+  SUPPRESSED
+  NOOP
+  ERROR
+}
+
 model Decision {
   id          String            @id @default(uuid())
   environment Environment       @default(DEV)
@@ -416,4 +431,74 @@ model InAppAuditLog {
   @@index([environment, userId, createdAt])
   @@index([action, createdAt])
   @@map("inapp_audit_logs")
+}
+
+model PrecomputeRun {
+  runKey      String              @id
+  environment Environment         @default(DEV)
+  mode        String
+  key         String
+  status      PrecomputeRunStatus @default(QUEUED)
+  total       Int                 @default(0)
+  processed   Int                 @default(0)
+  succeeded   Int                 @default(0)
+  noop        Int                 @default(0)
+  suppressed  Int                 @default(0)
+  errors      Int                 @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime            @default(now())
+  parameters  Json
+
+  @@index([environment, createdAt])
+  @@index([environment, status, createdAt])
+  @@map("precompute_runs")
+}
+
+model DecisionResult {
+  id              String               @id @default(uuid())
+  environment     Environment          @default(DEV)
+  tenantKey       String?
+  runKey          String
+  decisionKey     String?
+  stackKey        String?
+  decisionVersion Int?
+  stackVersion    Int?
+  profileId       String?
+  lookupAttribute String?
+  lookupValue     String?
+  context         Json
+  actionType      String
+  actionKey       String?
+  payload         Json
+  tracking        Json?
+  ttlSeconds      Int?
+  expiresAt       DateTime
+  reasonCode      String?
+  evidence        Json?
+  debug           Json?
+  status          DecisionResultStatus
+  errorMessage    String?
+  createdAt       DateTime             @default(now())
+
+  @@index([runKey])
+  @@index([environment, decisionKey, profileId])
+  @@index([expiresAt])
+  @@index([lookupAttribute, lookupValue])
+  @@index([environment, stackKey, profileId, createdAt])
+  @@index([environment, decisionKey, lookupAttribute, lookupValue, createdAt])
+  @@map("decision_results")
+}
+
+model AppSetting {
+  id          String      @id @default(uuid())
+  environment Environment @default(DEV)
+  key         String
+  valueJson   Json
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([environment, key])
+  @@index([environment, updatedAt])
+  @@map("app_settings")
 }
