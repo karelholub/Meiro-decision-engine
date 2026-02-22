@@ -13,6 +13,7 @@ class FakeStreamCache implements JsonCache {
   private readonly groups = new Set<string>();
   private readonly streamEntries: StreamEntry[] = [];
   private readonly pending = new Map<string, { entry: StreamEntry; idleSince: number; deliveries: number }>();
+  private readonly delivered = new Set<string>();
   private sequence = 1;
 
   async getJson<T>(key: string): Promise<T | null> {
@@ -76,10 +77,11 @@ class FakeStreamCache implements JsonCache {
       return [];
     }
     const entries = this.streamEntries
-      .filter((entry) => !this.pending.has(entry.id))
+      .filter((entry) => !this.pending.has(entry.id) && !this.delivered.has(entry.id))
       .slice(0, input.count ?? 100);
     const now = Date.now();
     for (const entry of entries) {
+      this.delivered.add(entry.id);
       this.pending.set(entry.id, {
         entry,
         idleSince: now,
@@ -158,6 +160,19 @@ const makeEventFields = (index: number): Record<string, string> => ({
   context: "{}"
 });
 
+const baseWorkerConfig = {
+  enabled: true,
+  streamKey: "inapp_events",
+  streamGroup: "inapp_events_group",
+  consumerName: "api-1",
+  batchSize: 500,
+  blockMs: 0,
+  pollMs: 250,
+  reclaimIdleMs: 1000,
+  maxBatchesPerTick: 1,
+  dedupeTtlSeconds: 3600
+} as const;
+
 describe("in-app events worker", () => {
   it("reads stream messages and inserts a batch", async () => {
     const cache = new FakeStreamCache();
@@ -182,14 +197,7 @@ describe("in-app events worker", () => {
         child: () => ({} as any)
       } as any,
       config: {
-        enabled: true,
-        streamKey: "inapp_events",
-        streamGroup: "inapp_events_group",
-        consumerName: "api-1",
-        batchSize: 500,
-        blockMs: 0,
-        pollMs: 250,
-        reclaimIdleMs: 1000
+        ...baseWorkerConfig
       }
     });
 
@@ -200,6 +208,80 @@ describe("in-app events worker", () => {
     expect(createMany.mock.calls[0]?.[0]?.data).toHaveLength(2);
     expect(pending?.count).toBe(0);
     expect(worker.getStatus().inserted).toBe(2);
+  });
+
+  it("acks and skips inserts for already-processed stream messages", async () => {
+    const cache = new FakeStreamCache();
+    const streamId = await cache.xadd("inapp_events", makeEventFields(1));
+    await cache.setJson(`inapp:events:processed:${streamId}`, { processedAt: "2026-02-22T12:00:00.000Z" }, 3600);
+
+    const createMany = vi.fn().mockResolvedValue({ count: 0 });
+    const worker = createInAppEventsWorker({
+      cache,
+      prisma: {
+        inAppEvent: {
+          createMany
+        }
+      } as any,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: () => ({} as any)
+      } as any,
+      config: {
+        ...baseWorkerConfig
+      }
+    });
+
+    await worker.runTick();
+    const pending = await cache.xpending("inapp_events", "inapp_events_group");
+
+    expect(createMany).toHaveBeenCalledTimes(0);
+    expect(pending?.count).toBe(0);
+    expect(worker.getStatus().deduped).toBe(1);
+  });
+
+  it("processes multiple batches in one tick when maxBatchesPerTick > 1", async () => {
+    const cache = new FakeStreamCache();
+    await cache.xadd("inapp_events", makeEventFields(1));
+    await cache.xadd("inapp_events", makeEventFields(2));
+    await cache.xadd("inapp_events", makeEventFields(3));
+
+    const createMany = vi.fn().mockResolvedValue({ count: 1 });
+    const worker = createInAppEventsWorker({
+      cache,
+      prisma: {
+        inAppEvent: {
+          createMany
+        }
+      } as any,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: () => ({} as any)
+      } as any,
+      config: {
+        ...baseWorkerConfig,
+        batchSize: 1,
+        maxBatchesPerTick: 2
+      }
+    });
+
+    await worker.runTick();
+    const pending = await cache.xpending("inapp_events", "inapp_events_group");
+
+    expect(createMany).toHaveBeenCalledTimes(2);
+    expect(worker.getStatus().inserted).toBe(2);
+    expect(worker.getStatus().batchesProcessed).toBe(2);
+    expect(pending?.count).toBe(0);
   });
 
   it("moves failed batch messages to DLQ and acks stream entries", async () => {
@@ -227,14 +309,7 @@ describe("in-app events worker", () => {
         child: () => ({} as any)
       } as any,
       config: {
-        enabled: true,
-        streamKey: "inapp_events",
-        streamGroup: "inapp_events_group",
-        consumerName: "api-1",
-        batchSize: 500,
-        blockMs: 0,
-        pollMs: 250,
-        reclaimIdleMs: 1000
+        ...baseWorkerConfig
       }
     });
 
@@ -244,5 +319,41 @@ describe("in-app events worker", () => {
     expect(enqueueFailure).toHaveBeenCalledTimes(1);
     expect(pending?.count).toBe(0);
     expect(worker.getStatus().dlqEnqueued).toBe(1);
+    expect(worker.getStatus().transientFailures).toBe(1);
+  });
+
+  it("tracks permanent failure classifications for batch errors", async () => {
+    const cache = new FakeStreamCache();
+    await cache.xadd("inapp_events", makeEventFields(1));
+
+    const enqueueFailure = vi.fn().mockResolvedValue(undefined);
+    const worker = createInAppEventsWorker({
+      cache,
+      prisma: {
+        inAppEvent: {
+          createMany: vi.fn().mockRejectedValue(new Error("validation failed: event schema"))
+        }
+      } as any,
+      dlq: {
+        enqueueFailure
+      } as any,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn(),
+        child: () => ({} as any)
+      } as any,
+      config: {
+        ...baseWorkerConfig
+      }
+    });
+
+    await worker.runTick();
+
+    expect(enqueueFailure).toHaveBeenCalledTimes(1);
+    expect(worker.getStatus().permanentFailures).toBe(1);
   });
 });

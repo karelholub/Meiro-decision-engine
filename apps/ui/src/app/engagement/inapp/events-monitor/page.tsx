@@ -89,6 +89,14 @@ export default function InAppEventsMonitorPage() {
               <p className="text-xs uppercase text-stone-500">Batch Size</p>
               <p className="text-sm font-medium">{snapshot.worker?.batchSize ?? "-"}</p>
             </div>
+            <div>
+              <p className="text-xs uppercase text-stone-500">Max Batches/Tick</p>
+              <p className="text-sm font-medium">{snapshot.worker?.maxBatchesPerTick ?? "-"}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-500">Dedupe TTL (s)</p>
+              <p className="text-sm font-medium">{snapshot.worker?.dedupeTtlSeconds ?? "-"}</p>
+            </div>
 
             <div>
               <p className="text-xs uppercase text-stone-500">Processed</p>
@@ -105,6 +113,22 @@ export default function InAppEventsMonitorPage() {
             <div>
               <p className="text-xs uppercase text-stone-500">DLQ Enqueued</p>
               <p className="text-sm font-medium">{snapshot.worker?.dlqEnqueued ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-500">Deduped</p>
+              <p className="text-sm font-medium">{snapshot.worker?.deduped ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-500">Transient Failures</p>
+              <p className="text-sm font-medium">{snapshot.worker?.transientFailures ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-500">Permanent Failures</p>
+              <p className="text-sm font-medium">{snapshot.worker?.permanentFailures ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-500">Batches Processed</p>
+              <p className="text-sm font-medium">{snapshot.worker?.batchesProcessed ?? 0}</p>
             </div>
 
             <div className="md:col-span-2">

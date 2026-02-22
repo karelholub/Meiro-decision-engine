@@ -40,6 +40,8 @@ export interface AppConfig {
   inappEventsWorkerBlockMs?: number;
   inappEventsWorkerPollMs?: number;
   inappEventsWorkerReclaimIdleMs?: number;
+  inappEventsWorkerMaxBatchesPerTick?: number;
+  inappEventsWorkerDedupeTtlSeconds?: number;
 }
 
 const toBool = (value: string | undefined, fallback: boolean): boolean => {
@@ -125,5 +127,7 @@ export const readConfig = (): AppConfig => ({
   inappEventsWorkerBatchSize: toNumber(process.env.INAPP_EVENTS_WORKER_BATCH_SIZE, 500),
   inappEventsWorkerBlockMs: toNumber(process.env.INAPP_EVENTS_WORKER_BLOCK_MS, 1000),
   inappEventsWorkerPollMs: toNumber(process.env.INAPP_EVENTS_WORKER_POLL_MS, 250),
-  inappEventsWorkerReclaimIdleMs: toNumber(process.env.INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS, 15000)
+  inappEventsWorkerReclaimIdleMs: toNumber(process.env.INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS, 15000),
+  inappEventsWorkerMaxBatchesPerTick: toNumber(process.env.INAPP_EVENTS_WORKER_MAX_BATCHES_PER_TICK, 3),
+  inappEventsWorkerDedupeTtlSeconds: toNumber(process.env.INAPP_EVENTS_WORKER_DEDUPE_TTL_SECONDS, 86400)
 });

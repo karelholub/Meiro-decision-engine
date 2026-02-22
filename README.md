@@ -226,6 +226,8 @@ Important values:
 - `INAPP_EVENTS_WORKER_BLOCK_MS` (default `1000`)
 - `INAPP_EVENTS_WORKER_POLL_MS` (default `250`)
 - `INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS` (default `15000`)
+- `INAPP_EVENTS_WORKER_MAX_BATCHES_PER_TICK` (default `3`)
+- `INAPP_EVENTS_WORKER_DEDUPE_TTL_SECONDS` (default `86400`)
 
 PgBouncer/pooling note for burst traffic:
 - Use PgBouncer in transaction mode for API pods at scale.

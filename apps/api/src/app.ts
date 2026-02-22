@@ -1143,6 +1143,16 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     typeof config.inappEventsWorkerReclaimIdleMs === "number" && Number.isFinite(config.inappEventsWorkerReclaimIdleMs)
       ? Math.max(1000, Math.floor(config.inappEventsWorkerReclaimIdleMs))
       : 15000;
+  const inappEventsWorkerMaxBatchesPerTick =
+    typeof config.inappEventsWorkerMaxBatchesPerTick === "number" &&
+    Number.isFinite(config.inappEventsWorkerMaxBatchesPerTick)
+      ? Math.max(1, Math.min(20, Math.floor(config.inappEventsWorkerMaxBatchesPerTick)))
+      : 3;
+  const inappEventsWorkerDedupeTtlSeconds =
+    typeof config.inappEventsWorkerDedupeTtlSeconds === "number" &&
+    Number.isFinite(config.inappEventsWorkerDedupeTtlSeconds)
+      ? Math.max(60, Math.min(604800, Math.floor(config.inappEventsWorkerDedupeTtlSeconds)))
+      : 86400;
 
   await app.register(cors, { origin: true });
 
@@ -1496,7 +1506,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       batchSize: inappEventsWorkerBatchSize,
       blockMs: inappEventsWorkerBlockMs,
       pollMs: inappEventsWorkerPollMs,
-      reclaimIdleMs: inappEventsWorkerReclaimIdleMs
+      reclaimIdleMs: inappEventsWorkerReclaimIdleMs,
+      maxBatchesPerTick: inappEventsWorkerMaxBatchesPerTick,
+      dedupeTtlSeconds: inappEventsWorkerDedupeTtlSeconds
     }
   });
   if (runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled) {
@@ -1507,7 +1519,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         streamKey: inappEventsStreamKey,
         group: inappEventsStreamGroup,
         consumer: inappEventsConsumerName,
-        batchSize: inappEventsWorkerBatchSize
+        batchSize: inappEventsWorkerBatchSize,
+        maxBatchesPerTick: inappEventsWorkerMaxBatchesPerTick,
+        dedupeTtlSeconds: inappEventsWorkerDedupeTtlSeconds
       },
       "In-app events worker started"
     );

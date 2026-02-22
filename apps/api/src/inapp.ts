@@ -71,10 +71,16 @@ export interface RegisterInAppRoutesDeps {
     blockMs: number;
     pollMs: number;
     reclaimIdleMs: number;
+    maxBatchesPerTick: number;
+    dedupeTtlSeconds: number;
     processed: number;
     inserted: number;
     failed: number;
+    deduped: number;
     dlqEnqueued: number;
+    transientFailures: number;
+    permanentFailures: number;
+    batchesProcessed: number;
     lastBatchSize: number;
     lastFlushAt: string | null;
     lastError: string | null;

@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from "fastify";
 import { sha256 } from "../lib/cacheKey";
 import type { JsonCache } from "../lib/cache";
 import type { DlqProvider } from "../dlq/provider";
+import { classifyError } from "../dlq/retryPolicy";
 
 export interface InAppEventStreamPayload {
   environment: Environment;
@@ -111,6 +112,8 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
   };
 };
 
+const processedMarkerKey = (streamMessageId: string): string => `inapp:events:processed:${streamMessageId}`;
+
 const toDbRow = (entry: StreamEnvelope): Prisma.InAppEventCreateManyInput => {
   const timestamp = entry.payload.body.ts ? new Date(entry.payload.body.ts) : new Date();
   const lookupValue = entry.payload.body.lookup?.value;
@@ -141,6 +144,8 @@ export interface InAppEventsWorkerConfig {
   blockMs: number;
   pollMs: number;
   reclaimIdleMs: number;
+  maxBatchesPerTick: number;
+  dedupeTtlSeconds: number;
 }
 
 export interface InAppEventsWorkerStatus {
@@ -153,10 +158,16 @@ export interface InAppEventsWorkerStatus {
   blockMs: number;
   pollMs: number;
   reclaimIdleMs: number;
+  maxBatchesPerTick: number;
+  dedupeTtlSeconds: number;
   processed: number;
   inserted: number;
   failed: number;
+  deduped: number;
   dlqEnqueued: number;
+  transientFailures: number;
+  permanentFailures: number;
+  batchesProcessed: number;
   lastBatchSize: number;
   lastFlushAt: string | null;
   lastError: string | null;
@@ -190,10 +201,16 @@ export const createInAppEventsWorker = (input: {
     blockMs: input.config.blockMs,
     pollMs: input.config.pollMs,
     reclaimIdleMs: input.config.reclaimIdleMs,
+    maxBatchesPerTick: input.config.maxBatchesPerTick,
+    dedupeTtlSeconds: input.config.dedupeTtlSeconds,
     processed: 0,
     inserted: 0,
     failed: 0,
+    deduped: 0,
     dlqEnqueued: 0,
+    transientFailures: 0,
+    permanentFailures: 0,
+    batchesProcessed: 0,
     lastBatchSize: 0,
     lastFlushAt: null,
     lastError: null
@@ -238,10 +255,28 @@ export const createInAppEventsWorker = (input: {
     if (entries.length === 0) {
       return;
     }
+    status.batchesProcessed += 1;
     status.lastBatchSize = entries.length;
     status.processed += entries.length;
 
-    const rows = entries.map((entry) => toDbRow(entry));
+    const rows: Prisma.InAppEventCreateManyInput[] = [];
+    const rowSourceIds: string[] = [];
+    const entriesToInsert: StreamEnvelope[] = [];
+    for (const entry of entries) {
+      const marker = await input.cache.getJson<{ processedAt: string }>(processedMarkerKey(entry.id));
+      if (marker) {
+        status.deduped += 1;
+        await input.cache.xack?.(input.config.streamKey, input.config.streamGroup, [entry.id]);
+        continue;
+      }
+      rows.push(toDbRow(entry));
+      rowSourceIds.push(entry.id);
+      entriesToInsert.push(entry);
+    }
+    if (rows.length === 0) {
+      return;
+    }
+
     try {
       if ("createMany" in input.prisma.inAppEvent && typeof input.prisma.inAppEvent.createMany === "function") {
         await input.prisma.inAppEvent.createMany({
@@ -256,24 +291,39 @@ export const createInAppEventsWorker = (input: {
       }
       status.inserted += rows.length;
       status.lastFlushAt = new Date().toISOString();
+      for (const streamId of rowSourceIds) {
+        await input.cache.setJson(
+          processedMarkerKey(streamId),
+          {
+            processedAt: status.lastFlushAt
+          },
+          input.config.dedupeTtlSeconds
+        );
+      }
       await input.cache.xack?.(
         input.config.streamKey,
         input.config.streamGroup,
-        entries.map((entry) => entry.id)
+        rowSourceIds
       );
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      status.failed += entries.length;
+      status.failed += entriesToInsert.length;
       status.lastError = err.message;
-      input.logger.error({ err, size: entries.length }, "Failed to persist in-app events batch");
+      const classification = classifyError(err);
+      if (classification.type === "PERMANENT") {
+        status.permanentFailures += entriesToInsert.length;
+      } else {
+        status.transientFailures += entriesToInsert.length;
+      }
+      input.logger.error({ err, size: entriesToInsert.length }, "Failed to persist in-app events batch");
 
-      for (const entry of entries) {
+      for (const entry of entriesToInsert) {
         await enqueueDlqAndAck(entry.payload, entry.id, err);
       }
     }
   };
 
-  const collectEntries = async (): Promise<StreamEnvelope[]> => {
+  const collectEntries = async (blockMs: number): Promise<StreamEnvelope[]> => {
     const entriesById = new Map<string, StreamEnvelope>();
 
     const pending = await input.cache.xpendingRange?.({
@@ -308,7 +358,7 @@ export const createInAppEventsWorker = (input: {
       group: input.config.streamGroup,
       consumer: input.config.consumerName,
       count: input.config.batchSize,
-      blockMs: input.config.blockMs,
+      blockMs,
       id: ">"
     });
     for (const entry of latest ?? []) {
@@ -334,8 +384,18 @@ export const createInAppEventsWorker = (input: {
     status.running = true;
     try {
       await ensureGroup();
-      const entries = await collectEntries();
-      await processBatch(entries);
+      const maxBatches = Math.max(1, input.config.maxBatchesPerTick);
+      for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+        const blockMs = batchIndex === 0 ? input.config.blockMs : 0;
+        const entries = await collectEntries(blockMs);
+        if (entries.length === 0) {
+          break;
+        }
+        await processBatch(entries);
+        if (entries.length < input.config.batchSize) {
+          break;
+        }
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       status.lastError = err.message;

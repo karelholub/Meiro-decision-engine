@@ -28,7 +28,7 @@ const createBaseCache = (): JsonCache => ({
 
 describe("in-app v2 events service", () => {
   it("truncates oversized context before stream enqueue", async () => {
-    const xadd = vi.fn(async () => "1-0");
+    const xadd = vi.fn(async (_stream: string, _fields: Record<string, string>) => "1-0");
     const cache: JsonCache = {
       ...createBaseCache(),
       xadd
@@ -74,20 +74,21 @@ describe("in-app v2 runtime service", () => {
     const meiro = { getProfile: vi.fn() };
     const cache: JsonCache = {
       ...createBaseCache(),
-      getJson: async () => ({
-        show: true,
-        placement: "home_top",
-        templateId: "banner",
-        ttl_seconds: 60,
-        tracking: {
-          campaign_id: "cmp-1",
-          message_id: "msg-1",
-          variant_id: "A"
-        },
-        payload: {
-          title: "cached"
-        }
-      })
+      getJson: async <T>() =>
+        ({
+          show: true,
+          placement: "home_top",
+          templateId: "banner",
+          ttl_seconds: 60,
+          tracking: {
+            campaign_id: "cmp-1",
+            message_id: "msg-1",
+            variant_id: "A"
+          },
+          payload: {
+            title: "cached"
+          }
+        }) as T
     };
     const prisma = {
       inAppCampaign: {
