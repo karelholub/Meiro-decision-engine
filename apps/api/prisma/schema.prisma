@@ -68,6 +68,20 @@ enum DecisionResultStatus {
   ERROR
 }
 
+enum DlqTopic {
+  PIPES_WEBHOOK
+  PRECOMPUTE_TASK
+  TRACKING_EVENT
+  EXPORT_TASK
+}
+
+enum DlqStatus {
+  PENDING
+  RETRYING
+  QUARANTINED
+  RESOLVED
+}
+
 model Decision {
   id          String            @id @default(uuid())
   environment Environment       @default(DEV)
@@ -501,4 +515,46 @@ model AppSetting {
   @@unique([environment, key])
   @@index([environment, updatedAt])
   @@map("app_settings")
+}
+
+model DeadLetterMessage {
+  id             String    @id @default(uuid())
+  topic          DlqTopic
+  status         DlqStatus @default(PENDING)
+  payload        Json
+  payloadHash    String
+  dedupeKey      String?
+  errorType      String
+  errorMessage   String
+  errorMeta      Json?
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(8)
+  nextRetryAt    DateTime
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @updatedAt
+  tenantKey      String?
+  correlationId  String?
+  source         String?
+  createdBy      String?
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  resolutionNote String?
+
+  @@index([topic, status, nextRetryAt])
+  @@index([payloadHash])
+  @@index([status, nextRetryAt])
+  @@unique([topic, payloadHash])
+  @@map("dead_letter_messages")
+}
+
+model DlqConfig {
+  id              String   @id @default("dlq_config")
+  enabledTopics   Json
+  backoffBaseMs   Int      @default(2000)
+  backoffMaxMs    Int      @default(600000)
+  jitterPct       Int      @default(30)
+  quarantineAfter Int      @default(8)
+  updatedAt       DateTime @updatedAt
+
+  @@map("dlq_config")
 }

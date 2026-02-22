@@ -37,7 +37,16 @@ import {
 import { z } from "zod";
 import { readConfig, type AppConfig } from "./config";
 import { seedMockProfiles } from "./data/mockProfiles";
-import { registerInAppRoutes } from "./inapp";
+import {
+  ingestInAppEvent,
+  inAppEventsBodySchema,
+  registerInAppRoutes,
+  type InAppEventIngestBody
+} from "./inapp";
+import { createDbDlqProvider } from "./dlq/dbProvider";
+import { createNoopDlqProvider, type DlqProvider } from "./dlq/provider";
+import { redactPayload } from "./dlq/redaction";
+import { createDlqWorker } from "./dlq/worker";
 import { createCache, type JsonCache } from "./lib/cache";
 import {
   buildProfileCacheKey,
@@ -50,8 +59,13 @@ import { deriveDecisionRequiredAttributes, deriveStackRequiredAttributes } from 
 import { isTimeoutError, withTimeout } from "./lib/timeout";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { registerCacheRoutes } from "./routes/cache";
+import { registerDlqRoutes } from "./routes/dlq";
 import { registerPrecomputeRoutes } from "./routes/precompute";
-import { registerWebhooksRoutes } from "./routes/webhooks";
+import {
+  processPipesWebhook,
+  pipesWebhookBodySchema,
+  registerWebhooksRoutes
+} from "./routes/webhooks";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -64,6 +78,7 @@ interface RankerHook {
 
 export interface BuildAppDeps {
   prisma?: PrismaClient;
+  dlqProvider?: DlqProvider;
   meiroAdapter?: MeiroAdapter;
   wbsAdapter?: WbsLookupAdapter;
   cache?: JsonCache;
@@ -1065,6 +1080,14 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     typeof config.decisionDefaultStaleTtlSeconds === "number" && Number.isFinite(config.decisionDefaultStaleTtlSeconds)
       ? Math.max(0, Math.min(604_800, Math.floor(config.decisionDefaultStaleTtlSeconds)))
       : 1800;
+  const dlqPollMs =
+    typeof config.dlqPollMs === "number" && Number.isFinite(config.dlqPollMs)
+      ? Math.max(250, Math.floor(config.dlqPollMs))
+      : 5000;
+  const dlqDueLimit =
+    typeof config.dlqDueLimit === "number" && Number.isFinite(config.dlqDueLimit)
+      ? Math.max(1, Math.min(500, Math.floor(config.dlqDueLimit)))
+      : 50;
 
   await app.register(cors, { origin: true });
 
@@ -1103,6 +1126,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   const activeStackCache = new TtlCache<CachedStackVersion>(10_000);
   const wbsInstanceCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsInstance.findFirst>>>(10_000);
   const wbsMappingCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsMapping.findFirst>>>(10_000);
+  const hasDlqStorage = typeof (prisma as unknown as { deadLetterMessage?: unknown }).deadLetterMessage === "object";
+  const dlqProvider =
+    deps.dlqProvider ??
+    (hasDlqStorage ? createDbDlqProvider(prisma as PrismaClient) : createNoopDlqProvider());
+  let dlqWorker: ReturnType<typeof createDlqWorker> | null = null;
 
   const now = deps.now ?? (() => new Date());
   const stackNowMs = deps.stackNowMs;
@@ -1269,6 +1297,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   }
 
   app.addHook("onClose", async () => {
+    dlqWorker?.stop();
+  });
+
+  app.addHook("onClose", async () => {
     await cache.quit();
   });
 
@@ -1282,6 +1314,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   const precomputeRunner = createPrecomputeRunner({
     app,
     prisma,
+    dlq: dlqProvider,
     logger: app.log,
     apiWriteKey: config.apiWriteKey,
     concurrency: precomputeConcurrency,
@@ -1290,9 +1323,104 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     segmentResolver: deps.segmentResolver
   });
 
+  const dlqExportTaskSchema = z.object({
+    environment: z.nativeEnum(Environment),
+    query: logsQuerySchema
+  });
+
+  const processExportTask = async (payload: unknown) => {
+    const parsed = dlqExportTaskSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid EXPORT_TASK payload: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
+    }
+
+    const queryParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(parsed.data.query)) {
+      if (value !== undefined && value !== null && value !== "") {
+        queryParams.set(key, String(value));
+      }
+    }
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/logs/export${queryParams.toString() ? `?${queryParams.toString()}` : ""}`,
+      headers: {
+        "x-env": parsed.data.environment,
+        "x-dlq-replay": "1"
+      }
+    });
+
+    if (response.statusCode >= 400) {
+      const err = new Error(`EXPORT_TASK replay failed with HTTP ${response.statusCode}`);
+      (err as Error & { statusCode?: number }).statusCode = response.statusCode;
+      throw err;
+    }
+  };
+
+  dlqWorker = createDlqWorker({
+    provider: dlqProvider,
+    logger: app.log,
+    config: {
+      pollMs: dlqPollMs,
+      dueLimit: dlqDueLimit,
+      backoffBaseMs: 2000,
+      backoffMaxMs: 600000,
+      jitterPct: 30
+    },
+    handlers: {
+      processPipesWebhook: async (payload: unknown) => {
+        const parsed = z
+          .object({
+            environment: z.nativeEnum(Environment),
+            body: pipesWebhookBodySchema
+          })
+          .safeParse(payload);
+        if (!parsed.success) {
+          throw new Error(`Invalid PIPES_WEBHOOK payload: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
+        }
+        await processPipesWebhook({
+          environment: parsed.data.environment,
+          prisma,
+          cache,
+          precomputeRunner,
+          body: parsed.data.body
+        });
+      },
+      processPrecomputeTask: async (payload: unknown) => {
+        await precomputeRunner.processTask(payload);
+      },
+      ingestTrackingEvent: async (payload: unknown) => {
+        const parsed = z
+          .object({
+            environment: z.nativeEnum(Environment),
+            body: inAppEventsBodySchema,
+            timestamp: z.string().datetime().optional()
+          })
+          .safeParse(payload);
+        if (!parsed.success) {
+          throw new Error(`Invalid TRACKING_EVENT payload: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
+        }
+        await ingestInAppEvent({
+          prisma,
+          environment: parsed.data.environment,
+          body: parsed.data.body as InAppEventIngestBody,
+          timestamp: parsed.data.timestamp ? new Date(parsed.data.timestamp) : now(),
+          redactSensitiveFields
+        });
+      },
+      processExportTask
+    }
+  });
+
+  if (config.dlqWorkerEnabled !== false && hasDlqStorage) {
+    dlqWorker.start();
+    app.log.info({ dlqPollMs, dlqDueLimit }, "DLQ worker started");
+  }
+
   await registerInAppRoutes({
     app,
     prisma,
+    dlq: dlqProvider,
     meiro,
     wbsAdapter,
     now,
@@ -1331,11 +1459,25 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     app,
     prisma,
     cache,
+    dlq: dlqProvider,
     precomputeRunner,
     requireWriteAuth,
     resolveEnvironment,
     buildResponseError
   });
+
+  if (hasDlqStorage) {
+    await registerDlqRoutes({
+      app,
+      prisma,
+      requireWriteAuth,
+      resolveEnvironment,
+      buildResponseError,
+      runDlqTick: async () => {
+        await dlqWorker?.runTick();
+      }
+    });
+  }
 
   app.get("/health", async () => {
     return {
@@ -4504,13 +4646,103 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     if (!parsed.success) {
       return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
     }
+    const isDlqReplay = request.headers["x-dlq-replay"] === "1";
 
-    const logType = parsed.data.type ?? "decision";
-    if (logType === "stack") {
-      const logs = await prisma.decisionStackLog.findMany({
+    try {
+      const logType = parsed.data.type ?? "decision";
+      if (logType === "stack") {
+        const logs = await prisma.decisionStackLog.findMany({
+          where: {
+            environment,
+            ...(parsed.data.stackKey ? { stackKey: parsed.data.stackKey } : {}),
+            ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+            ...(parsed.data.from || parsed.data.to
+              ? {
+                  timestamp: {
+                    ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
+                    ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
+                  }
+                }
+              : {})
+          },
+          orderBy: { timestamp: "desc" },
+          take: parsed.data.limit ?? 1000
+        });
+
+        reply.header("Content-Type", "application/x-ndjson");
+
+        const body = logs
+          .map((log) =>
+            JSON.stringify({
+              id: log.id,
+              logType: "stack",
+              requestId: log.requestId,
+              stackKey: log.stackKey,
+              version: log.version,
+              profileId: log.profileId,
+              timestamp: log.timestamp.toISOString(),
+              actionType: log.finalActionType,
+              reasonCodes: log.finalReasonsJson,
+              payload: log.payloadJson,
+              steps: log.stepsJson,
+              replayInput: log.replayInputJson,
+              totalMs: log.totalMs,
+              correlationId: log.correlationId
+            })
+          )
+          .join("\n");
+
+        return `${body}\n`;
+      }
+
+      if (logType === "inapp") {
+        const logs = await prisma.inAppDecisionLog.findMany({
+          where: {
+            environment,
+            ...(parsed.data.campaignKey ? { campaignKey: parsed.data.campaignKey } : {}),
+            ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
+            ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
+            ...(parsed.data.from || parsed.data.to
+              ? {
+                  createdAt: {
+                    ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
+                    ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
+                  }
+                }
+              : {})
+          },
+          orderBy: { createdAt: "desc" },
+          take: parsed.data.limit ?? 1000
+        });
+
+        reply.header("Content-Type", "application/x-ndjson");
+
+        const body = logs
+          .map((log) =>
+            JSON.stringify({
+              id: log.id,
+              logType: "inapp",
+              requestId: log.correlationId,
+              campaignKey: log.campaignKey,
+              profileId: log.profileId,
+              placement: log.placement,
+              templateKey: log.templateKey,
+              variantKey: log.variantKey,
+              shown: log.shown,
+              reasons: log.reasonsJson,
+              payload: log.payloadJson,
+              replayInput: log.replayInputJson,
+              timestamp: log.createdAt.toISOString()
+            })
+          )
+          .join("\n");
+
+        return `${body}\n`;
+      }
+
+      const logs = await prisma.decisionLog.findMany({
         where: {
-          environment,
-          ...(parsed.data.stackKey ? { stackKey: parsed.data.stackKey } : {}),
+          ...(parsed.data.decisionId ? { decisionId: parsed.data.decisionId } : {}),
           ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
           ...(parsed.data.from || parsed.data.to
             ? {
@@ -4519,7 +4751,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
                   ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
                 }
               }
-            : {})
+            : {}),
+          decision: {
+            environment
+          }
         },
         orderBy: { timestamp: "desc" },
         take: parsed.data.limit ?? 1000
@@ -4531,114 +4766,53 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         .map((log) =>
           JSON.stringify({
             id: log.id,
-            logType: "stack",
             requestId: log.requestId,
-            stackKey: log.stackKey,
+            decisionId: log.decisionId,
             version: log.version,
             profileId: log.profileId,
             timestamp: log.timestamp.toISOString(),
-            actionType: log.finalActionType,
-            reasonCodes: log.finalReasonsJson,
+            actionType: log.actionType,
             payload: log.payloadJson,
-            steps: log.stepsJson,
-            replayInput: log.replayInputJson,
-            totalMs: log.totalMs,
-            correlationId: log.correlationId
-          })
-        )
-        .join("\n");
-
-      return `${body}\n`;
-    }
-
-    if (logType === "inapp") {
-      const logs = await prisma.inAppDecisionLog.findMany({
-        where: {
-          environment,
-          ...(parsed.data.campaignKey ? { campaignKey: parsed.data.campaignKey } : {}),
-          ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
-          ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
-          ...(parsed.data.from || parsed.data.to
-            ? {
-                createdAt: {
-                  ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
-                  ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
-                }
-              }
-            : {})
-        },
-        orderBy: { createdAt: "desc" },
-        take: parsed.data.limit ?? 1000
-      });
-
-      reply.header("Content-Type", "application/x-ndjson");
-
-      const body = logs
-        .map((log) =>
-          JSON.stringify({
-            id: log.id,
-            logType: "inapp",
-            requestId: log.correlationId,
-            campaignKey: log.campaignKey,
-            profileId: log.profileId,
-            placement: log.placement,
-            templateKey: log.templateKey,
-            variantKey: log.variantKey,
-            shown: log.shown,
+            outcome: log.outcome,
             reasons: log.reasonsJson,
-            payload: log.payloadJson,
-            replayInput: log.replayInputJson,
-            timestamp: log.createdAt.toISOString()
+            trace: log.debugTraceJson,
+            replayInput: log.inputJson,
+            latencyMs: log.latencyMs
           })
         )
         .join("\n");
 
       return `${body}\n`;
-    }
-
-    const logs = await prisma.decisionLog.findMany({
-      where: {
-        ...(parsed.data.decisionId ? { decisionId: parsed.data.decisionId } : {}),
-        ...(parsed.data.profileId ? { profileId: parsed.data.profileId } : {}),
-        ...(parsed.data.from || parsed.data.to
-          ? {
-              timestamp: {
-                ...(parsed.data.from ? { gte: new Date(parsed.data.from) } : {}),
-                ...(parsed.data.to ? { lte: new Date(parsed.data.to) } : {})
-              }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      request.log.error({ err }, "Failed to export logs");
+      if (isDlqReplay) {
+        return buildResponseError(reply, 500, "Failed to export logs");
+      }
+      try {
+        await dlqProvider.enqueueFailure(
+          {
+            topic: "EXPORT_TASK",
+            correlationId: request.id,
+            payload: redactPayload({
+              environment,
+              query: parsed.data
+            }),
+            meta: {
+              source: "api"
             }
-          : {}),
-        decision: {
-          environment
-        }
-      },
-      orderBy: { timestamp: "desc" },
-      take: parsed.data.limit ?? 1000
-    });
-
-    reply.header("Content-Type", "application/x-ndjson");
-
-    const body = logs
-      .map((log) =>
-        JSON.stringify({
-          id: log.id,
-          requestId: log.requestId,
-          decisionId: log.decisionId,
-          version: log.version,
-          profileId: log.profileId,
-          timestamp: log.timestamp.toISOString(),
-          actionType: log.actionType,
-          payload: log.payloadJson,
-          outcome: log.outcome,
-          reasons: log.reasonsJson,
-          trace: log.debugTraceJson,
-          replayInput: log.inputJson,
-          latencyMs: log.latencyMs
-        })
-      )
-      .join("\n");
-
-    return `${body}\n`;
+          },
+          err
+        );
+        return reply.code(202).send({
+          status: "queued",
+          reason: "DLQ_ENQUEUED"
+        });
+      } catch (enqueueError) {
+        request.log.error({ err: enqueueError }, "Failed to enqueue export task into DLQ");
+        return buildResponseError(reply, 500, "Failed to export logs");
+      }
+    }
   });
 
   return app;

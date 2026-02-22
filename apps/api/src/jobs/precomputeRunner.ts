@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Environment, Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
+import type { DlqProvider } from "../dlq/provider";
 
 const cohortSchema = z.discriminatedUnion("type", [
   z.object({
@@ -61,12 +62,14 @@ export interface SegmentResolver {
 
 export interface PrecomputeRunner {
   enqueue(runKey: string): void;
+  processTask(payload: unknown): Promise<void>;
 }
 
 interface RunnerDeps {
   app: FastifyInstance;
   prisma: PrismaClient;
   logger: FastifyBaseLogger;
+  dlq?: DlqProvider;
   apiWriteKey?: string;
   concurrency: number;
   maxRetries: number;
@@ -229,6 +232,29 @@ const incrementPayload = (status: "READY" | "SUPPRESSED" | "NOOP" | "ERROR", ski
 
 const createRunResultId = () => randomUUID();
 
+const precomputeTaskPayloadSchema = z.object({
+  runKey: z.string().min(1),
+  environment: z.enum(["DEV", "STAGE", "PROD"]),
+  mode: z.enum(["decision", "stack"]),
+  key: z.string().min(1),
+  identity: z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("profile"),
+      profileId: z.string().min(1)
+    }),
+    z.object({
+      type: z.literal("lookup"),
+      lookup: z.object({
+        attribute: z.string().min(1),
+        value: z.string().min(1)
+      })
+    })
+  ]),
+  context: z.record(z.unknown()).optional(),
+  ttlSecondsDefault: z.number().int().positive().optional(),
+  overwrite: z.boolean().optional()
+});
+
 export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
   const queue: string[] = [];
   let draining = false;
@@ -274,6 +300,7 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
 
     let attempts = 0;
     let lastError: string | null = null;
+    let failureStatusCode: number | null = null;
     while (attempts <= deps.maxRetries) {
       attempts += 1;
 
@@ -326,12 +353,14 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
 
       if (response.statusCode >= 500) {
         lastError = `HTTP ${response.statusCode} ${response.body}`;
+        failureStatusCode = response.statusCode;
         if (attempts <= deps.maxRetries) {
           await sleep(50 * attempts);
           continue;
         }
       } else if (response.statusCode >= 400) {
         lastError = `HTTP ${response.statusCode} ${response.body}`;
+        failureStatusCode = response.statusCode;
       } else {
         const payload = response.json();
         if (input.parameters.mode === "decision") {
@@ -458,6 +487,52 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
       }
     });
 
+    if (deps.dlq) {
+      const replayPayload = {
+        runKey: input.runKey,
+        environment: input.environment,
+        mode: input.parameters.mode,
+        key: input.parameters.key,
+        identity:
+          input.identity.profileId !== null
+            ? {
+                type: "profile" as const,
+                profileId: input.identity.profileId
+              }
+            : {
+                type: "lookup" as const,
+                lookup: {
+                  attribute: input.identity.lookupAttribute,
+                  value: input.identity.lookupValue
+                }
+              },
+        context: input.parameters.context ?? {},
+        ttlSecondsDefault: input.parameters.ttlSecondsDefault,
+        overwrite: true
+      };
+      const enqueueError = new Error(lastError ?? "Unknown precompute error");
+      if (failureStatusCode) {
+        (enqueueError as Error & { statusCode?: number }).statusCode = failureStatusCode;
+      }
+      await deps.dlq.enqueueFailure(
+        {
+          topic: "PRECOMPUTE_TASK",
+          dedupeKey:
+            input.identity.profileId !== null
+              ? `${input.runKey}:profile:${input.identity.profileId}`
+              : `${input.runKey}:lookup:${input.identity.lookupAttribute}:${input.identity.lookupValue}`,
+          payload: replayPayload,
+          meta: {
+            source: "worker"
+          }
+        },
+        enqueueError,
+        {
+          maxAttempts: failureStatusCode && failureStatusCode >= 400 && failureStatusCode < 500 ? 1 : 8
+        }
+      );
+    }
+
     return { status: "ERROR", skipped: false };
   };
 
@@ -532,6 +607,23 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
         });
       } catch (error) {
         deps.logger.error({ runKey, err: error }, "Precompute run failed");
+        if (deps.dlq) {
+          await deps.dlq.enqueueFailure(
+            {
+              topic: "PRECOMPUTE_TASK",
+              dedupeKey: `run:${runKey}`,
+              payload: {
+                runKey,
+                environment: run.environment,
+                parameters: parsed.data
+              },
+              meta: {
+                source: "worker"
+              }
+            },
+            error instanceof Error ? error : new Error(String(error))
+          );
+        }
         await deps.prisma.precomputeRun.update({
           where: { runKey },
           data: {
@@ -552,6 +644,43 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
       }
       queue.push(runKey);
       void drain();
+    },
+    async processTask(payload: unknown) {
+      const parsed = precomputeTaskPayloadSchema.safeParse(payload);
+      if (!parsed.success) {
+        throw new Error(`Invalid PRECOMPUTE_TASK payload: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
+      }
+
+      const identity: CohortIdentity =
+        parsed.data.identity.type === "profile"
+          ? {
+              profileId: parsed.data.identity.profileId,
+              lookupAttribute: null,
+              lookupValue: null
+            }
+          : {
+              profileId: null,
+              lookupAttribute: parsed.data.identity.lookup.attribute,
+              lookupValue: parsed.data.identity.lookup.value
+            };
+
+      await processIdentity({
+        runKey: parsed.data.runKey,
+        environment: parsed.data.environment as Environment,
+        parameters: {
+          runKey: parsed.data.runKey,
+          mode: parsed.data.mode,
+          key: parsed.data.key,
+          cohort: {
+            type: "profiles",
+            profiles: []
+          },
+          context: parsed.data.context ?? {},
+          ttlSecondsDefault: parsed.data.ttlSecondsDefault,
+          overwrite: parsed.data.overwrite ?? true
+        },
+        identity
+      });
     }
   };
 };

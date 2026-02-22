@@ -18,6 +18,8 @@ import {
   type WbsTransform
 } from "@decisioning/wbs-mapping";
 import { z } from "zod";
+import type { DlqProvider } from "./dlq/provider";
+import { redactPayload } from "./dlq/redaction";
 
 interface WbsInstanceRecord {
   id: string;
@@ -40,6 +42,7 @@ interface WbsMappingRecord {
 export interface RegisterInAppRoutesDeps {
   app: FastifyInstance;
   prisma: PrismaClient;
+  dlq?: DlqProvider;
   meiro: MeiroAdapter;
   wbsAdapter: WbsLookupAdapter;
   now: () => Date;
@@ -147,7 +150,7 @@ const inAppCampaignPromoteBodySchema = z.object({
   targetEnvironment: z.nativeEnum(Environment)
 });
 
-const inAppEventsBodySchema = z.object({
+export const inAppEventsBodySchema = z.object({
   eventType: z.nativeEnum(InAppEventType),
   ts: z.string().datetime().optional(),
   appKey: z.string().min(1),
@@ -166,6 +169,7 @@ const inAppEventsBodySchema = z.object({
     .optional(),
   context: z.record(z.unknown()).optional()
 });
+export type InAppEventIngestBody = z.infer<typeof inAppEventsBodySchema>;
 
 const inAppReportQuerySchema = z.object({
   from: z.string().datetime().optional(),
@@ -274,6 +278,31 @@ const deterministicBucket = (seed: string): number => {
 };
 
 const hashSha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+export const ingestInAppEvent = async (input: {
+  prisma: PrismaClient;
+  environment: Environment;
+  body: InAppEventIngestBody;
+  timestamp: Date;
+  redactSensitiveFields: (value: unknown, keyHint?: string) => unknown;
+}) => {
+  await input.prisma.inAppEvent.create({
+    data: {
+      environment: input.environment,
+      eventType: input.body.eventType,
+      ts: input.timestamp,
+      appKey: input.body.appKey,
+      placement: input.body.placement,
+      campaignKey: input.body.tracking.campaign_id,
+      variantKey: input.body.tracking.variant_id,
+      messageId: input.body.tracking.message_id,
+      profileId: input.body.profileId ?? null,
+      lookupAttribute: input.body.lookup?.attribute ?? null,
+      lookupValueHash: input.body.lookup ? hashSha256(input.body.lookup.value) : null,
+      contextJson: input.body.context ? toInputJson(input.redactSensitiveFields(input.body.context)) : Prisma.JsonNull
+    }
+  });
+};
 
 const stableStringify = (value: unknown): string => {
   if (value === null || typeof value !== "object") {
@@ -2279,7 +2308,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     };
   });
 
-  app.post("/v1/inapp/events", { preHandler: requireDecideAuth }, async (request, reply) => {
+  const ingestInAppEventHandler = async (request: FastifyRequest, reply: FastifyReply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
       return;
@@ -2296,22 +2325,44 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, "Invalid ts value");
     }
 
-    await prisma.inAppEvent.create({
-      data: {
+    try {
+      await ingestInAppEvent({
+        prisma,
         environment,
-        eventType: parsed.data.eventType,
-        ts: timestamp,
-        appKey: parsed.data.appKey,
-        placement: parsed.data.placement,
-        campaignKey: parsed.data.tracking.campaign_id,
-        variantKey: parsed.data.tracking.variant_id,
-        messageId: parsed.data.tracking.message_id,
-        profileId: parsed.data.profileId ?? null,
-        lookupAttribute: parsed.data.lookup?.attribute ?? null,
-        lookupValueHash: parsed.data.lookup ? hashSha256(parsed.data.lookup.value) : null,
-        contextJson: parsed.data.context ? toInputJson(redactSensitiveFields(parsed.data.context)) : Prisma.JsonNull
+        body: parsed.data,
+        timestamp,
+        redactSensitiveFields
+      });
+    } catch (error) {
+      request.log.error({ err: error }, "Failed to persist in-app event");
+      if (!deps.dlq) {
+        return buildResponseError(reply, 500, "Failed to persist in-app event");
       }
-    });
+      try {
+        await deps.dlq.enqueueFailure(
+          {
+            topic: "TRACKING_EVENT",
+            correlationId: requestId,
+            payload: redactPayload({
+              environment,
+              body: parsed.data,
+              timestamp: timestamp.toISOString()
+            }),
+            meta: {
+              source: "api"
+            }
+          },
+          error instanceof Error ? error : new Error(String(error))
+        );
+        return reply.code(202).send({
+          status: "queued",
+          reason: "DLQ_ENQUEUED"
+        });
+      } catch (enqueueError) {
+        request.log.error({ err: enqueueError }, "Failed to enqueue tracking event into DLQ");
+        return buildResponseError(reply, 500, "Failed to persist in-app event");
+      }
+    }
 
     request.log.info(
       {
@@ -2329,7 +2380,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     return {
       status: "ok"
     };
-  });
+  };
+
+  app.post("/v1/inapp/events", { preHandler: requireDecideAuth }, ingestInAppEventHandler);
+  app.post("/v1/events/inapp", { preHandler: requireDecideAuth }, ingestInAppEventHandler);
 
   app.get("/v1/inapp/events", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);

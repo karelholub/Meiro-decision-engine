@@ -6,64 +6,89 @@ import { useEffect, useState } from "react";
 import EnvironmentSelector from "../environment-selector";
 import { cn } from "../../lib/cn";
 
-const coreNavItems = [
-  { href: "/overview", label: "Overview" },
-  { href: "/decisions", label: "Decisions" },
-  { href: "/stacks", label: "Decision Stacks" },
-  { href: "/simulate", label: "Simulator" },
-  { href: "/logs", label: "Logs" },
-  { href: "/docs", label: "Help & Docs" }
+type NavItem = {
+  href: string;
+  label: string;
+};
+
+type NavGroup = {
+  id: "observe" | "build" | "engage" | "configure";
+  label: string;
+  hint: string;
+  items: NavItem[];
+};
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "observe",
+    label: "Observe",
+    hint: "Heartbeat, logs, and execution health",
+    items: [
+      { href: "/overview", label: "Overview" },
+      { href: "/logs", label: "Logs" },
+      { href: "/execution/cache", label: "Realtime Cache" },
+      { href: "/execution/dlq", label: "DLQ" },
+      { href: "/execution/precompute", label: "Precompute Runs" },
+      { href: "/execution/results", label: "Decision Results" }
+    ]
+  },
+  {
+    id: "build",
+    label: "Build",
+    hint: "Authoring and validation",
+    items: [
+      { href: "/decisions", label: "Decisions" },
+      { href: "/stacks", label: "Decision Stacks" },
+      { href: "/simulate", label: "Simulator" }
+    ]
+  },
+  {
+    id: "engage",
+    label: "Engage",
+    hint: "In-app campaign lifecycle",
+    items: [
+      { href: "/engagement/inapp/campaigns", label: "Campaigns" },
+      { href: "/engagement/inapp/apps", label: "Apps" },
+      { href: "/engagement/inapp/placements", label: "Placements" },
+      { href: "/engagement/inapp/templates", label: "Templates" },
+      { href: "/engagement/inapp/reports", label: "Reports" },
+      { href: "/engagement/inapp/events", label: "Events" }
+    ]
+  },
+  {
+    id: "configure",
+    label: "Configure",
+    hint: "Integration settings and governance",
+    items: [
+      { href: "/execution/webhooks", label: "Webhook Rules" },
+      { href: "/settings/wbs", label: "WBS Settings" },
+      { href: "/settings/wbs-mapping", label: "WBS Mapping" },
+      { href: "/settings/app", label: "App Settings" },
+      { href: "/docs", label: "Help & Docs" }
+    ]
+  }
 ];
 
-const engagementNavItems = [
-  { href: "/engagement/inapp/apps", label: "Apps" },
-  { href: "/engagement/inapp/placements", label: "Placements" },
-  { href: "/engagement/inapp/templates", label: "Templates" },
-  { href: "/engagement/inapp/campaigns", label: "Campaigns" },
-  { href: "/engagement/inapp/reports", label: "Reports" },
-  { href: "/engagement/inapp/events", label: "Events" }
-];
+const defaultOpenState: Record<NavGroup["id"], boolean> = {
+  observe: true,
+  build: true,
+  engage: false,
+  configure: false
+};
 
-const settingsNavItems = [
-  { href: "/settings/app", label: "General" },
-  { href: "/settings/wbs", label: "WBS Settings" },
-  { href: "/settings/wbs-mapping", label: "WBS Mapping" }
-];
-
-const executionNavItems = [
-  { href: "/execution/cache", label: "Realtime Cache" },
-  { href: "/execution/precompute", label: "Precompute Runs" },
-  { href: "/execution/results", label: "Decision Results" },
-  { href: "/execution/webhooks", label: "Webhook Rules" }
-];
+const isItemActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const onEngagementRoute = pathname.startsWith("/engagement/");
-  const onSettingsRoute = pathname.startsWith("/settings/");
-  const onExecutionRoute = pathname.startsWith("/execution/");
-  const [engagementOpen, setEngagementOpen] = useState(onEngagementRoute);
-  const [settingsOpen, setSettingsOpen] = useState(onSettingsRoute);
-  const [executionOpen, setExecutionOpen] = useState(onExecutionRoute);
+  const activeGroup = NAV_GROUPS.find((group) => group.items.some((item) => isItemActive(pathname, item.href)))?.id ?? "observe";
+  const activeGroupLabel = NAV_GROUPS.find((group) => group.id === activeGroup)?.label ?? "Observe";
+  const activeItem = NAV_GROUPS.flatMap((group) => group.items).find((item) => isItemActive(pathname, item.href));
+  const [groupOpen, setGroupOpen] = useState<Record<NavGroup["id"], boolean>>(defaultOpenState);
 
   useEffect(() => {
-    if (onEngagementRoute) {
-      setEngagementOpen(true);
-    }
-  }, [onEngagementRoute]);
-
-  useEffect(() => {
-    if (onSettingsRoute) {
-      setSettingsOpen(true);
-    }
-  }, [onSettingsRoute]);
-
-  useEffect(() => {
-    if (onExecutionRoute) {
-      setExecutionOpen(true);
-    }
-  }, [onExecutionRoute]);
+    setGroupOpen((previous) => (previous[activeGroup] ? previous : { ...previous, [activeGroup]: true }));
+  }, [activeGroup]);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1400px] gap-4 px-3 py-4 md:px-6 md:py-6">
@@ -74,134 +99,57 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         )}
       >
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm font-semibold uppercase tracking-wide text-stone-700">Decisioning</p>
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-wide text-stone-700">Decisioning</p>
+            <p className="text-xs text-stone-500">Workflow navigation</p>
+          </div>
           <button className="rounded border border-stone-300 px-2 py-0.5 text-xs md:hidden" onClick={() => setSidebarOpen(false)}>
             Close
           </button>
         </div>
 
-        <nav className="space-y-1 text-sm">
-          {coreNavItems.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+        <nav className="space-y-3 text-sm">
+          {NAV_GROUPS.map((group) => {
+            const currentGroupActive = group.items.some((item) => isItemActive(pathname, item.href));
+            const open = groupOpen[group.id];
+
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "block rounded-md px-3 py-2 transition",
-                  active ? "bg-ink text-white" : "hover:bg-stone-100"
-                )}
-                onClick={() => setSidebarOpen(false)}
-              >
-                {item.label}
-              </Link>
+              <div key={group.id} className="space-y-1">
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-start justify-between rounded-md px-3 py-2 text-left transition",
+                    currentGroupActive ? "bg-ink text-white" : "hover:bg-stone-100"
+                  )}
+                  onClick={() => setGroupOpen((previous) => ({ ...previous, [group.id]: !previous[group.id] }))}
+                >
+                  <span>
+                    <span className="block font-medium">{group.label}</span>
+                    <span className={cn("block text-xs", currentGroupActive ? "text-stone-200" : "text-stone-500")}>{group.hint}</span>
+                  </span>
+                  <span className="pt-1 text-xs">{open ? "▾" : "▸"}</span>
+                </button>
+
+                {open ? (
+                  <div className="space-y-1 pl-3">
+                    {group.items.map((item) => {
+                      const active = isItemActive(pathname, item.href);
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className={cn("block rounded-md px-3 py-2 transition", active ? "bg-ink text-white" : "hover:bg-stone-100")}
+                          onClick={() => setSidebarOpen(false)}
+                        >
+                          {item.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
-
-          <div className="space-y-1">
-            <button
-              type="button"
-              className={cn(
-                "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition",
-                onEngagementRoute ? "bg-ink text-white" : "hover:bg-stone-100"
-              )}
-              onClick={() => setEngagementOpen((prev) => !prev)}
-            >
-              <span>Engagement</span>
-              <span className="text-xs">{engagementOpen ? "▾" : "▸"}</span>
-            </button>
-
-            {engagementOpen ? (
-              <div className="space-y-1 pl-3">
-                {engagementNavItems.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "block rounded-md px-3 py-2 transition",
-                        active ? "bg-ink text-white" : "hover:bg-stone-100"
-                      )}
-                      onClick={() => setSidebarOpen(false)}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="space-y-1">
-            <button
-              type="button"
-              className={cn(
-                "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition",
-                onSettingsRoute ? "bg-ink text-white" : "hover:bg-stone-100"
-              )}
-              onClick={() => setSettingsOpen((prev) => !prev)}
-            >
-              <span>App Settings</span>
-              <span className="text-xs">{settingsOpen ? "▾" : "▸"}</span>
-            </button>
-
-            {settingsOpen ? (
-              <div className="space-y-1 pl-3">
-                {settingsNavItems.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "block rounded-md px-3 py-2 transition",
-                        active ? "bg-ink text-white" : "hover:bg-stone-100"
-                      )}
-                      onClick={() => setSidebarOpen(false)}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="space-y-1">
-            <button
-              type="button"
-              className={cn(
-                "flex w-full items-center justify-between rounded-md px-3 py-2 text-left transition",
-                onExecutionRoute ? "bg-ink text-white" : "hover:bg-stone-100"
-              )}
-              onClick={() => setExecutionOpen((prev) => !prev)}
-            >
-              <span>Execution</span>
-              <span className="text-xs">{executionOpen ? "▾" : "▸"}</span>
-            </button>
-
-            {executionOpen ? (
-              <div className="space-y-1 pl-3">
-                {executionNavItems.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={cn(
-                        "block rounded-md px-3 py-2 transition",
-                        active ? "bg-ink text-white" : "hover:bg-stone-100"
-                      )}
-                      onClick={() => setSidebarOpen(false)}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
         </nav>
       </aside>
 
@@ -216,19 +164,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             >
               Menu
             </button>
-            <h1 className="text-lg font-semibold tracking-tight">Decisioning Extension</h1>
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">Decisioning Extension</h1>
+              <p className="text-xs text-stone-600">
+                {activeItem?.label ? `${activeGroupLabel} / ${activeItem.label}` : "Operational workspace"}
+              </p>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <input
-              readOnly
-              value=""
-              placeholder="Search in Decisions"
-              className="hidden w-56 rounded-md border border-stone-300 bg-white px-3 py-1 text-sm text-stone-500 lg:block"
-            />
             <EnvironmentSelector />
+            <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/simulate">
+              Run Simulation
+            </Link>
             <Link className="rounded-md bg-ink px-3 py-2 text-sm text-white hover:opacity-90" href="/decisions?create=wizard">
-              Quick Create
+              New Decision
             </Link>
           </div>
         </header>

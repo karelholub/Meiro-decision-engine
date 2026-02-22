@@ -337,6 +337,34 @@ const upsertWbsMapping = async () => {
   });
 };
 
+const upsertDlqConfig = async () => {
+  const enabledTopics = {
+    PIPES_WEBHOOK: true,
+    PRECOMPUTE_TASK: true,
+    TRACKING_EVENT: true,
+    EXPORT_TASK: true
+  };
+
+  await prisma.dlqConfig.upsert({
+    where: { id: "dlq_config" },
+    update: {
+      enabledTopics: toInputJson(enabledTopics),
+      backoffBaseMs: 2000,
+      backoffMaxMs: 600000,
+      jitterPct: 30,
+      quarantineAfter: 8
+    },
+    create: {
+      id: "dlq_config",
+      enabledTopics: toInputJson(enabledTopics),
+      backoffBaseMs: 2000,
+      backoffMaxMs: 600000,
+      jitterPct: 30,
+      quarantineAfter: 8
+    }
+  });
+};
+
 const inAppTemplateSchema = {
   type: "object",
   required: ["title", "subtitle", "cta", "image", "deeplink"],
@@ -595,6 +623,7 @@ const main = async () => {
 
   await upsertWbsInstance();
   await upsertWbsMapping();
+  await upsertDlqConfig();
   await upsertInAppMvpSeed();
   await upsertDecisionStack({
     key: "inapp_home_top_default",

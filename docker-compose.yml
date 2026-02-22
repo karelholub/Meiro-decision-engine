@@ -47,6 +47,9 @@ services:
       DECISION_DEFAULT_WBS_TIMEOUT_MS: 80
       DECISION_DEFAULT_CACHE_TTL_SECONDS: 60
       DECISION_DEFAULT_STALE_TTL_SECONDS: 1800
+      DLQ_WORKER_ENABLED: "true"
+      DLQ_POLL_MS: 5000
+      DLQ_DUE_LIMIT: 50
     depends_on:
       postgres:
         condition: service_healthy

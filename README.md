@@ -37,6 +37,11 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - realtime decision endpoints with Redis cache + lock-based stampede protection
   - precompute pipeline writing `DecisionResult` records for bulk activations
   - event/webhook-driven invalidation with optional targeted recompute
+- DB-backed DLQ with retry worker:
+  - topics: `PIPES_WEBHOOK`, `PRECOMPUTE_TASK`, `TRACKING_EVENT`, `EXPORT_TASK`
+  - retry policy for transient failures with exponential backoff + jitter
+  - quarantine for permanent failures or max-attempt exhaustion
+  - admin APIs + UI for retry now, quarantine, and resolve
 - Reliability & defaults v1 for `/v1/decide`:
   - decision-level timeout budgets (`performance.timeoutMs`, `performance.wbsTimeoutMs`)
   - decision-level cache policy (fresh + stale modes: `normal`, `stale_if_error`, `stale_while_revalidate`, `disabled`)
@@ -107,6 +112,13 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `POST /v1/results/cleanup`
   - `GET/PUT /v1/settings/webhook-rules`
   - `POST /v1/webhooks/pipes`
+  - `GET /v1/dlq/messages`
+  - `GET /v1/dlq/messages/:id`
+  - `POST /v1/dlq/messages/:id/retry`
+  - `POST /v1/dlq/messages/:id/quarantine`
+  - `POST /v1/dlq/messages/:id/resolve`
+  - `POST /v1/dlq/retry-due`
+  - `GET /v1/dlq/metrics`
   - paginated logs list + log details + NDJSON export
   - `GET /v1/logs/:id` for payload/trace/replay input
   - environment selection via `X-ENV` header (defaults to `DEV`)
@@ -145,6 +157,8 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `PrecomputeRun` (`precompute_runs`)
 - `DecisionResult` (`decision_results`)
 - `AppSetting` (`app_settings`)
+- `DeadLetterMessage` (`dead_letter_messages`)
+- `DlqConfig` (`dlq_config`)
 
 Migration is included at:
 - `apps/api/prisma/migrations/202602190001_init/migration.sql`
@@ -155,6 +169,7 @@ Migration is included at:
 - `apps/api/prisma/migrations/202602191700_inapp_mvp/migration.sql`
 - `apps/api/prisma/migrations/202602191900_inapp_v2_hardening/migration.sql`
 - `apps/api/prisma/migrations/202602221310_hybrid_execution_v1/migration.sql`
+- `apps/api/prisma/migrations/202602221530_dlq_v1/migration.sql`
 
 ## Environment Variables
 
@@ -187,6 +202,9 @@ Important values:
 - `DECISION_DEFAULT_WBS_TIMEOUT_MS` (default `80`)
 - `DECISION_DEFAULT_CACHE_TTL_SECONDS` (default `60`)
 - `DECISION_DEFAULT_STALE_TTL_SECONDS` (default `1800`)
+- `DLQ_WORKER_ENABLED` (default `true`)
+- `DLQ_POLL_MS` (default `5000`)
+- `DLQ_DUE_LIMIT` (default `50`)
 - `NEXT_PUBLIC_API_BASE_URL`
 - `NEXT_PUBLIC_API_KEY`
 - `NEXT_PUBLIC_DECISION_WIZARD_V1` (`true` in dev by default; set to `false` to force Advanced JSON editing)
@@ -616,6 +634,36 @@ curl -X POST "http://localhost:3001/v1/webhooks/pipes" \
     }
   }'
 ```
+
+### DLQ list messages
+
+```bash
+curl "http://localhost:3001/v1/dlq/messages?status=PENDING&limit=50" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV"
+```
+
+### DLQ retry message now
+
+```bash
+curl -X POST "http://localhost:3001/v1/dlq/messages/<MESSAGE_ID>/retry" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{}'
+```
+
+### DLQ behavior summary
+
+- DLQ stores failed async/edge processing events for:
+  - pipes webhook processing
+  - precompute identity tasks and run-level failures
+  - in-app tracking event persistence failures
+  - export task failures
+- Worker retries due messages automatically (`DLQ_POLL_MS`, `DLQ_DUE_LIMIT`).
+- Permanent failures (validation/schema/4xx) and max-attempt messages move to `QUARANTINED`.
+- Operators can inspect payload/error, retry immediately, quarantine with note, or mark resolved from UI/API.
+- Stored payload/headers are redacted (authorization/cookie/api-key/token/secret/password fields).
 
 ### Get WBS settings
 

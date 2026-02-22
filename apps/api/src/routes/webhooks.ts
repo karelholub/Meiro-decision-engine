@@ -3,6 +3,8 @@ import type { Environment, Prisma, PrismaClient } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { JsonCache } from "../lib/cache";
+import type { DlqProvider } from "../dlq/provider";
+import { redactHeaders, redactPayload } from "../dlq/redaction";
 import type { PrecomputeRunner } from "../jobs/precomputeRunner";
 import { invalidateRealtimeCache } from "./cache";
 
@@ -60,6 +62,7 @@ const pipesBodySchema = z
       });
     }
   });
+export const pipesWebhookBodySchema = pipesBodySchema;
 
 const defaultWebhookRules: z.infer<typeof webhookRuleSchema>[] = [
   {
@@ -85,11 +88,13 @@ const defaultWebhookRules: z.infer<typeof webhookRuleSchema>[] = [
 ];
 
 const SETTINGS_KEY = "pipes_webhook_rules";
+export type PipesWebhookBody = z.infer<typeof pipesBodySchema>;
 
 export interface RegisterWebhooksRoutesDeps {
   app: FastifyInstance;
   prisma: PrismaClient;
   cache: JsonCache;
+  dlq?: DlqProvider;
   precomputeRunner: PrecomputeRunner;
   requireWriteAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
   resolveEnvironment: (request: FastifyRequest, reply: FastifyReply) => Environment | null;
@@ -114,6 +119,127 @@ const loadRules = async (prisma: PrismaClient, environment: Environment) => {
   }
 
   return parsed.data.rules;
+};
+
+export const processPipesWebhook = async (input: {
+  environment: Environment;
+  prisma: PrismaClient;
+  cache: JsonCache;
+  precomputeRunner: PrecomputeRunner;
+  body: PipesWebhookBody;
+}) => {
+  const rules = await loadRules(input.prisma, input.environment);
+  const matchedRules = rules.filter(
+    (rule) => rule.enabled && rule.eventType.toLowerCase() === input.body.eventType.toLowerCase()
+  );
+  if (matchedRules.length === 0) {
+    return {
+      status: "ignored",
+      eventType: input.body.eventType,
+      matchedRules: 0
+    };
+  }
+
+  let deletedKeys = 0;
+  let expiredResults = 0;
+  const triggeredRuns: string[] = [];
+
+  for (const rule of matchedRules) {
+    for (const invalidation of rule.invalidations) {
+      const invalidatePayload =
+        invalidation.scope === "profile"
+          ? {
+              scope: "profile" as const,
+              profileId: input.body.profileId,
+              alsoExpireDecisionResults: invalidation.alsoExpireDecisionResults
+            }
+          : invalidation.scope === "lookup"
+            ? {
+                scope: "lookup" as const,
+                lookup: input.body.lookup,
+                alsoExpireDecisionResults: invalidation.alsoExpireDecisionResults
+              }
+            : {
+                scope: "prefix" as const,
+                prefix: invalidation.prefix,
+                alsoExpireDecisionResults: invalidation.alsoExpireDecisionResults
+              };
+
+      if (invalidatePayload.scope === "profile" && !invalidatePayload.profileId) {
+        continue;
+      }
+      if (invalidatePayload.scope === "lookup" && !invalidatePayload.lookup) {
+        continue;
+      }
+      if (invalidatePayload.scope === "prefix" && !invalidatePayload.prefix) {
+        continue;
+      }
+
+      const result = await invalidateRealtimeCache({
+        environment: input.environment,
+        payload: invalidatePayload,
+        cache: input.cache,
+        prisma: input.prisma
+      });
+      deletedKeys += result.deletedKeys;
+      expiredResults += result.expiredResults;
+    }
+
+    if (rule.recompute?.enabled) {
+      const identityCohort = input.body.profileId
+        ? {
+            type: "profiles" as const,
+            profiles: [input.body.profileId]
+          }
+        : input.body.lookup
+          ? {
+              type: "lookups" as const,
+              lookups: [
+                {
+                  attribute: input.body.lookup.attribute,
+                  value: input.body.lookup.value
+                }
+              ]
+            }
+          : null;
+
+      if (identityCohort) {
+        const runKey = `pipes_${input.body.eventType}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+        await input.prisma.precomputeRun.create({
+          data: {
+            runKey,
+            environment: input.environment,
+            mode: rule.recompute.mode,
+            key: rule.recompute.key,
+            status: "QUEUED",
+            parameters: {
+              runKey,
+              mode: rule.recompute.mode,
+              key: rule.recompute.key,
+              cohort: identityCohort,
+              context: {
+                ...(rule.recompute.context ?? {}),
+                ...(input.body.context ?? {})
+              },
+              ttlSecondsDefault: rule.recompute.ttlSecondsDefault,
+              overwrite: true
+            } as Prisma.InputJsonValue
+          }
+        });
+        input.precomputeRunner.enqueue(runKey);
+        triggeredRuns.push(runKey);
+      }
+    }
+  }
+
+  return {
+    status: "ok",
+    eventType: input.body.eventType,
+    matchedRules: matchedRules.length,
+    deletedKeys,
+    expiredResults,
+    triggeredRuns
+  };
 };
 
 export const registerWebhooksRoutes = async (deps: RegisterWebhooksRoutesDeps) => {
@@ -182,117 +308,48 @@ export const registerWebhooksRoutes = async (deps: RegisterWebhooksRoutesDeps) =
       return deps.buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
     }
 
-    const rules = await loadRules(deps.prisma, environment);
-    const matchedRules = rules.filter(
-      (rule) => rule.enabled && rule.eventType.toLowerCase() === parsed.data.eventType.toLowerCase()
-    );
-    if (matchedRules.length === 0) {
-      return {
-        status: "ignored",
-        eventType: parsed.data.eventType,
-        matchedRules: 0
-      };
-    }
+    try {
+      const result = await processPipesWebhook({
+        environment,
+        prisma: deps.prisma,
+        cache: deps.cache,
+        precomputeRunner: deps.precomputeRunner,
+        body: parsed.data
+      });
+      return result;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      request.log.error({ err }, "Pipes webhook processing failed");
 
-    let deletedKeys = 0;
-    let expiredResults = 0;
-    const triggeredRuns: string[] = [];
-
-    for (const rule of matchedRules) {
-      for (const invalidation of rule.invalidations) {
-        const invalidatePayload =
-          invalidation.scope === "profile"
-            ? {
-                scope: "profile" as const,
-                profileId: parsed.data.profileId,
-                alsoExpireDecisionResults: invalidation.alsoExpireDecisionResults
-              }
-            : invalidation.scope === "lookup"
-              ? {
-                  scope: "lookup" as const,
-                  lookup: parsed.data.lookup,
-                  alsoExpireDecisionResults: invalidation.alsoExpireDecisionResults
-                }
-              : {
-                  scope: "prefix" as const,
-                  prefix: invalidation.prefix,
-                  alsoExpireDecisionResults: invalidation.alsoExpireDecisionResults
-                };
-
-        if (invalidatePayload.scope === "profile" && !invalidatePayload.profileId) {
-          continue;
-        }
-        if (invalidatePayload.scope === "lookup" && !invalidatePayload.lookup) {
-          continue;
-        }
-        if (invalidatePayload.scope === "prefix" && !invalidatePayload.prefix) {
-          continue;
-        }
-
-        const result = await invalidateRealtimeCache({
-          environment,
-          payload: invalidatePayload,
-          cache: deps.cache,
-          prisma: deps.prisma
-        });
-        deletedKeys += result.deletedKeys;
-        expiredResults += result.expiredResults;
+      if (!deps.dlq) {
+        return deps.buildResponseError(reply, 500, "Webhook processing failed");
       }
 
-      if (rule.recompute?.enabled) {
-        const identityCohort = parsed.data.profileId
-          ? {
-              type: "profiles" as const,
-              profiles: [parsed.data.profileId]
-            }
-          : parsed.data.lookup
-            ? {
-                type: "lookups" as const,
-                lookups: [
-                  {
-                    attribute: parsed.data.lookup.attribute,
-                    value: parsed.data.lookup.value
-                  }
-                ]
-              }
-            : null;
-
-        if (identityCohort) {
-          const runKey = `pipes_${parsed.data.eventType}_${Date.now()}_${randomUUID().slice(0, 8)}`;
-          await deps.prisma.precomputeRun.create({
-            data: {
-              runKey,
+      try {
+        await deps.dlq.enqueueFailure(
+          {
+            topic: "PIPES_WEBHOOK",
+            correlationId: request.id,
+            payload: redactPayload({
               environment,
-              mode: rule.recompute.mode,
-              key: rule.recompute.key,
-              status: "QUEUED",
-              parameters: {
-                runKey,
-                mode: rule.recompute.mode,
-                key: rule.recompute.key,
-                cohort: identityCohort,
-                context: {
-                  ...(rule.recompute.context ?? {}),
-                  ...(parsed.data.context ?? {})
-                },
-                ttlSecondsDefault: rule.recompute.ttlSecondsDefault,
-                overwrite: true
-              } as Prisma.InputJsonValue
+              body: parsed.data
+            }),
+            meta: {
+              source: "webhook",
+              headers: redactHeaders(request.headers as Record<string, unknown>)
             }
-          });
-          deps.precomputeRunner.enqueue(runKey);
-          triggeredRuns.push(runKey);
-        }
+          },
+          err
+        );
+        return reply.code(202).send({
+          status: "queued",
+          eventType: parsed.data.eventType,
+          reason: "DLQ_ENQUEUED"
+        });
+      } catch (enqueueError) {
+        request.log.error({ err: enqueueError }, "Failed to enqueue webhook failure into DLQ");
+        return deps.buildResponseError(reply, 500, "Webhook processing failed");
       }
     }
-
-    return {
-      status: "ok",
-      eventType: parsed.data.eventType,
-      matchedRules: matchedRules.length,
-      deletedKeys,
-      expiredResults,
-      triggeredRuns
-    };
   });
 };

@@ -35,6 +35,51 @@ export class ApiError extends Error {
   }
 }
 
+export type SystemHealthResponse = {
+  status: "ok" | string;
+  timestamp: string;
+};
+
+export type RealtimeCacheStatsResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  redisEnabled: boolean;
+  ttlSecondsDefault: number;
+  importantContextKeys: string[];
+  hits: number;
+  misses: number;
+  hitRate: number;
+  fallbackCount?: number;
+  staleServedCount?: number;
+};
+
+export type DlqTopic = "PIPES_WEBHOOK" | "PRECOMPUTE_TASK" | "TRACKING_EVENT" | "EXPORT_TASK";
+export type DlqStatus = "PENDING" | "RETRYING" | "QUARANTINED" | "RESOLVED";
+
+export type DlqMessage = {
+  id: string;
+  topic: DlqTopic;
+  status: DlqStatus;
+  payload: Record<string, unknown>;
+  payloadHash: string;
+  dedupeKey: string | null;
+  errorType: string;
+  errorMessage: string;
+  errorMeta: Record<string, unknown> | null;
+  attempts: number;
+  maxAttempts: number;
+  nextRetryAt: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  tenantKey: string | null;
+  correlationId: string | null;
+  source: string | null;
+  createdBy: string | null;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNote: string | null;
+  dueNow: boolean;
+};
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   if (!headers.has("Content-Type") && init?.body) {
@@ -105,6 +150,9 @@ export const toQuery = (params: Record<string, string | number | boolean | undef
 };
 
 export const apiClient = {
+  system: {
+    health: () => apiFetch<SystemHealthResponse>(`/health`)
+  },
   decisions: {
     list: (params: { status?: string; q?: string; page?: number; limit?: number } = {}) =>
       apiFetch<{ items: DecisionVersionSummary[]; page: number; limit: number; total: number; totalPages: number }>(
@@ -337,16 +385,7 @@ export const apiClient = {
   },
   execution: {
     cache: {
-      stats: () =>
-        apiFetch<{
-          environment: "DEV" | "STAGE" | "PROD";
-          redisEnabled: boolean;
-          ttlSecondsDefault: number;
-          importantContextKeys: string[];
-          hits: number;
-          misses: number;
-          hitRate: number;
-        }>(`/v1/cache/stats`),
+      stats: () => apiFetch<RealtimeCacheStatsResponse>(`/v1/cache/stats`),
       invalidate: (input: {
         scope: "profile" | "lookup" | "prefix";
         profileId?: string;
@@ -472,6 +511,56 @@ export const apiClient = {
           }
         )
     }
+  },
+  dlq: {
+    listMessages: (params: {
+      topic?: DlqTopic;
+      status?: DlqStatus;
+      q?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}) =>
+      apiFetch<{
+        items: DlqMessage[];
+        nextCursor: string | null;
+      }>(`/v1/dlq/messages${toQuery(params)}`),
+    getMessage: (id: string) =>
+      apiFetch<{
+        item: DlqMessage;
+      }>(`/v1/dlq/messages/${id}`),
+    retryNow: (id: string) =>
+      apiFetch<{
+        item: DlqMessage;
+      }>(`/v1/dlq/messages/${id}/retry`, {
+        method: "POST",
+        body: JSON.stringify({})
+      }),
+    quarantine: (id: string, note?: string) =>
+      apiFetch<{
+        item: DlqMessage;
+      }>(`/v1/dlq/messages/${id}/quarantine`, {
+        method: "POST",
+        body: JSON.stringify(note ? { note } : {})
+      }),
+    resolve: (id: string, note?: string) =>
+      apiFetch<{
+        item: DlqMessage;
+      }>(`/v1/dlq/messages/${id}/resolve`, {
+        method: "POST",
+        body: JSON.stringify(note ? { note } : {})
+      }),
+    retryDue: () =>
+      apiFetch<{
+        status: string;
+      }>(`/v1/dlq/retry-due`, {
+        method: "POST",
+        body: JSON.stringify({})
+      }),
+    metrics: () =>
+      apiFetch<{
+        dueNow: number;
+        items: Array<{ topic: DlqTopic; status: DlqStatus; count: number }>;
+      }>(`/v1/dlq/metrics`)
   },
   settings: {
     getWbs: () => apiFetch<{ item: WbsInstanceSettings | null }>(`/v1/settings/wbs`),

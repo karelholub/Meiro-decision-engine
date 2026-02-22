@@ -18,6 +18,9 @@ export interface AppConfig {
   decisionDefaultWbsTimeoutMs?: number;
   decisionDefaultCacheTtlSeconds?: number;
   decisionDefaultStaleTtlSeconds?: number;
+  dlqWorkerEnabled?: boolean;
+  dlqPollMs?: number;
+  dlqDueLimit?: number;
 }
 
 const toBool = (value: string | undefined, fallback: boolean): boolean => {
@@ -73,5 +76,8 @@ export const readConfig = (): AppConfig => ({
   decisionDefaultTimeoutMs: toNumber(process.env.DECISION_DEFAULT_TIMEOUT_MS, 120),
   decisionDefaultWbsTimeoutMs: toNumber(process.env.DECISION_DEFAULT_WBS_TIMEOUT_MS, 80),
   decisionDefaultCacheTtlSeconds: toNumber(process.env.DECISION_DEFAULT_CACHE_TTL_SECONDS, 60),
-  decisionDefaultStaleTtlSeconds: toNumber(process.env.DECISION_DEFAULT_STALE_TTL_SECONDS, 1800)
+  decisionDefaultStaleTtlSeconds: toNumber(process.env.DECISION_DEFAULT_STALE_TTL_SECONDS, 1800),
+  dlqWorkerEnabled: toBool(process.env.DLQ_WORKER_ENABLED, true),
+  dlqPollMs: toNumber(process.env.DLQ_POLL_MS, 5000),
+  dlqDueLimit: toNumber(process.env.DLQ_DUE_LIMIT, 50)
 });
