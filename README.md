@@ -1003,6 +1003,7 @@ Smoke gate configuration:
 - `SMOKE_MAX_FALLBACK_RATE` (default `0.00`)
 
 Operational docs:
+- DevOps deploy/run/monitor guide: `docs/devops-deployment-operations.md`
 - Golden signals: `docs/observability-golden-signals.md`
 - Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
 - Drill report (latest): `docs/runbooks/drill-report-2026-02-22.md`
@@ -1049,6 +1050,7 @@ Current structure intentionally leaves extension points for:
 - WBS settings UI: `apps/ui/src/app/settings/wbs/page.tsx`
 - WBS mapping UI: `apps/ui/src/app/settings/wbs-mapping/page.tsx`
 - In-app v2 smoke gate script: `apps/api/scripts/load-smoke-inapp-v2.ts`
+- DevOps deploy/run/monitor guide: `docs/devops-deployment-operations.md`
 - Observability golden signals: `docs/observability-golden-signals.md`
 - Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
 
