@@ -41,7 +41,7 @@ Acceptance:
 - No duplicate in-app route implementations remain.
 - API and UI integration tests pass on canonical endpoints only.
 
-### Chunk 3: Hot-path simplification and module boundaries
+### Chunk 3 (completed): Hot-path simplification and module boundaries
 
 Goal:
 - Split large route logic into focused services for maintainability and performance tuning.
