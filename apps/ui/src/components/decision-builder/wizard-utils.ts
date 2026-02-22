@@ -47,6 +47,7 @@ const SUPPORTED_TOP_LEVEL_KEYS = new Set([
   "performance",
   "cachePolicy",
   "fallback",
+  "requiredAttributes",
   "caps",
   "flow",
   "outputs"

@@ -65,6 +65,17 @@ describe("detectWizardUnsupported", () => {
     expect(result.reasons).toEqual([]);
   });
 
+  it("allows requiredAttributes at the top level", () => {
+    const withRequiredAttributes = {
+      ...baseDefinition,
+      requiredAttributes: ["email", "purchase_count"]
+    } as unknown;
+
+    const result = detectWizardUnsupported(withRequiredAttributes);
+    expect(result.supported).toBe(true);
+    expect(result.reasons).toEqual([]);
+  });
+
   it("flags unsupported operators and OR groups", () => {
     const advanced = {
       ...baseDefinition,
