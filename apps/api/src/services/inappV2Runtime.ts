@@ -1,0 +1,878 @@
+import { Environment, InAppCampaignStatus, Prisma, type PrismaClient } from "@prisma/client";
+import type { EngineProfile } from "@decisioning/engine";
+import type { MeiroAdapter, WbsLookupAdapter, WbsLookupResponse } from "@decisioning/meiro";
+import {
+  WbsMappingConfigSchema,
+  applyTransform,
+  mapWbsLookupToProfile,
+  type WbsTransform
+} from "@decisioning/wbs-mapping";
+import type { FastifyBaseLogger } from "fastify";
+import type { JsonCache } from "../lib/cache";
+import { sha256, stableStringify } from "../lib/cacheKey";
+import { withTimeout } from "../lib/timeout";
+
+export interface InAppV2DecideBody {
+  appKey: string;
+  placement: string;
+  decisionKey?: string;
+  stackKey?: string;
+  profileId?: string;
+  lookup?: {
+    attribute: string;
+    value: string;
+  };
+  context?: Record<string, unknown>;
+}
+
+export interface InAppDecideResponse {
+  show: boolean;
+  placement: string;
+  templateId: string;
+  ttl_seconds: number;
+  tracking: {
+    campaign_id: string;
+    message_id: string;
+    variant_id: string;
+  };
+  payload: Record<string, unknown>;
+}
+
+export interface InAppV2DecideResponse extends InAppDecideResponse {
+  debug: {
+    cache: {
+      hit: boolean;
+      servedStale: boolean;
+    };
+    latencyMs: {
+      total: number;
+      wbs: number;
+      engine: number;
+    };
+    fallbackReason?: string;
+  };
+}
+
+interface ParsedBinding {
+  sourcePath: string;
+  transforms: WbsTransform[];
+}
+
+interface WbsInstanceRecord {
+  baseUrl: string;
+  attributeParamName: string;
+  valueParamName: string;
+  segmentParamName: string;
+  includeSegment: boolean;
+  defaultSegmentValue: string | null;
+  timeoutMs: number;
+}
+
+interface WbsMappingRecord {
+  mappingJson: unknown;
+  profileIdStrategy: "CUSTOMER_ENTITY_ID" | "ATTRIBUTE_KEY" | "HASH_FALLBACK";
+  profileIdAttributeKey: string | null;
+}
+
+type ActiveCampaignWithVariants = Prisma.InAppCampaignGetPayload<{
+  include: { variants: true };
+}>;
+type InAppPlacementRecord = Prisma.InAppPlacementGetPayload<Record<string, never>>;
+type InAppTemplateRecord = Prisma.InAppTemplateGetPayload<Record<string, never>>;
+
+interface InAppV2RuntimeDeps {
+  prisma: PrismaClient;
+  cache: JsonCache;
+  meiro: MeiroAdapter;
+  wbsAdapter: WbsLookupAdapter;
+  now: () => Date;
+  config: {
+    wbsTimeoutMs: number;
+    cacheTtlSeconds: number;
+    staleTtlSeconds: number;
+    cacheContextKeys: string[];
+  };
+  fetchActiveWbsInstance: (environment: Environment) => Promise<WbsInstanceRecord | null>;
+  fetchActiveWbsMapping: (environment: Environment) => Promise<WbsMappingRecord | null>;
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+};
+
+const hashSha256 = (value: string): string => sha256(value);
+
+const getValueByPath = (source: unknown, path: string): unknown => {
+  return path.split(".").reduce<unknown>((current, segment) => {
+    if (!segment) {
+      return current;
+    }
+    if (Array.isArray(current)) {
+      const index = Number.parseInt(segment, 10);
+      return Number.isFinite(index) ? current[index] : undefined;
+    }
+    if (current && typeof current === "object") {
+      return (current as Record<string, unknown>)[segment];
+    }
+    return undefined;
+  }, source);
+};
+
+const deterministicBucket = (seed: string): number => {
+  const digest = hashSha256(seed).slice(0, 8);
+  const numeric = Number.parseInt(digest, 16);
+  return Number.isFinite(numeric) ? numeric % 100 : 0;
+};
+
+const parseBinding = (raw: unknown): { binding?: ParsedBinding; error?: string } => {
+  const allowedTransforms = new Set<WbsTransform>(["takeFirst", "takeAll", "parseJsonIfString", "coerceNumber"]);
+  if (typeof raw === "string") {
+    const [sourcePath, ...transformsRaw] = raw
+      .split("|")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    if (!sourcePath) {
+      return { error: "binding path is required" };
+    }
+
+    const transforms: WbsTransform[] = [];
+    for (const transform of transformsRaw) {
+      if (!allowedTransforms.has(transform as WbsTransform)) {
+        return { error: `unsupported transform '${transform}'` };
+      }
+      transforms.push(transform as WbsTransform);
+    }
+    return {
+      binding: {
+        sourcePath,
+        transforms
+      }
+    };
+  }
+
+  if (isObject(raw) && typeof raw.sourcePath === "string" && raw.sourcePath.trim().length > 0) {
+    const transformsRaw = Array.isArray(raw.transforms) ? raw.transforms : [];
+    const transforms: WbsTransform[] = [];
+    for (const transform of transformsRaw) {
+      if (typeof transform !== "string") {
+        return { error: "transform entries must be strings" };
+      }
+      if (!allowedTransforms.has(transform as WbsTransform)) {
+        return { error: `unsupported transform '${transform}'` };
+      }
+      transforms.push(transform as WbsTransform);
+    }
+
+    return {
+      binding: {
+        sourcePath: raw.sourcePath,
+        transforms
+      }
+    };
+  }
+
+  return { error: "binding must be a string path or {sourcePath, transforms}" };
+};
+
+const parseTokenBindings = (raw: unknown): { values: Record<string, ParsedBinding>; errors: string[] } => {
+  if (!isObject(raw)) {
+    return {
+      values: {},
+      errors: []
+    };
+  }
+
+  const values: Record<string, ParsedBinding> = {};
+  const errors: string[] = [];
+  for (const [token, entry] of Object.entries(raw)) {
+    const parsed = parseBinding(entry);
+    if (!parsed.binding) {
+      errors.push(`tokenBindingsJson.${token}: ${parsed.error}`);
+      continue;
+    }
+    values[token] = parsed.binding;
+  }
+  return { values, errors };
+};
+
+const resolveTemplateExpression = (tokens: Record<string, unknown>, expression: string): unknown => {
+  const [root, ...path] = expression.trim().split(".");
+  if (!root) {
+    return undefined;
+  }
+
+  let value: unknown = tokens[root];
+  for (const segment of path) {
+    if (!segment) {
+      continue;
+    }
+    value = getValueByPath(value, segment);
+  }
+  return value;
+};
+
+const renderTemplateValue = (value: unknown, tokens: Record<string, unknown>): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => renderTemplateValue(entry, tokens));
+  }
+  if (isObject(value)) {
+    const next: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      next[key] = renderTemplateValue(nested, tokens);
+    }
+    return next;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const fullToken = value.match(/^\{\{\s*([^}]+)\s*\}\}$/);
+  if (fullToken?.[1]) {
+    const resolved = resolveTemplateExpression(tokens, fullToken[1]);
+    return resolved ?? "";
+  }
+
+  return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_match, expression: string) => {
+    const resolved = resolveTemplateExpression(tokens, expression);
+    if (resolved === undefined || resolved === null) {
+      return "";
+    }
+    if (typeof resolved === "string" || typeof resolved === "number" || typeof resolved === "boolean") {
+      return String(resolved);
+    }
+    return JSON.stringify(resolved);
+  });
+};
+
+const selectVariant = (input: {
+  profileId: string;
+  campaignKey: string;
+  salt: string;
+  variants: Array<{ variantKey: string; weight: number; contentJson: unknown }>;
+}) => {
+  const sorted = [...input.variants].sort((a, b) => a.variantKey.localeCompare(b.variantKey));
+  if (sorted.length === 0) {
+    return {
+      bucket: 0,
+      variant: null as (typeof sorted)[number] | null
+    };
+  }
+  const weightSignature = sorted.map((variant) => `${variant.variantKey}:${variant.weight}`).join("|");
+  const bucket = deterministicBucket(`${input.profileId}:${input.campaignKey}:${weightSignature}:${input.salt}`);
+  let cumulative = 0;
+  for (const variant of sorted) {
+    cumulative += Math.max(0, variant.weight);
+    if (bucket < cumulative) {
+      return { bucket, variant };
+    }
+  }
+  return {
+    bucket,
+    variant: sorted[0] ?? null
+  };
+};
+
+const campaignPassesSchedule = (campaign: { startAt: Date | null; endAt: Date | null }, nowDate: Date): boolean => {
+  if (campaign.startAt && campaign.startAt.getTime() > nowDate.getTime()) {
+    return false;
+  }
+  if (campaign.endAt && campaign.endAt.getTime() < nowDate.getTime()) {
+    return false;
+  }
+  return true;
+};
+
+const buildNoShowResponse = (input: { placement: string }): InAppDecideResponse => {
+  return {
+    show: false,
+    placement: input.placement,
+    templateId: "none",
+    ttl_seconds: 0,
+    tracking: {
+      campaign_id: "",
+      message_id: "",
+      variant_id: ""
+    },
+    payload: {}
+  };
+};
+
+const normalizeInAppResponse = (raw: unknown, fallbackPlacement: string): InAppDecideResponse | null => {
+  if (!isObject(raw) || !isObject(raw.tracking)) {
+    return null;
+  }
+  const ttlSecondsRaw = Number(raw.ttl_seconds ?? 0);
+  const ttlSeconds = Number.isFinite(ttlSecondsRaw) ? Math.max(0, Math.floor(ttlSecondsRaw)) : 0;
+  const payloadRaw = isObject(raw.payload) ? raw.payload : {};
+  return {
+    show: Boolean(raw.show),
+    placement: typeof raw.placement === "string" && raw.placement.length > 0 ? raw.placement : fallbackPlacement,
+    templateId: typeof raw.templateId === "string" && raw.templateId.length > 0 ? raw.templateId : "none",
+    ttl_seconds: ttlSeconds,
+    tracking: {
+      campaign_id: typeof raw.tracking.campaign_id === "string" ? raw.tracking.campaign_id : "",
+      message_id: typeof raw.tracking.message_id === "string" ? raw.tracking.message_id : "",
+      variant_id: typeof raw.tracking.variant_id === "string" ? raw.tracking.variant_id : ""
+    },
+    payload: payloadRaw
+  };
+};
+
+const buildInappV2IdentityKey = (input: { profileId?: string; lookup?: { attribute: string; value: string } }) => {
+  if (input.profileId) {
+    return `profile:${input.profileId}`;
+  }
+  if (input.lookup) {
+    return `lookup:${input.lookup.attribute}=${input.lookup.value}`;
+  }
+  return "identity:unknown";
+};
+
+const pickAllowedContext = (context: Record<string, unknown> | undefined, allowlist: string[]): Record<string, unknown> => {
+  if (!context || allowlist.length === 0) {
+    return {};
+  }
+  const selected: Record<string, unknown> = {};
+  for (const key of allowlist) {
+    if (Object.prototype.hasOwnProperty.call(context, key)) {
+      selected[key] = context[key];
+    }
+  }
+  return selected;
+};
+
+const buildInappV2CacheKey = (input: {
+  environment: Environment;
+  appKey: string;
+  placement: string;
+  identityKey: string;
+  keyType: string;
+  key: string;
+  checksum: string;
+  contextHash: string;
+}) => {
+  return [
+    "inapp:decide",
+    input.environment.toLowerCase(),
+    encodeURIComponent(input.appKey),
+    encodeURIComponent(input.placement),
+    encodeURIComponent(input.identityKey),
+    encodeURIComponent(input.keyType),
+    encodeURIComponent(input.key),
+    input.checksum,
+    input.contextHash
+  ].join(":");
+};
+
+const buildInappV2StaleKey = (cacheKey: string) => `${cacheKey}:stale`;
+
+export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
+  const campaignSetCache = new Map<
+    string,
+    {
+      loadedAtMs: number;
+      campaigns: ActiveCampaignWithVariants[];
+      placement: InAppPlacementRecord | null;
+      templatesByKey: Map<string, InAppTemplateRecord>;
+      checksum: string;
+    }
+  >();
+  const CAMPAIGN_SET_CACHE_TTL_MS = 5000;
+
+  const loadCampaignSet = async (input: { environment: Environment; appKey: string; placement: string }) => {
+    const cacheKey = `${input.environment}:${input.appKey}:${input.placement}`;
+    const cached = campaignSetCache.get(cacheKey);
+    const nowMs = Date.now();
+    if (cached && nowMs - cached.loadedAtMs < CAMPAIGN_SET_CACHE_TTL_MS) {
+      return cached;
+    }
+
+    const [campaigns, placement] = await Promise.all([
+      deps.prisma.inAppCampaign.findMany({
+        where: {
+          environment: input.environment,
+          appKey: input.appKey,
+          placementKey: input.placement,
+          status: InAppCampaignStatus.ACTIVE
+        },
+        include: {
+          variants: true
+        },
+        orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
+      }),
+      deps.prisma.inAppPlacement.findFirst({
+        where: {
+          environment: input.environment,
+          key: input.placement
+        }
+      })
+    ]);
+
+    const templateKeys = [...new Set(campaigns.map((campaign) => campaign.templateKey).filter(Boolean))];
+    const templates = templateKeys.length
+      ? await deps.prisma.inAppTemplate.findMany({
+          where: {
+            environment: input.environment,
+            key: {
+              in: templateKeys
+            }
+          }
+        })
+      : [];
+    const templatesByKey = new Map(templates.map((template) => [template.key, template]));
+    const checksum = hashSha256(
+      stableStringify({
+        campaigns: campaigns.map((campaign) => ({
+          key: campaign.key,
+          updatedAt: campaign.updatedAt.toISOString(),
+          activatedAt: campaign.activatedAt?.toISOString() ?? null,
+          priority: campaign.priority,
+          ttlSeconds: campaign.ttlSeconds,
+          templateKey: campaign.templateKey,
+          holdoutEnabled: campaign.holdoutEnabled,
+          holdoutPercentage: campaign.holdoutPercentage,
+          schedule: {
+            startAt: campaign.startAt?.toISOString() ?? null,
+            endAt: campaign.endAt?.toISOString() ?? null
+          },
+          audiences: Array.isArray(campaign.eligibilityAudiencesAny) ? campaign.eligibilityAudiencesAny : [],
+          tokenBindingsJson: isObject(campaign.tokenBindingsJson) ? campaign.tokenBindingsJson : {},
+          variants: campaign.variants
+            .map((variant) => ({
+              variantKey: variant.variantKey,
+              weight: variant.weight,
+              updatedAt: variant.updatedAt.toISOString()
+            }))
+            .sort((a, b) => a.variantKey.localeCompare(b.variantKey))
+        })),
+        placement: placement
+          ? {
+              key: placement.key,
+              defaultTtlSeconds: placement.defaultTtlSeconds,
+              updatedAt: placement.updatedAt.toISOString()
+            }
+          : null,
+        templates: templates
+          .map((template) => ({
+            key: template.key,
+            updatedAt: template.updatedAt.toISOString()
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key))
+      })
+    );
+
+    const snapshot = {
+      loadedAtMs: nowMs,
+      campaigns,
+      placement,
+      templatesByKey,
+      checksum
+    };
+    campaignSetCache.set(cacheKey, snapshot);
+    return snapshot;
+  };
+
+  const evaluate = async (input: {
+    environment: Environment;
+    body: InAppV2DecideBody;
+    requestId: string;
+    logger: FastifyBaseLogger;
+  }): Promise<{
+    response: InAppDecideResponse;
+    wbsMs: number;
+    engineMs: number;
+    fallbackReason?: string;
+  }> => {
+    const startedAtMs = Date.now();
+    let wbsMs = 0;
+    let engineMs = 0;
+
+    const withEngineMs = async <T>(fn: () => Promise<T> | T): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        engineMs += Date.now() - started;
+      }
+    };
+
+    const withWbsMs = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const started = Date.now();
+      try {
+        return await fn();
+      } finally {
+        wbsMs += Date.now() - started;
+      }
+    };
+
+    const campaignSet = await loadCampaignSet({
+      environment: input.environment,
+      appKey: input.body.appKey,
+      placement: input.body.placement
+    });
+
+    const contextNow = (() => {
+      const candidate = input.body.context?.now;
+      if (typeof candidate === "string") {
+        const parsed = new Date(candidate);
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed;
+        }
+      }
+      return deps.now();
+    })();
+
+    let profile: EngineProfile;
+    if (input.body.lookup) {
+      const [activeWbsInstance, activeWbsMapping] = await Promise.all([
+        deps.fetchActiveWbsInstance(input.environment),
+        deps.fetchActiveWbsMapping(input.environment)
+      ]);
+      if (!activeWbsInstance || !activeWbsMapping) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        return { response, wbsMs, engineMs, fallbackReason: "WBS_NOT_CONFIGURED" };
+      }
+
+      let rawLookup: WbsLookupResponse;
+      try {
+        rawLookup = await withWbsMs(() =>
+          withTimeout({
+            timeoutMs: deps.config.wbsTimeoutMs,
+            timeoutMessage: "WBS_LOOKUP_TIMEOUT",
+            task: async () =>
+              deps.wbsAdapter.lookup(
+                {
+                  baseUrl: activeWbsInstance.baseUrl,
+                  attributeParamName: activeWbsInstance.attributeParamName,
+                  valueParamName: activeWbsInstance.valueParamName,
+                  segmentParamName: activeWbsInstance.segmentParamName,
+                  includeSegment: activeWbsInstance.includeSegment,
+                  defaultSegmentValue: activeWbsInstance.defaultSegmentValue,
+                  timeoutMs: Math.min(activeWbsInstance.timeoutMs, deps.config.wbsTimeoutMs)
+                },
+                input.body.lookup as { attribute: string; value: string }
+              )
+          })
+        );
+      } catch (error) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        return {
+          response,
+          wbsMs,
+          engineMs,
+          fallbackReason: String(error).includes("WBS_LOOKUP_TIMEOUT") ? "WBS_TIMEOUT" : "WBS_ERROR"
+        };
+      }
+
+      const parsedMapping = WbsMappingConfigSchema.safeParse(activeWbsMapping.mappingJson);
+      if (!parsedMapping.success) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        return { response, wbsMs, engineMs, fallbackReason: "WBS_MAPPING_INVALID" };
+      }
+
+      const mapped = mapWbsLookupToProfile({
+        raw: rawLookup,
+        lookup: input.body.lookup,
+        profileIdStrategy: activeWbsMapping.profileIdStrategy,
+        profileIdAttributeKey: activeWbsMapping.profileIdAttributeKey,
+        mapping: parsedMapping.data
+      });
+      profile = mapped.profile;
+    } else {
+      try {
+        profile = await withWbsMs(() =>
+          withTimeout({
+            timeoutMs: deps.config.wbsTimeoutMs,
+            timeoutMessage: "MEIRO_PROFILE_TIMEOUT",
+            task: async () => deps.meiro.getProfile(input.body.profileId as string)
+          })
+        );
+      } catch (error) {
+        const response = buildNoShowResponse({ placement: input.body.placement });
+        response.ttl_seconds = deps.config.cacheTtlSeconds;
+        return {
+          response,
+          wbsMs,
+          engineMs,
+          fallbackReason: String(error).includes("MEIRO_PROFILE_TIMEOUT") ? "WBS_TIMEOUT" : "WBS_ERROR"
+        };
+      }
+    }
+
+    const audiences = new Set(profile.audiences);
+    let selectedCampaign: ActiveCampaignWithVariants | null = null;
+    for (const campaign of campaignSet.campaigns) {
+      if (!campaignPassesSchedule(campaign, contextNow)) {
+        continue;
+      }
+      const eligibilityAudiences = Array.isArray(campaign.eligibilityAudiencesAny)
+        ? (campaign.eligibilityAudiencesAny as string[])
+        : [];
+      if (eligibilityAudiences.length > 0 && !eligibilityAudiences.some((audience) => audiences.has(audience))) {
+        continue;
+      }
+      if (campaign.holdoutEnabled && campaign.holdoutPercentage > 0) {
+        const holdoutBucket = deterministicBucket(`${profile.profileId}:${campaign.key}:${campaign.holdoutSalt}`);
+        if (holdoutBucket < campaign.holdoutPercentage) {
+          continue;
+        }
+      }
+      selectedCampaign = campaign;
+      break;
+    }
+
+    if (!selectedCampaign) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, deps.config.cacheTtlSeconds));
+      return { response, wbsMs, engineMs };
+    }
+
+    const selectedTemplate = campaignSet.templatesByKey.get(selectedCampaign.templateKey);
+    if (!selectedTemplate) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, deps.config.cacheTtlSeconds));
+      return { response, wbsMs, engineMs, fallbackReason: "TEMPLATE_NOT_FOUND" };
+    }
+
+    const { values: tokenBindings } = parseTokenBindings(selectedCampaign.tokenBindingsJson);
+    const tokenValues: Record<string, unknown> = {};
+    await withEngineMs(async () => {
+      for (const [token, binding] of Object.entries(tokenBindings)) {
+        let tokenValue = getValueByPath(profile.attributes, binding.sourcePath);
+        for (const transform of binding.transforms) {
+          tokenValue = applyTransform(tokenValue, transform);
+        }
+        tokenValues[token] = tokenValue;
+      }
+    });
+
+    const variantSelection = await withEngineMs(() =>
+      selectVariant({
+        profileId: profile.profileId,
+        campaignKey: selectedCampaign.key,
+        salt: selectedCampaign.holdoutSalt,
+        variants: selectedCampaign.variants
+      })
+    );
+    const selectedVariant = variantSelection.variant;
+    if (!selectedVariant) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, deps.config.cacheTtlSeconds));
+      return { response, wbsMs, engineMs, fallbackReason: "VARIANT_NOT_FOUND" };
+    }
+
+    const renderedPayload = await withEngineMs(() => renderTemplateValue(selectedVariant.contentJson, tokenValues));
+    const ttlSeconds =
+      selectedCampaign.ttlSeconds > 0
+        ? selectedCampaign.ttlSeconds
+        : campaignSet.placement?.defaultTtlSeconds && campaignSet.placement.defaultTtlSeconds > 0
+          ? campaignSet.placement.defaultTtlSeconds
+          : deps.config.cacheTtlSeconds;
+    const messageWindow = Math.floor(contextNow.getTime() / (Math.max(1, ttlSeconds) * 1000));
+    const messageId = `msg_${selectedCampaign.key}_${selectedVariant.variantKey}_${messageWindow}`;
+
+    const payload: Record<string, unknown> = isObject(renderedPayload)
+      ? (renderedPayload as Record<string, unknown>)
+      : { value: renderedPayload };
+
+    const response: InAppDecideResponse = {
+      show: true,
+      placement: input.body.placement,
+      templateId: selectedTemplate.key,
+      ttl_seconds: ttlSeconds,
+      tracking: {
+        campaign_id: selectedCampaign.key,
+        message_id: messageId,
+        variant_id: selectedVariant.variantKey
+      },
+      payload
+    };
+
+    const totalMs = Date.now() - startedAtMs;
+    if (totalMs > 200) {
+      input.logger.warn({ requestId: input.requestId, totalMs, placement: input.body.placement }, "v2 in-app decide exceeded 200ms");
+    }
+
+    return { response, wbsMs, engineMs };
+  };
+
+  const decide = async (input: {
+    environment: Environment;
+    body: InAppV2DecideBody;
+    requestId: string;
+    logger: FastifyBaseLogger;
+  }): Promise<InAppV2DecideResponse> => {
+    const startedAtMs = Date.now();
+    const campaignSet = await loadCampaignSet({
+      environment: input.environment,
+      appKey: input.body.appKey,
+      placement: input.body.placement
+    });
+
+    const keyType = input.body.decisionKey ? "decision" : input.body.stackKey ? "stack" : "campaign";
+    const key = input.body.decisionKey ?? input.body.stackKey ?? `${input.body.appKey}:${input.body.placement}`;
+    const identityKey = buildInappV2IdentityKey({
+      profileId: input.body.profileId,
+      lookup: input.body.lookup
+    });
+    const contextForKey = pickAllowedContext(input.body.context, deps.config.cacheContextKeys);
+    const contextHash = hashSha256(stableStringify(contextForKey)).slice(0, 16);
+    const realtimeCacheKey = buildInappV2CacheKey({
+      environment: input.environment,
+      appKey: input.body.appKey,
+      placement: input.body.placement,
+      identityKey,
+      keyType,
+      key,
+      checksum: campaignSet.checksum,
+      contextHash
+    });
+    const staleCacheKey = buildInappV2StaleKey(realtimeCacheKey);
+
+    const finalizeResponse = (result: {
+      response: InAppDecideResponse;
+      cacheHit: boolean;
+      servedStale: boolean;
+      fallbackReason?: string;
+      wbsMs: number;
+      engineMs: number;
+    }): InAppV2DecideResponse => {
+      const totalMs = Date.now() - startedAtMs;
+      const response: InAppV2DecideResponse = {
+        ...result.response,
+        debug: {
+          cache: {
+            hit: result.cacheHit,
+            servedStale: result.servedStale
+          },
+          latencyMs: {
+            total: totalMs,
+            wbs: result.wbsMs,
+            engine: result.engineMs
+          },
+          ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {})
+        }
+      };
+
+      input.logger.info(
+        {
+          event: "inapp_v2_runtime",
+          requestId: input.requestId,
+          appKey: input.body.appKey,
+          placement: input.body.placement,
+          cacheHit: result.cacheHit,
+          servedStale: result.servedStale,
+          fallbackReason: result.fallbackReason,
+          wbsMs: result.wbsMs,
+          engineMs: result.engineMs,
+          totalMs
+        },
+        "In-app v2 decide completed"
+      );
+      return response;
+    };
+
+    const persistCaches = async (response: InAppDecideResponse) => {
+      if (!deps.cache.enabled) {
+        return;
+      }
+      const freshTtl = response.ttl_seconds > 0 ? response.ttl_seconds : deps.config.cacheTtlSeconds;
+      await deps.cache.setJson(realtimeCacheKey, response, freshTtl);
+      if (deps.config.staleTtlSeconds > 0) {
+        await deps.cache.setJson(staleCacheKey, response, freshTtl + deps.config.staleTtlSeconds);
+      }
+    };
+
+    if (deps.cache.enabled) {
+      const fresh = await deps.cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+      const freshResponse = normalizeInAppResponse(fresh, input.body.placement);
+      if (freshResponse) {
+        return finalizeResponse({
+          response: freshResponse,
+          cacheHit: true,
+          servedStale: false,
+          wbsMs: 0,
+          engineMs: 0
+        });
+      }
+
+      const stale = await deps.cache.getJson<Record<string, unknown>>(staleCacheKey);
+      const staleResponse = normalizeInAppResponse(stale, input.body.placement);
+      if (staleResponse) {
+        const swrLock = await deps.cache.lock(`lock:${realtimeCacheKey}:swr`, 5000);
+        if (swrLock) {
+          void (async () => {
+            try {
+              const refreshed = await evaluate({
+                environment: input.environment,
+                body: input.body,
+                requestId: input.requestId,
+                logger: input.logger
+              });
+              await persistCaches(refreshed.response);
+            } catch (error) {
+              input.logger.warn({ err: error, requestId: input.requestId }, "Failed SWR refresh for in-app v2 decide");
+            } finally {
+              await swrLock.release();
+            }
+          })();
+        }
+
+        return finalizeResponse({
+          response: staleResponse,
+          cacheHit: false,
+          servedStale: true,
+          fallbackReason: "STALE_CACHE",
+          wbsMs: 0,
+          engineMs: 0
+        });
+      }
+    }
+
+    let lock: Awaited<ReturnType<JsonCache["lock"]>> | null = null;
+    try {
+      if (deps.cache.enabled) {
+        lock = await deps.cache.lock(`lock:${realtimeCacheKey}`, 5000);
+        if (!lock) {
+          const retryFresh = await deps.cache.getJson<Record<string, unknown>>(realtimeCacheKey);
+          const retryResponse = normalizeInAppResponse(retryFresh, input.body.placement);
+          if (retryResponse) {
+            return finalizeResponse({
+              response: retryResponse,
+              cacheHit: true,
+              servedStale: false,
+              wbsMs: 0,
+              engineMs: 0
+            });
+          }
+        }
+      }
+
+      const evaluated = await evaluate({
+        environment: input.environment,
+        body: input.body,
+        requestId: input.requestId,
+        logger: input.logger
+      });
+      await persistCaches(evaluated.response);
+      return finalizeResponse({
+        response: evaluated.response,
+        cacheHit: false,
+        servedStale: false,
+        fallbackReason: evaluated.fallbackReason,
+        wbsMs: evaluated.wbsMs,
+        engineMs: evaluated.engineMs
+      });
+    } finally {
+      if (lock) {
+        await lock.release();
+      }
+    }
+  };
+
+  return { decide };
+};
