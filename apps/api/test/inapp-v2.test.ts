@@ -363,6 +363,45 @@ describe("POST /v2/inapp/decide", () => {
 
     await app.close();
   });
+
+  it("returns explicit NO_ACTIVE_CAMPAIGN fallback reason when no campaign is eligible", async () => {
+    const prisma = createPrisma();
+    (prisma as any).inAppCampaign.findMany.mockResolvedValue([]);
+    const cache = createMemoryCache();
+
+    const app = await buildApp({
+      prisma: prisma as any,
+      cache,
+      now: () => fixedNow,
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock",
+        inappEventsWorkerEnabled: false,
+        dlqWorkerEnabled: false
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v2/inapp/decide",
+      headers: { "x-env": "DEV" },
+      payload: {
+        appKey: "meiro_store",
+        placement: "home_top",
+        profileId: "p-1001"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().show).toBe(false);
+    expect(response.json().debug.fallbackReason).toBe("NO_ACTIVE_CAMPAIGN");
+    expect((prisma as any).inAppDecisionLog.create.mock.calls[0][0].data.reasonsJson).toEqual([
+      { code: "NO_ACTIVE_CAMPAIGN" }
+    ]);
+
+    await app.close();
+  });
 });
 
 describe("POST /v2/inapp/events", () => {

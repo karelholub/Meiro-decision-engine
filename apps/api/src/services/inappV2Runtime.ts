@@ -644,7 +644,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     if (!selectedCampaign) {
       const response = buildNoShowResponse({ placement: input.body.placement });
       response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
-      return { response, wbsMs, engineMs };
+      return { response, wbsMs, engineMs, fallbackReason: "NO_ACTIVE_CAMPAIGN" };
     }
 
     const selectedTemplate = campaignSet.templatesByKey.get(selectedCampaign.templateKey);
