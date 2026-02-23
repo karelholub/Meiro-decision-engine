@@ -327,6 +327,32 @@ export const ingestInAppEvent = async (input: {
   });
 };
 
+const buildInAppDecisionProfileId = (input: { profileId?: string; lookup?: { attribute: string; value: string } }) => {
+  if (input.profileId && input.profileId.trim().length > 0) {
+    return input.profileId.trim();
+  }
+  if (input.lookup) {
+    return `lookup:${input.lookup.attribute}:${hashSha256(input.lookup.value)}`;
+  }
+  return "unknown";
+};
+
+const buildInAppDecisionReasons = (input: { show: boolean; fallbackReason?: string }) => {
+  const reasons: Array<{ code: string; detail?: string }> = [];
+  if (input.show) {
+    reasons.push({ code: "CAMPAIGN_SHOWN" });
+    if (input.fallbackReason) {
+      reasons.push({ code: input.fallbackReason });
+    }
+    return reasons;
+  }
+
+  reasons.push({
+    code: input.fallbackReason ?? "NO_ACTIVE_CAMPAIGN"
+  });
+  return reasons;
+};
+
 const stableStringify = (value: unknown): string => {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
@@ -2579,7 +2605,6 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const requestId = createRequestId(request);
-    const startedAtMs = Date.now();
     const rate = perAppKeyLimiterV2.check({
       key: `decide:${environment}:${parsed.data.appKey}`,
       limit: runtimeInappV2.rateLimitPerAppKey,
@@ -2591,12 +2616,66 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         retryAfterMs: rate.retryAfterMs
       });
     }
-    return inAppV2Runtime.decide({
+    const response = await inAppV2Runtime.decide({
       environment,
       body: parsed.data,
       requestId,
       logger: request.log
     });
+
+    const profileId = buildInAppDecisionProfileId({
+      profileId: parsed.data.profileId,
+      lookup: parsed.data.lookup
+    });
+    const campaignKey = response.tracking.campaign_id.trim();
+    const variantKey = response.tracking.variant_id.trim();
+    const messageId = response.tracking.message_id.trim();
+    const fallbackReason = response.debug.fallbackReason;
+
+    try {
+      await prisma.inAppDecisionLog.create({
+        data: {
+          environment,
+          campaignKey: campaignKey.length > 0 ? campaignKey : null,
+          profileId,
+          placement: response.placement,
+          templateKey: response.templateId.trim().length > 0 ? response.templateId.trim() : null,
+          variantKey: variantKey.length > 0 ? variantKey : null,
+          shown: response.show,
+          reasonsJson: toInputJson(buildInAppDecisionReasons({ show: response.show, fallbackReason })),
+          payloadJson: toInputJson(redactSensitiveFields(response.payload)),
+          replayInputJson: toInputJson({
+            appKey: parsed.data.appKey,
+            placement: parsed.data.placement,
+            profileId: parsed.data.profileId,
+            lookup: parsed.data.lookup
+              ? {
+                  attribute: parsed.data.lookup.attribute,
+                  valueHash: hashSha256(parsed.data.lookup.value)
+                }
+              : null,
+            context: parsed.data.context
+          }),
+          correlationId: requestId,
+          wbsMs: response.debug.latencyMs.wbs,
+          engineMs: response.debug.latencyMs.engine,
+          totalMs: response.debug.latencyMs.total
+        }
+      });
+    } catch (error) {
+      request.log.error(
+        {
+          requestId,
+          campaignKey: campaignKey || null,
+          profileId,
+          messageId: messageId || null,
+          err: error
+        },
+        "Failed to persist in-app decision log"
+      );
+    }
+
+    return response;
   });
 
   app.post("/v1/inapp/decide", { preHandler: requireDecideAuth }, async (_request, reply) => {

@@ -118,6 +118,9 @@ const createPrisma = () => {
         updatedAt: fixedNow
       })
     },
+    inAppDecisionLog: {
+      create: vi.fn().mockResolvedValue({})
+    },
     $disconnect: vi.fn().mockResolvedValue(undefined)
   };
 };
@@ -225,6 +228,9 @@ describe("POST /v2/inapp/decide", () => {
     expect(first.json().debug.cache.hit).toBe(false);
     expect(second.json().debug.cache.hit).toBe(true);
     expect(getProfileSpy).toHaveBeenCalledTimes(1);
+    expect((prisma as any).inAppDecisionLog.create).toHaveBeenCalledTimes(2);
+    expect((prisma as any).inAppDecisionLog.create.mock.calls[0][0].data.shown).toBe(true);
+    expect((prisma as any).inAppDecisionLog.create.mock.calls[0][0].data.campaignKey).toBe("v2_home_top");
 
     await app.close();
   });
