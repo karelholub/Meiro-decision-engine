@@ -56,7 +56,9 @@ export default function PrecomputeRunsPage() {
   const [ttlSecondsDefault, setTtlSecondsDefault] = useState("86400");
   const [overwrite, setOverwrite] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingRuns, setLoadingRuns] = useState(false);
+  const [creatingRun, setCreatingRun] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
   const suggestedRunKey = useMemo(() => {
     const keyPart = key.trim() || "target";
@@ -68,16 +70,22 @@ export default function PrecomputeRunsPage() {
     return onEnvironmentChange(setEnvironment);
   }, []);
 
-  const loadRuns = async () => {
-    setLoading(true);
+  const loadRuns = async (manual = false, preserveMessage = false) => {
+    setLoadingRuns(true);
     try {
       const response = await apiClient.execution.precompute.listRuns({ limit: 50 });
       setRuns(response.items as RunItem[]);
-      setMessage(null);
+      const refreshedAt = new Date().toISOString();
+      setLastRefreshedAt(refreshedAt);
+      if (manual) {
+        setMessage(`Reloaded ${response.items.length} runs at ${new Date(refreshedAt).toLocaleTimeString()}.`);
+      } else if (!preserveMessage) {
+        setMessage(null);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to load runs");
     } finally {
-      setLoading(false);
+      setLoadingRuns(false);
     }
   };
 
@@ -86,7 +94,7 @@ export default function PrecomputeRunsPage() {
   }, [environment]);
 
   const createRun = async () => {
-    setLoading(true);
+    setCreatingRun(true);
     try {
       const parsedContext = contextText.trim() ? (JSON.parse(contextText) as Record<string, unknown>) : {};
       const payload =
@@ -134,11 +142,11 @@ export default function PrecomputeRunsPage() {
 
       const response = await apiClient.execution.precompute.create(payload);
       setMessage(`Run accepted: ${response.runKey}`);
-      await loadRuns();
+      await loadRuns(false, true);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to create run");
     } finally {
-      setLoading(false);
+      setCreatingRun(false);
     }
   };
 
@@ -234,15 +242,20 @@ export default function PrecomputeRunsPage() {
       </div>
 
       <div className="flex gap-2">
-        <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void createRun()} disabled={loading}>
+        <button className="rounded-md bg-ink px-4 py-2 text-sm text-white disabled:opacity-60" onClick={() => void createRun()} disabled={creatingRun}>
           Create Run
         </button>
-        <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={() => void loadRuns()} disabled={loading}>
-          Reload
+        <button
+          className="rounded-md border border-stone-300 px-4 py-2 text-sm disabled:opacity-60"
+          onClick={() => void loadRuns(true)}
+          disabled={loadingRuns}
+        >
+          Reload Runs
         </button>
       </div>
 
       {message ? <p className="text-sm text-stone-800">{message}</p> : null}
+      {lastRefreshedAt ? <p className="text-xs text-stone-600">Last refreshed: {new Date(lastRefreshedAt).toLocaleString()}</p> : null}
 
       <div className="panel overflow-auto">
         <table className="w-full border-collapse text-sm">
