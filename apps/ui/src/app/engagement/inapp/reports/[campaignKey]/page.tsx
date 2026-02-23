@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { InAppCampaignReport, InAppOverviewReport } from "@decisioning/shared";
 import { apiClient } from "../../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
@@ -29,6 +29,9 @@ export default function InAppCampaignReportPage() {
   const [overview, setOverview] = useState<InAppOverviewReport | null>(null);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [compareFrom, setCompareFrom] = useState("");
+  const [compareTo, setCompareTo] = useState("");
+  const [compareOverview, setCompareOverview] = useState<InAppOverviewReport | null>(null);
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -42,7 +45,7 @@ export default function InAppCampaignReportPage() {
 
     setLoading(true);
     try {
-      const [seriesResponse, overviewResponse] = await Promise.all([
+      const [seriesResponse, overviewResponse, compareOverviewResponse] = await Promise.all([
         apiClient.inapp.reports.campaign(campaignKey, {
           from: asIso(from),
           to: asIso(to)
@@ -51,10 +54,18 @@ export default function InAppCampaignReportPage() {
           from: asIso(from),
           to: asIso(to),
           campaignKey
-        })
+        }),
+        compareFrom || compareTo
+          ? apiClient.inapp.reports.overview({
+              from: asIso(compareFrom),
+              to: asIso(compareTo),
+              campaignKey
+            })
+          : Promise.resolve(null)
       ]);
       setSeries(seriesResponse);
       setOverview(overviewResponse);
+      setCompareOverview(compareOverviewResponse);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load campaign report");
@@ -86,6 +97,31 @@ export default function InAppCampaignReportPage() {
     }
   };
 
+  const compareDeltaSummary = useMemo(() => {
+    if (!overview) {
+      return null;
+    }
+    if (!compareOverview) {
+      return {
+        currentCtr: overview.ctr,
+        compareCtr: null,
+        uplift: null
+      };
+    }
+    return {
+      currentCtr: overview.ctr,
+      compareCtr: compareOverview.ctr,
+      uplift: overview.ctr - compareOverview.ctr
+    };
+  }, [overview, compareOverview]);
+
+  const compareGroupLookup = useMemo(() => {
+    if (!compareOverview) {
+      return new Map<string, InAppOverviewReport["groups"][number]>();
+    }
+    return new Map(compareOverview.groups.map((group) => [`${group.variantKey}:${group.placement}`, group]));
+  }, [compareOverview]);
+
   return (
     <section className="space-y-4">
       <header className="panel p-4">
@@ -100,7 +136,7 @@ export default function InAppCampaignReportPage() {
         </div>
       </header>
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-4">
+      <div className="panel grid gap-3 p-4 md:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">
           From
           <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
@@ -117,9 +153,50 @@ export default function InAppCampaignReportPage() {
             Export CSV
           </button>
         </div>
+        <label className="flex flex-col gap-1 text-sm">
+          Compare From
+          <input
+            type="datetime-local"
+            value={compareFrom}
+            onChange={(event) => setCompareFrom(event.target.value)}
+            className="rounded-md border border-stone-300 px-2 py-1"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Compare To
+          <input
+            type="datetime-local"
+            value={compareTo}
+            onChange={(event) => setCompareTo(event.target.value)}
+            className="rounded-md border border-stone-300 px-2 py-1"
+          />
+        </label>
       </div>
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
+
+      {compareDeltaSummary ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <article className="panel p-3">
+            <p className="text-xs text-stone-600">Current CTR</p>
+            <p className="text-2xl font-semibold">{(compareDeltaSummary.currentCtr * 100).toFixed(2)}%</p>
+          </article>
+          <article className="panel p-3">
+            <p className="text-xs text-stone-600">Compare CTR</p>
+            <p className="text-2xl font-semibold">
+              {compareDeltaSummary.compareCtr === null ? "-" : `${(compareDeltaSummary.compareCtr * 100).toFixed(2)}%`}
+            </p>
+          </article>
+          <article className="panel p-3">
+            <p className="text-xs text-stone-600">Uplift Vs Compare</p>
+            <p className={`text-2xl font-semibold ${compareDeltaSummary.uplift !== null && compareDeltaSummary.uplift < 0 ? "text-red-700" : ""}`}>
+              {compareDeltaSummary.uplift === null
+                ? "-"
+                : `${compareDeltaSummary.uplift >= 0 ? "+" : ""}${(compareDeltaSummary.uplift * 100).toFixed(2)} pp`}
+            </p>
+          </article>
+        </div>
+      ) : null}
 
       <article className="panel overflow-auto">
         <h3 className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Variant Comparison</h3>
@@ -131,24 +208,36 @@ export default function InAppCampaignReportPage() {
               <th className="border-b border-stone-200 px-3 py-2">Impressions</th>
               <th className="border-b border-stone-200 px-3 py-2">Clicks</th>
               <th className="border-b border-stone-200 px-3 py-2">CTR</th>
+              <th className="border-b border-stone-200 px-3 py-2">CTR vs Compare</th>
               <th className="border-b border-stone-200 px-3 py-2">CI 95%</th>
             </tr>
           </thead>
           <tbody>
-            {overview?.groups.map((group) => (
-              <tr key={`${group.variantKey}:${group.placement}`}>
-                <td className="border-b border-stone-100 px-3 py-2">{group.variantKey}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.placement}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.impressions}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.clicks}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{(group.ctr * 100).toFixed(2)}%</td>
-                <td className="border-b border-stone-100 px-3 py-2">
-                  {group.ctr_ci_low === null || group.ctr_ci_high === null
-                    ? "-"
-                    : `${(group.ctr_ci_low * 100).toFixed(2)}% - ${(group.ctr_ci_high * 100).toFixed(2)}%`}
-                </td>
-              </tr>
-            ))}
+            {overview?.groups.map((group) => {
+              const compareGroup = compareGroupLookup.get(`${group.variantKey}:${group.placement}`);
+              const ctrDelta = compareGroup ? group.ctr - compareGroup.ctr : null;
+              return (
+                <tr key={`${group.variantKey}:${group.placement}`}>
+                  <td className="border-b border-stone-100 px-3 py-2">{group.variantKey}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{group.placement}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{group.impressions}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{group.clicks}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">{(group.ctr * 100).toFixed(2)}%</td>
+                  <td
+                    className={`border-b border-stone-100 px-3 py-2 ${
+                      ctrDelta === null ? "text-stone-600" : ctrDelta < 0 ? "text-red-700" : "text-green-700"
+                    }`}
+                  >
+                    {ctrDelta === null ? "-" : `${ctrDelta >= 0 ? "+" : ""}${(ctrDelta * 100).toFixed(2)} pp`}
+                  </td>
+                  <td className="border-b border-stone-100 px-3 py-2">
+                    {group.ctr_ci_low === null || group.ctr_ci_high === null
+                      ? "-"
+                      : `${(group.ctr_ci_low * 100).toFixed(2)}% - ${(group.ctr_ci_high * 100).toFixed(2)}%`}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {!loading && !overview?.groups.length ? <p className="p-3 text-sm text-stone-600">No aggregate data yet.</p> : null}
