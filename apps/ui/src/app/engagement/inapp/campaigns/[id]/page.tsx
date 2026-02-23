@@ -3,7 +3,15 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import type { InAppApplication, InAppAuditLog, InAppCampaign, InAppCampaignVersion, InAppPlacement, InAppTemplate } from "@decisioning/shared";
+import type {
+  InAppApplication,
+  InAppAuditLog,
+  InAppCampaign,
+  InAppCampaignActivationPreview,
+  InAppCampaignVersion,
+  InAppPlacement,
+  InAppTemplate
+} from "@decisioning/shared";
 import { apiClient } from "../../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
 
@@ -76,6 +84,7 @@ export default function InAppCampaignEditPage() {
 
   const [variants, setVariants] = useState<VariantEditor[]>([]);
   const [bindings, setBindings] = useState<BindingEditor[]>([]);
+  const [activationPreview, setActivationPreview] = useState<InAppCampaignActivationPreview | null>(null);
   const [versions, setVersions] = useState<InAppCampaignVersion[]>([]);
   const [auditLogs, setAuditLogs] = useState<InAppAuditLog[]>([]);
   const [reviewComment, setReviewComment] = useState("");
@@ -88,13 +97,15 @@ export default function InAppCampaignEditPage() {
 
     setLoading(true);
     try {
-      const [campaignResponse, appsResponse, placementsResponse, templatesResponse, versionsResponse, auditResponse] = await Promise.all([
+      const [campaignResponse, appsResponse, placementsResponse, templatesResponse, versionsResponse, auditResponse, previewResponse] =
+        await Promise.all([
         apiClient.inapp.campaigns.get(campaignId),
         apiClient.inapp.apps.list(),
         apiClient.inapp.placements.list(),
         apiClient.inapp.templates.list(),
         apiClient.inapp.campaigns.versions(campaignId),
-        apiClient.inapp.campaigns.audit(campaignId, 50)
+        apiClient.inapp.campaigns.audit(campaignId, 50),
+        apiClient.inapp.campaigns.activationPreview(campaignId)
       ]);
 
       const item = campaignResponse.item;
@@ -104,6 +115,7 @@ export default function InAppCampaignEditPage() {
       setTemplates(templatesResponse.items);
       setVersions(versionsResponse.items);
       setAuditLogs(auditResponse.items);
+      setActivationPreview(previewResponse.item);
 
       setKey(item.key);
       setName(item.name);
@@ -142,6 +154,7 @@ export default function InAppCampaignEditPage() {
       setError(null);
       setMessage(null);
     } catch (loadError) {
+      setActivationPreview(null);
       setError(loadError instanceof Error ? loadError.message : "Failed to load campaign");
     } finally {
       setLoading(false);
@@ -269,8 +282,19 @@ export default function InAppCampaignEditPage() {
       return;
     }
     try {
+      const previewResponse = await apiClient.inapp.campaigns.activationPreview(campaignId);
+      setActivationPreview(previewResponse.item);
+      if (!previewResponse.item.canActivate) {
+        setError(`Campaign cannot be activated from status ${previewResponse.item.status}.`);
+        return;
+      }
+
       await apiClient.inapp.campaigns.activate(campaignId);
-      setMessage("Campaign activated.");
+      setMessage(
+        previewResponse.item.warnings.length > 0
+          ? `Campaign activated with warnings: ${previewResponse.item.warnings.join(" | ")}`
+          : "Campaign activated."
+      );
       await load();
     } catch (activateError) {
       setError(activateError instanceof Error ? activateError.message : "Activate failed");
@@ -308,8 +332,19 @@ export default function InAppCampaignEditPage() {
       return;
     }
     try {
+      const previewResponse = await apiClient.inapp.campaigns.activationPreview(campaignId);
+      setActivationPreview(previewResponse.item);
+      if (!previewResponse.item.canActivate) {
+        setError(`Campaign cannot be activated from status ${previewResponse.item.status}.`);
+        return;
+      }
+
       await apiClient.inapp.campaigns.approveAndActivate(campaignId, reviewComment || undefined);
-      setMessage("Campaign approved and activated.");
+      setMessage(
+        previewResponse.item.warnings.length > 0
+          ? `Campaign approved and activated with warnings: ${previewResponse.item.warnings.join(" | ")}`
+          : "Campaign approved and activated."
+      );
       await load();
     } catch (approveError) {
       setError(approveError instanceof Error ? approveError.message : "Approve and activate failed");
@@ -769,6 +804,62 @@ export default function InAppCampaignEditPage() {
               {auditLogs.length === 0 ? <p className="text-sm text-stone-600">No audit events yet.</p> : null}
             </div>
           </div>
+        </article>
+      ) : null}
+
+      {activationPreview ? (
+        <article className={`panel space-y-3 p-4 ${activationPreview.warnings.length > 0 ? "border-amber-300 bg-amber-50" : ""}`}>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">Activation Preview</h3>
+            <button
+              className="rounded-md border border-stone-300 px-2 py-1 text-xs"
+              onClick={() => void load()}
+              disabled={loading || saving}
+            >
+              Refresh
+            </button>
+          </div>
+
+          <p className="text-sm text-stone-700">
+            Scope: app <strong>{activationPreview.appKey}</strong> / placement <strong>{activationPreview.placementKey}</strong>
+          </p>
+
+          {activationPreview.warnings.length > 0 ? (
+            <ul className="list-disc space-y-1 pl-5 text-sm text-amber-800">
+              {activationPreview.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-green-700">No activation conflicts detected.</p>
+          )}
+
+          {activationPreview.conflicts.length > 0 ? (
+            <div className="overflow-auto rounded-md border border-stone-200">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="text-left text-stone-600">
+                    <th className="border-b border-stone-200 px-3 py-2">Campaign</th>
+                    <th className="border-b border-stone-200 px-3 py-2">Priority</th>
+                    <th className="border-b border-stone-200 px-3 py-2">Schedule Overlap</th>
+                    <th className="border-b border-stone-200 px-3 py-2">Activated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activationPreview.conflicts.map((conflict) => (
+                    <tr key={conflict.id}>
+                      <td className="border-b border-stone-100 px-3 py-2">{conflict.key}</td>
+                      <td className="border-b border-stone-100 px-3 py-2">{conflict.priority}</td>
+                      <td className="border-b border-stone-100 px-3 py-2">{conflict.scheduleOverlaps ? "Yes" : "No"}</td>
+                      <td className="border-b border-stone-100 px-3 py-2">
+                        {conflict.activatedAt ? new Date(conflict.activatedAt).toLocaleString() : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </article>
       ) : null}
 

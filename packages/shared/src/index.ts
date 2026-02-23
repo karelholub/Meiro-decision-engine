@@ -384,6 +384,28 @@ export interface InAppCampaign {
   variants: InAppCampaignVariant[];
 }
 
+export interface InAppCampaignActivationPreviewConflict {
+  id: string;
+  key: string;
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED";
+  priority: number;
+  activatedAt: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  scheduleOverlaps: boolean;
+}
+
+export interface InAppCampaignActivationPreview {
+  campaignId: string;
+  campaignKey: string;
+  appKey: string;
+  placementKey: string;
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED";
+  canActivate: boolean;
+  warnings: string[];
+  conflicts: InAppCampaignActivationPreviewConflict[];
+}
+
 export interface InAppCampaignVersion {
   id: string;
   campaignId: string;

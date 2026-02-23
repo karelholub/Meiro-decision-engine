@@ -760,6 +760,28 @@ interface CampaignSnapshot {
   }>;
 }
 
+interface CampaignActivationPreviewConflict {
+  id: string;
+  key: string;
+  status: InAppCampaignStatus;
+  priority: number;
+  activatedAt: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  scheduleOverlaps: boolean;
+}
+
+interface CampaignActivationPreview {
+  campaignId: string;
+  campaignKey: string;
+  appKey: string;
+  placementKey: string;
+  status: InAppCampaignStatus;
+  canActivate: boolean;
+  warnings: string[];
+  conflicts: CampaignActivationPreviewConflict[];
+}
+
 const makeCampaignSnapshot = (campaign: {
   key: string;
   name: string;
@@ -815,6 +837,87 @@ const makeCampaignSnapshot = (campaign: {
       weight: variant.weight,
       contentJson: isObject(variant.contentJson) ? variant.contentJson : {}
     }))
+  };
+};
+
+const schedulesOverlap = (input: {
+  candidateStartAt: Date | null;
+  candidateEndAt: Date | null;
+  otherStartAt: Date | null;
+  otherEndAt: Date | null;
+}): boolean => {
+  const candidateStartMs = input.candidateStartAt ? input.candidateStartAt.getTime() : Number.NEGATIVE_INFINITY;
+  const candidateEndMs = input.candidateEndAt ? input.candidateEndAt.getTime() : Number.POSITIVE_INFINITY;
+  const otherStartMs = input.otherStartAt ? input.otherStartAt.getTime() : Number.NEGATIVE_INFINITY;
+  const otherEndMs = input.otherEndAt ? input.otherEndAt.getTime() : Number.POSITIVE_INFINITY;
+
+  return Math.max(candidateStartMs, otherStartMs) <= Math.min(candidateEndMs, otherEndMs);
+};
+
+const buildCampaignActivationPreview = (input: {
+  campaign: {
+    id: string;
+    key: string;
+    status: InAppCampaignStatus;
+    appKey: string;
+    placementKey: string;
+    priority: number;
+    startAt: Date | null;
+    endAt: Date | null;
+  };
+  activeCandidates: Array<{
+    id: string;
+    key: string;
+    status: InAppCampaignStatus;
+    priority: number;
+    activatedAt: Date | null;
+    startAt: Date | null;
+    endAt: Date | null;
+  }>;
+}): CampaignActivationPreview => {
+  const conflicts = input.activeCandidates
+    .map((item) => ({
+      id: item.id,
+      key: item.key,
+      status: item.status,
+      priority: item.priority,
+      activatedAt: item.activatedAt?.toISOString() ?? null,
+      startAt: item.startAt?.toISOString() ?? null,
+      endAt: item.endAt?.toISOString() ?? null,
+      scheduleOverlaps: schedulesOverlap({
+        candidateStartAt: input.campaign.startAt,
+        candidateEndAt: input.campaign.endAt,
+        otherStartAt: item.startAt,
+        otherEndAt: item.endAt
+      })
+    }))
+    .sort((a, b) => b.priority - a.priority);
+
+  const overlapping = conflicts.filter((item) => item.scheduleOverlaps);
+  const warnings: string[] = [];
+
+  if (input.campaign.status === InAppCampaignStatus.ACTIVE) {
+    warnings.push("Campaign is already ACTIVE; activating again will only refresh activation timestamp.");
+  }
+
+  if (overlapping.length > 0) {
+    warnings.push(
+      `${overlapping.length} ACTIVE campaign(s) share app '${input.campaign.appKey}' and placement '${input.campaign.placementKey}' with overlapping schedule.`
+    );
+    if (overlapping.some((item) => item.priority >= input.campaign.priority)) {
+      warnings.push("At least one overlapping ACTIVE campaign has equal or higher priority and may take precedence at runtime.");
+    }
+  }
+
+  return {
+    campaignId: input.campaign.id,
+    campaignKey: input.campaign.key,
+    appKey: input.campaign.appKey,
+    placementKey: input.campaign.placementKey,
+    status: input.campaign.status,
+    canActivate: input.campaign.status !== InAppCampaignStatus.ARCHIVED,
+    warnings,
+    conflicts
   };
 };
 
@@ -1202,6 +1305,67 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
 
     return {
       item: serializeCampaign(campaign)
+    };
+  });
+
+  app.get("/v1/inapp/campaigns/:id/activation-preview", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    }
+
+    const campaign = await prisma.inAppCampaign.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      },
+      select: {
+        id: true,
+        key: true,
+        status: true,
+        appKey: true,
+        placementKey: true,
+        priority: true,
+        startAt: true,
+        endAt: true
+      }
+    });
+
+    if (!campaign) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const activeCandidates = await prisma.inAppCampaign.findMany({
+      where: {
+        environment,
+        appKey: campaign.appKey,
+        placementKey: campaign.placementKey,
+        status: InAppCampaignStatus.ACTIVE,
+        id: {
+          not: campaign.id
+        }
+      },
+      select: {
+        id: true,
+        key: true,
+        status: true,
+        priority: true,
+        activatedAt: true,
+        startAt: true,
+        endAt: true
+      }
+    });
+
+    return {
+      item: buildCampaignActivationPreview({
+        campaign,
+        activeCandidates
+      })
     };
   });
 

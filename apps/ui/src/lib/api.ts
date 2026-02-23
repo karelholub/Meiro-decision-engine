@@ -11,6 +11,7 @@ import type {
   DecideStackResponse,
   InAppApplication,
   InAppAuditLog,
+  InAppCampaignActivationPreview,
   InAppCampaign,
   InAppCampaignReport,
   InAppCampaignVersion,
@@ -433,6 +434,8 @@ export const apiClient = {
       list: (params: { appKey?: string; placementKey?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED" } = {}) =>
         apiFetch<{ items: InAppCampaign[] }>(`/v1/inapp/campaigns${toQuery(params)}`),
       get: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}`),
+      activationPreview: (id: string) =>
+        apiFetch<{ item: InAppCampaignActivationPreview }>(`/v1/inapp/campaigns/${id}/activation-preview`),
       create: (input: Record<string, unknown>) =>
         apiFetch<{ item: InAppCampaign; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(
           `/v1/inapp/campaigns`,
