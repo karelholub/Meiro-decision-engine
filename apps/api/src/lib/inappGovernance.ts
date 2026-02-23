@@ -4,7 +4,7 @@ export type InAppGovernanceAction = "submit_for_approval" | "approve_and_activat
 
 const governanceRules: Record<InAppGovernanceAction, { from: InAppCampaignStatus[]; to: InAppCampaignStatus }> = {
   submit_for_approval: {
-    from: [InAppCampaignStatus.DRAFT],
+    from: [InAppCampaignStatus.DRAFT, InAppCampaignStatus.ACTIVE],
     to: InAppCampaignStatus.PENDING_APPROVAL
   },
   approve_and_activate: {

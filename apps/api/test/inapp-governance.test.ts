@@ -16,6 +16,12 @@ describe("in-app governance transitions", () => {
     ).toBe(true);
     expect(
       canRunInAppGovernanceAction({
+        currentStatus: InAppCampaignStatus.ACTIVE,
+        action: "submit_for_approval"
+      })
+    ).toBe(true);
+    expect(
+      canRunInAppGovernanceAction({
         currentStatus: InAppCampaignStatus.PENDING_APPROVAL,
         action: "approve_and_activate"
       })
@@ -37,7 +43,7 @@ describe("in-app governance transitions", () => {
   it("rejects invalid transitions and returns explicit errors", () => {
     const error = getInAppGovernanceTransitionError({
       currentStatus: InAppCampaignStatus.ACTIVE,
-      action: "submit_for_approval"
+      action: "reject_to_draft"
     });
     expect(error).toContain("Invalid transition");
     expect(error).toContain("ACTIVE");
@@ -50,7 +56,10 @@ describe("in-app governance transitions", () => {
   });
 
   it("exposes allowed statuses per action for API details", () => {
-    expect(getInAppGovernanceAllowedStatuses("submit_for_approval")).toEqual([InAppCampaignStatus.DRAFT]);
+    expect(getInAppGovernanceAllowedStatuses("submit_for_approval")).toEqual([
+      InAppCampaignStatus.DRAFT,
+      InAppCampaignStatus.ACTIVE
+    ]);
     expect(getInAppGovernanceAllowedStatuses("approve_and_activate")).toEqual([InAppCampaignStatus.PENDING_APPROVAL]);
     expect(getInAppGovernanceAllowedStatuses("reject_to_draft")).toEqual([InAppCampaignStatus.PENDING_APPROVAL]);
     expect(getInAppGovernanceAllowedStatuses("rollback")).toEqual([InAppCampaignStatus.ACTIVE]);

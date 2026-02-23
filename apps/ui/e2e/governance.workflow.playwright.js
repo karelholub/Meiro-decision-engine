@@ -147,12 +147,29 @@ test("governance flow: submit, approve, reject, rollback, audit trail", async ({
   );
   expect(approve2.item.status).toBe("ACTIVE");
 
-  // Invalid transition must be blocked: ACTIVE -> SUBMIT_FOR_APPROVAL
-  const invalidSubmitAfterActive = await request.post(`${apiBase}/v1/inapp/campaigns/${campaignId}/submit-for-approval`, {
+  const resubmit = await postJson(
+    request,
+    `/v1/inapp/campaigns/${campaignId}/submit-for-approval`,
+    "submit for approval after active",
+    { comment: "resubmit after active" },
+    writeHeaders({ "x-user-id": "editor-1", "x-user-role": "EDITOR" })
+  );
+  expect(resubmit.item.status).toBe("PENDING_APPROVAL");
+
+  // Invalid transition must be blocked: PENDING_APPROVAL -> SUBMIT_FOR_APPROVAL
+  const invalidSubmitWhilePending = await request.post(`${apiBase}/v1/inapp/campaigns/${campaignId}/submit-for-approval`, {
     headers: writeHeaders({ "x-user-id": "editor-1", "x-user-role": "EDITOR" }),
-    data: { comment: "invalid submit after active" }
+    data: { comment: "invalid submit while pending" }
   });
-  expect(invalidSubmitAfterActive.status()).toBe(409);
+  expect(invalidSubmitWhilePending.status()).toBe(409);
+
+  await postJson(
+    request,
+    `/v1/inapp/campaigns/${campaignId}/approve-and-activate`,
+    "approve and activate after resubmit",
+    { comment: "approved post-resubmit" },
+    writeHeaders({ "x-user-id": "approver-1", "x-user-role": "APPROVER" })
+  );
 
   const versions = await getJson(request, `/v1/inapp/campaigns/${campaignId}/versions`, "list versions", readHeaders());
   expect(Array.isArray(versions.items)).toBeTruthy();
