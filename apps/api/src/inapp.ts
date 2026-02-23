@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { JsonCache } from "./lib/cache";
 import { InAppV2EventsError, createInAppV2EventsService } from "./services/inappV2Events";
 import { createInAppV2RuntimeService } from "./services/inappV2Runtime";
+import { getInAppGovernanceAllowedStatuses, getInAppGovernanceTransitionError } from "./lib/inappGovernance";
 
 interface WbsInstanceRecord {
   id: string;
@@ -1599,6 +1600,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!existing) {
       return buildResponseError(reply, 404, "Campaign not found");
     }
+    const transitionError = getInAppGovernanceTransitionError({
+      currentStatus: existing.status,
+      action: "submit_for_approval"
+    });
+    if (transitionError) {
+      return buildResponseError(reply, 409, transitionError, {
+        currentStatus: existing.status,
+        allowedStatuses: getInAppGovernanceAllowedStatuses("submit_for_approval")
+      });
+    }
 
     const updated = await prisma.inAppCampaign.update({
       where: { id: params.data.id },
@@ -1658,6 +1669,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     });
     if (!existing) {
       return buildResponseError(reply, 404, "Campaign not found");
+    }
+    const transitionError = getInAppGovernanceTransitionError({
+      currentStatus: existing.status,
+      action: "approve_and_activate"
+    });
+    if (transitionError) {
+      return buildResponseError(reply, 409, transitionError, {
+        currentStatus: existing.status,
+        allowedStatuses: getInAppGovernanceAllowedStatuses("approve_and_activate")
+      });
     }
 
     const updated = await prisma.inAppCampaign.update({
@@ -1720,6 +1741,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     if (!existing) {
       return buildResponseError(reply, 404, "Campaign not found");
     }
+    const transitionError = getInAppGovernanceTransitionError({
+      currentStatus: existing.status,
+      action: "reject_to_draft"
+    });
+    if (transitionError) {
+      return buildResponseError(reply, 409, transitionError, {
+        currentStatus: existing.status,
+        allowedStatuses: getInAppGovernanceAllowedStatuses("reject_to_draft")
+      });
+    }
 
     const updated = await prisma.inAppCampaign.update({
       where: { id: params.data.id },
@@ -1779,6 +1810,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     });
     if (!existing) {
       return buildResponseError(reply, 404, "Campaign not found");
+    }
+    const transitionError = getInAppGovernanceTransitionError({
+      currentStatus: existing.status,
+      action: "rollback"
+    });
+    if (transitionError) {
+      return buildResponseError(reply, 409, transitionError, {
+        currentStatus: existing.status,
+        allowedStatuses: getInAppGovernanceAllowedStatuses("rollback")
+      });
     }
 
     const version = await prisma.inAppCampaignVersion.findFirst({

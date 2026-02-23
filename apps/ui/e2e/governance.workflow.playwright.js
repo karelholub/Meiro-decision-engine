@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { getJson, postJson, putJson, readHeaders, uniqueSuffix, writeHeaders } from "./helpers/api-helpers.js";
+import { apiBase, getJson, postJson, putJson, readHeaders, uniqueSuffix, writeHeaders } from "./helpers/api-helpers.js";
 
 test("governance flow: submit, approve, reject, rollback, audit trail", async ({ page, request }) => {
   test.setTimeout(120000);
@@ -43,6 +43,13 @@ test("governance flow: submit, approve, reject, rollback, audit trail", async ({
   );
 
   const campaignId = created.item.id;
+
+  // Invalid transition must be blocked: DRAFT -> APPROVE
+  const invalidApprove = await request.post(`${apiBase}/v1/inapp/campaigns/${campaignId}/approve-and-activate`, {
+    headers: writeHeaders({ "x-user-id": "approver-1", "x-user-role": "APPROVER" }),
+    data: { comment: "invalid direct approve" }
+  });
+  expect(invalidApprove.status()).toBe(409);
 
   const submit1 = await postJson(
     request,
@@ -139,6 +146,13 @@ test("governance flow: submit, approve, reject, rollback, audit trail", async ({
     writeHeaders({ "x-user-id": "approver-1", "x-user-role": "APPROVER" })
   );
   expect(approve2.item.status).toBe("ACTIVE");
+
+  // Invalid transition must be blocked: ACTIVE -> SUBMIT_FOR_APPROVAL
+  const invalidSubmitAfterActive = await request.post(`${apiBase}/v1/inapp/campaigns/${campaignId}/submit-for-approval`, {
+    headers: writeHeaders({ "x-user-id": "editor-1", "x-user-role": "EDITOR" }),
+    data: { comment: "invalid submit after active" }
+  });
+  expect(invalidSubmitAfterActive.status()).toBe(409);
 
   const versions = await getJson(request, `/v1/inapp/campaigns/${campaignId}/versions`, "list versions", readHeaders());
   expect(Array.isArray(versions.items)).toBeTruthy();
