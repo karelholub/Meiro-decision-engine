@@ -48,6 +48,94 @@ const fromDatetimeLocal = (value: string): string | null => {
   return parsed.toISOString();
 };
 
+const tokenPattern = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
+
+const parseJsonSafe = (value: string): { value?: unknown; error?: string } => {
+  try {
+    return { value: JSON.parse(value) };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "Invalid JSON"
+    };
+  }
+};
+
+const collectTemplateTokens = (value: unknown, tokens: Set<string>) => {
+  if (typeof value === "string") {
+    const matcher = new RegExp(tokenPattern.source, "g");
+    for (const match of value.matchAll(matcher)) {
+      const token = match[1]?.trim();
+      if (token) {
+        tokens.add(token);
+      }
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectTemplateTokens(entry, tokens));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.values(value).forEach((entry) => collectTemplateTokens(entry, tokens));
+  }
+};
+
+const renderTemplateWithTokens = (value: unknown, tokens: Record<string, unknown>): unknown => {
+  if (typeof value === "string") {
+    const matcher = new RegExp(tokenPattern.source, "g");
+    return value.replace(matcher, (_match, tokenRaw) => {
+      const token = String(tokenRaw ?? "").trim();
+      const resolved = tokens[token];
+      if (resolved === undefined || resolved === null) {
+        return "";
+      }
+      return typeof resolved === "string" ? resolved : JSON.stringify(resolved);
+    });
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => renderTemplateWithTokens(entry, tokens));
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).reduce<Record<string, unknown>>((acc, [key, nested]) => {
+      acc[key] = renderTemplateWithTokens(nested, tokens);
+      return acc;
+    }, {});
+  }
+  return value;
+};
+
+const parseBindingSourcePath = (raw: string): string | null => {
+  const value = raw.trim();
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith("{")) {
+    const parsed = parseJsonSafe(value);
+    if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
+      return null;
+    }
+    const sourcePath = (parsed.value as { sourcePath?: unknown }).sourcePath;
+    return typeof sourcePath === "string" && sourcePath.trim().length > 0 ? sourcePath.trim() : null;
+  }
+  const [sourcePath] = value
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  return sourcePath ?? null;
+};
+
+const getValueByPath = (value: unknown, path: string): unknown => {
+  const parts = path.split(".").filter((part) => part.length > 0);
+  let cursor: unknown = value;
+  for (const part of parts) {
+    if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) {
+      return undefined;
+    }
+    cursor = (cursor as Record<string, unknown>)[part];
+  }
+  return cursor;
+};
+
 export default function InAppCampaignEditPage() {
   const params = useParams<{ id: string }>();
   const campaignId = String(params.id ?? "");
@@ -89,6 +177,7 @@ export default function InAppCampaignEditPage() {
   const [auditLogs, setAuditLogs] = useState<InAppAuditLog[]>([]);
   const [reviewComment, setReviewComment] = useState("");
   const [rollbackVersion, setRollbackVersion] = useState("");
+  const [bindingSampleJson, setBindingSampleJson] = useState('{\n  "profile": {\n    "firstName": "Alex"\n  }\n}\n');
 
   const load = async () => {
     if (!campaignId) {
@@ -191,6 +280,72 @@ export default function InAppCampaignEditPage() {
       previousText
     ].join("\n");
   }, [versions]);
+
+  const bindingInsights = useMemo(() => {
+    const tokensUsed = new Set<string>();
+    const variantParseWarnings: string[] = [];
+    const parsedVariants: Array<{ variantKey: string; content: unknown }> = [];
+
+    for (const variant of variants) {
+      const parsed = parseJsonSafe(variant.contentText);
+      if (parsed.error || parsed.value === undefined) {
+        variantParseWarnings.push(`Variant '${variant.variantKey || "unknown"}' has invalid JSON and was excluded from token scan.`);
+        continue;
+      }
+      parsedVariants.push({
+        variantKey: variant.variantKey,
+        content: parsed.value
+      });
+      collectTemplateTokens(parsed.value, tokensUsed);
+    }
+
+    const normalizedBindings = bindings.map((binding, index) => ({
+      row: index + 1,
+      token: binding.token.trim(),
+      binding: binding.binding.trim()
+    }));
+
+    const emptyTokenRows = normalizedBindings.filter((binding) => !binding.token && binding.binding).map((binding) => binding.row);
+    const emptyBindingTokens = normalizedBindings.filter((binding) => binding.token && !binding.binding).map((binding) => binding.token);
+
+    const bindingMap = normalizedBindings.reduce<Record<string, string>>((acc, binding) => {
+      if (!binding.token || !binding.binding) {
+        return acc;
+      }
+      acc[binding.token] = binding.binding;
+      return acc;
+    }, {});
+
+    const missingBindingTokens = [...tokensUsed].filter((token) => !bindingMap[token]).sort((a, b) => a.localeCompare(b));
+
+    const sampleParsed = parseJsonSafe(bindingSampleJson);
+    const sampleData = sampleParsed.error ? null : sampleParsed.value;
+    const tokenValues = Object.entries(bindingMap).reduce<Record<string, unknown>>((acc, [token, bindingRaw]) => {
+      const sourcePath = parseBindingSourcePath(bindingRaw);
+      if (!sourcePath) {
+        acc[token] = undefined;
+        return acc;
+      }
+      acc[token] = getValueByPath(sampleData, sourcePath);
+      return acc;
+    }, {});
+
+    const previewVariant = parsedVariants[0] ?? null;
+    const renderedPreview =
+      previewVariant && !sampleParsed.error ? renderTemplateWithTokens(previewVariant.content, tokenValues) : null;
+
+    return {
+      tokensUsed: [...tokensUsed].sort((a, b) => a.localeCompare(b)),
+      emptyTokenRows,
+      emptyBindingTokens,
+      missingBindingTokens,
+      variantParseWarnings,
+      sampleParseError: sampleParsed.error ?? null,
+      tokenValues,
+      previewVariantKey: previewVariant?.variantKey ?? null,
+      renderedPreview
+    };
+  }, [bindings, variants, bindingSampleJson]);
 
   const buildPayload = () => {
     return {
@@ -722,6 +877,76 @@ export default function InAppCampaignEditPage() {
           >
             Add Binding
           </button>
+
+          {bindingInsights.emptyTokenRows.length > 0 ? (
+            <p className="text-sm text-amber-700">
+              Rows with empty token key will be ignored: {bindingInsights.emptyTokenRows.join(", ")}
+            </p>
+          ) : null}
+          {bindingInsights.emptyBindingTokens.length > 0 ? (
+            <p className="text-sm text-amber-700">
+              Tokens missing source path: {bindingInsights.emptyBindingTokens.join(", ")}
+            </p>
+          ) : null}
+          {bindingInsights.missingBindingTokens.length > 0 ? (
+            <p className="text-sm text-amber-700">
+              Template tokens with no binding: {bindingInsights.missingBindingTokens.join(", ")}
+            </p>
+          ) : null}
+          {bindingInsights.variantParseWarnings.map((warning) => (
+            <p key={warning} className="text-sm text-amber-700">
+              {warning}
+            </p>
+          ))}
+
+          <div className="rounded-md border border-stone-200 p-3">
+            <p className="mb-2 text-sm font-semibold">Binding Sample Data (JSON)</p>
+            <textarea
+              value={bindingSampleJson}
+              onChange={(event) => setBindingSampleJson(event.target.value)}
+              className="min-h-32 w-full rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+            />
+            {bindingInsights.sampleParseError ? (
+              <p className="mt-2 text-sm text-red-700">Sample JSON invalid: {bindingInsights.sampleParseError}</p>
+            ) : null}
+          </div>
+
+          <div className="rounded-md border border-stone-200">
+            <p className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Resolved Token Values</p>
+            <div className="max-h-56 overflow-auto p-3">
+              {Object.keys(bindingInsights.tokenValues).length === 0 ? (
+                <p className="text-sm text-stone-600">No bindings to resolve.</p>
+              ) : (
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="text-left text-stone-600">
+                      <th className="border-b border-stone-200 px-2 py-1">Token</th>
+                      <th className="border-b border-stone-200 px-2 py-1">Sample Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(bindingInsights.tokenValues).map(([token, value]) => (
+                      <tr key={token}>
+                        <td className="border-b border-stone-100 px-2 py-1 font-mono text-xs">{token}</td>
+                        <td className="border-b border-stone-100 px-2 py-1 font-mono text-xs">
+                          {value === undefined ? "(undefined)" : JSON.stringify(value)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-md border border-stone-200">
+            <p className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">
+              Rendered Variant Preview {bindingInsights.previewVariantKey ? `(variant ${bindingInsights.previewVariantKey})` : ""}
+            </p>
+            <pre className="max-h-64 overflow-auto p-3 text-xs">
+              {bindingInsights.renderedPreview ? JSON.stringify(bindingInsights.renderedPreview, null, 2) : "No valid variant JSON available for preview."}
+            </pre>
+          </div>
         </article>
       ) : null}
 
