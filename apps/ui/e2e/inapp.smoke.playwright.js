@@ -1,6 +1,7 @@
-const { test, expect } = require("@playwright/test");
+import { test, expect } from "@playwright/test";
 
 const apiBase = process.env.E2E_API_BASE_URL || "http://localhost:3001";
+const apiKey = process.env.E2E_API_KEY || "local-write-key";
 
 test("create campaign -> activate -> simulate -> show=true", async ({ page, request }) => {
   const suffix = Date.now();
@@ -8,7 +9,8 @@ test("create campaign -> activate -> simulate -> show=true", async ({ page, requ
 
   const createResponse = await request.post(`${apiBase}/v1/inapp/campaigns`, {
     headers: {
-      "x-env": "DEV"
+      "x-env": "DEV",
+      "x-api-key": apiKey
     },
     data: {
       key: campaignKey,
@@ -47,7 +49,8 @@ test("create campaign -> activate -> simulate -> show=true", async ({ page, requ
 
   const activateResponse = await request.post(`${apiBase}/v1/inapp/campaigns/${created.item.id}/activate`, {
     headers: {
-      "x-env": "DEV"
+      "x-env": "DEV",
+      "x-api-key": apiKey
     }
   });
   expect(activateResponse.ok()).toBeTruthy();
@@ -60,5 +63,5 @@ test("create campaign -> activate -> simulate -> show=true", async ({ page, requ
   await page.getByLabel("profileId").last().fill("p-1001");
   await page.getByRole("button", { name: "Run" }).click();
 
-  await expect(page.getByText("Show:").first()).toContainText("true");
+  await expect(page.getByText(/Show:\s*true/).first()).toBeVisible();
 });

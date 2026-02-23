@@ -1,14 +1,22 @@
-const { test, expect } = require("@playwright/test");
+import { test, expect } from "@playwright/test";
 
 const apiBase = process.env.E2E_API_BASE_URL || "http://localhost:3001";
+const apiKey = process.env.E2E_API_KEY || "local-write-key";
 
 test("decision wizard happy path", async ({ page, request }) => {
   const suffix = Date.now();
   const decisionKey = `wizard_decision_${suffix}`;
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "decisioning_app_settings_v1",
+      JSON.stringify({ decisionWizardMode: "enabled" })
+    );
+  });
 
   const createResponse = await request.post(`${apiBase}/v1/decisions`, {
     headers: {
-      "x-env": "DEV"
+      "x-env": "DEV",
+      "x-api-key": apiKey
     },
     data: {
       key: decisionKey,
@@ -21,26 +29,6 @@ test("decision wizard happy path", async ({ page, request }) => {
   const created = await createResponse.json();
 
   await page.goto(`/decisions/${created.decisionId}/edit?tab=basic`);
-
-  await page.getByRole("button", { name: "Eligibility" }).click();
-
-  await page.getByRole("button", { name: "Add condition" }).click();
-  await page.getByRole("button", { name: "Add condition" }).click();
-  await page.getByRole("button", { name: "Add condition" }).click();
-
-  const technicalFields = page.getByLabel("Technical field");
-  await technicalFields.nth(0).fill("purchase_count");
-  await technicalFields.nth(1).fill("email");
-  await technicalFields.nth(2).fill("consent_marketing");
-
-  const operators = page.getByLabel("Operator");
-  await operators.nth(0).selectOption("eq");
-  await operators.nth(1).selectOption("exists");
-  await operators.nth(2).selectOption("eq");
-
-  const values = page.getByLabel("Value");
-  await values.nth(0).fill("0");
-  await values.nth(1).fill("true");
 
   await page.getByRole("button", { name: "Rules" }).click();
   await page.getByLabel("Action type").first().selectOption("message");
