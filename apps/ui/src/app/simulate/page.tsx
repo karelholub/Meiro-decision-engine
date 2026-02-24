@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { DecisionStackVersionSummary, DecisionVersionSummary, DecideStackResponse } from "@decisioning/shared";
+import type {
+  DecisionStackVersionSummary,
+  DecisionVersionSummary,
+  DecideStackResponse,
+  InAppApplication,
+  InAppPlacement
+} from "@decisioning/shared";
 import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
@@ -88,6 +94,8 @@ export default function SimulatePage() {
 
   const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
   const [stacks, setStacks] = useState<DecisionStackVersionSummary[]>([]);
+  const [inAppApps, setInAppApps] = useState<InAppApplication[]>([]);
+  const [inAppPlacements, setInAppPlacements] = useState<InAppPlacement[]>([]);
   const [decisionId, setDecisionId] = useState("");
   const [decisionKey, setDecisionKey] = useState("");
   const [version, setVersion] = useState("");
@@ -172,16 +180,22 @@ export default function SimulatePage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [decisionResponse, stackResponse] = await Promise.all([
+        const [decisionResponse, stackResponse, inAppAppsResponse, inAppPlacementsResponse] = await Promise.all([
           apiClient.decisions.list({ status: "ACTIVE", limit: 100, page: 1 }),
-          apiClient.stacks.list({ status: "ACTIVE", limit: 100, page: 1 })
+          apiClient.stacks.list({ status: "ACTIVE", limit: 100, page: 1 }),
+          apiClient.inapp.apps.list(),
+          apiClient.inapp.placements.list()
         ]);
 
         setDecisions(decisionResponse.items);
         setStacks(stackResponse.items);
+        setInAppApps(inAppAppsResponse.items);
+        setInAppPlacements(inAppPlacementsResponse.items);
         setDecisionId((current) => current || decisionResponse.items[0]?.decisionId || "");
         setDecisionKey((current) => current || decisionResponse.items[0]?.key || "");
         setStackKey((current) => current || stackResponse.items[0]?.key || "");
+        setInAppAppKey((current) => current || inAppAppsResponse.items[0]?.key || "");
+        setInAppPlacement((current) => current || inAppPlacementsResponse.items[0]?.key || "");
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "Failed to load simulator resources");
       }
@@ -189,6 +203,24 @@ export default function SimulatePage() {
 
     void load();
   }, [environment]);
+
+  useEffect(() => {
+    if (inAppAppKey && !inAppApps.some((item) => item.key === inAppAppKey)) {
+      setInAppAppKey("");
+    }
+    if (!inAppAppKey && inAppApps[0]) {
+      setInAppAppKey(inAppApps[0].key);
+    }
+  }, [inAppAppKey, inAppApps]);
+
+  useEffect(() => {
+    if (inAppPlacement && !inAppPlacements.some((item) => item.key === inAppPlacement)) {
+      setInAppPlacement("");
+    }
+    if (!inAppPlacement && inAppPlacements[0]) {
+      setInAppPlacement(inAppPlacements[0].key);
+    }
+  }, [inAppPlacement, inAppPlacements]);
 
   useEffect(() => {
     if (profileInputMode === "saved") {
@@ -439,6 +471,9 @@ export default function SimulatePage() {
     return { added, removed };
   }, [previousDecisionResult, decisionResult]);
 
+  const activeDecisionKeys = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
+  const activeStackKeys = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
+
   const copyJson = async (value: unknown) => {
     try {
       await navigator.clipboard.writeText(pretty(value));
@@ -508,12 +543,18 @@ export default function SimulatePage() {
             ) : (
               <label className="flex flex-col gap-1 text-sm">
                 Decision key
-                <input
+                <select
                   value={decisionKey}
                   onChange={(event) => setDecisionKey(event.target.value)}
                   className="rounded-md border border-stone-300 px-2 py-1"
-                  placeholder="cart_recovery"
-                />
+                >
+                  <option value="">Use selected Decision ID</option>
+                  {activeDecisionKeys.map((key) => (
+                    <option key={key} value={key}>
+                      {key}
+                    </option>
+                  ))}
+                </select>
               </label>
             )}
 
@@ -609,21 +650,19 @@ export default function SimulatePage() {
           <>
             <label className="flex flex-col gap-1 text-sm">
               Stack key (ACTIVE)
-              <input
-                list="active-stack-keys"
+              <select
                 value={stackKey}
                 onChange={(event) => setStackKey(event.target.value)}
                 className="rounded-md border border-stone-300 px-2 py-1"
-                placeholder="stack_key"
-              />
+              >
+                <option value="">Select stack key</option>
+                {activeStackKeys.map((key) => (
+                  <option key={key} value={key}>
+                    {key}
+                  </option>
+                ))}
+              </select>
             </label>
-            <datalist id="active-stack-keys">
-              {stacks.map((stack) => (
-                <option key={stack.stackId} value={stack.key}>
-                  {stack.name}
-                </option>
-              ))}
-            </datalist>
             <label className="flex flex-col gap-1 text-sm">
               Lookup mode
               <select
@@ -666,8 +705,8 @@ export default function SimulatePage() {
               </>
             )}
             <p className="md:col-span-2 lg:col-span-3 text-xs text-stone-600">
-              {stacks.length > 0
-                ? `Loaded ${stacks.length} active stack key(s) for ${environment}. Use stack key, not stack id.`
+              {activeStackKeys.length > 0
+                ? `Loaded ${activeStackKeys.length} active stack key(s) for ${environment}.`
                 : `No active stacks found in ${environment}. Activate a stack first.`}
             </p>
           </>
@@ -675,19 +714,33 @@ export default function SimulatePage() {
           <>
             <label className="flex flex-col gap-1 text-sm">
               App Key
-              <input
+              <select
                 value={inAppAppKey}
                 onChange={(event) => setInAppAppKey(event.target.value)}
                 className="rounded-md border border-stone-300 px-2 py-1"
-              />
+              >
+                <option value="">Select app</option>
+                {inAppApps.map((item) => (
+                  <option key={item.id} value={item.key}>
+                    {item.key}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Placement
-              <input
+              <select
                 value={inAppPlacement}
                 onChange={(event) => setInAppPlacement(event.target.value)}
                 className="rounded-md border border-stone-300 px-2 py-1"
-              />
+              >
+                <option value="">Select placement</option>
+                {inAppPlacements.map((item) => (
+                  <option key={item.id} value={item.key}>
+                    {item.key}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Lookup mode

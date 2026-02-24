@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useState } from "react";
-import type { LogsQueryResponseItem } from "@decisioning/shared";
+import type {
+  DecisionStackVersionSummary,
+  DecisionVersionSummary,
+  InAppCampaign,
+  InAppPlacement,
+  LogsQueryResponseItem
+} from "@decisioning/shared";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
@@ -16,6 +22,10 @@ export default function LogsPage() {
   const [profileId, setProfileId] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [decisionOptions, setDecisionOptions] = useState<DecisionVersionSummary[]>([]);
+  const [stackOptions, setStackOptions] = useState<DecisionStackVersionSummary[]>([]);
+  const [campaignOptions, setCampaignOptions] = useState<InAppCampaign[]>([]);
+  const [placementOptions, setPlacementOptions] = useState<InAppPlacement[]>([]);
   const [items, setItems] = useState<LogsQueryResponseItem[]>([]);
   const [expanded, setExpanded] = useState<Record<string, { trace?: unknown; payload?: unknown }>>({});
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +37,50 @@ export default function LogsPage() {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
   }, []);
+
+  useEffect(() => {
+    const loadFilterOptions = async () => {
+      try {
+        const [decisionResponse, stackResponse, campaignResponse, placementResponse] = await Promise.all([
+          apiClient.decisions.list({ status: "ACTIVE", page: 1, limit: 100 }),
+          apiClient.stacks.list({ status: "ACTIVE", page: 1, limit: 100 }),
+          apiClient.inapp.campaigns.list(),
+          apiClient.inapp.placements.list()
+        ]);
+        setDecisionOptions(decisionResponse.items);
+        setStackOptions(stackResponse.items);
+        setCampaignOptions(campaignResponse.items);
+        setPlacementOptions(placementResponse.items);
+      } catch {
+        // filter options are best effort
+      }
+    };
+    void loadFilterOptions();
+  }, [environment]);
+
+  useEffect(() => {
+    if (decisionId && !decisionOptions.some((item) => item.decisionId === decisionId)) {
+      setDecisionId("");
+    }
+  }, [decisionId, decisionOptions]);
+
+  useEffect(() => {
+    if (stackKey && !stackOptions.some((item) => item.key === stackKey)) {
+      setStackKey("");
+    }
+  }, [stackKey, stackOptions]);
+
+  useEffect(() => {
+    if (campaignKey && !campaignOptions.some((item) => item.key === campaignKey)) {
+      setCampaignKey("");
+    }
+  }, [campaignKey, campaignOptions]);
+
+  useEffect(() => {
+    if (placement && !placementOptions.some((item) => item.key === placement)) {
+      setPlacement("");
+    }
+  }, [placement, placementOptions]);
 
   const load = async () => {
     setLoading(true);
@@ -108,38 +162,66 @@ export default function LogsPage() {
         {logType === "decision" ? (
           <label className="flex flex-col gap-1 text-sm lg:col-span-2">
             Decision ID
-            <input
+            <select
               value={decisionId}
               onChange={(event) => setDecisionId(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            >
+              <option value="">All active decisions</option>
+              {decisionOptions.map((item) => (
+                <option key={item.versionId} value={item.decisionId}>
+                  {item.key} ({item.name})
+                </option>
+              ))}
+            </select>
           </label>
         ) : logType === "stack" ? (
           <label className="flex flex-col gap-1 text-sm lg:col-span-2">
             Stack key
-            <input
+            <select
               value={stackKey}
               onChange={(event) => setStackKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            >
+              <option value="">All active stacks</option>
+              {stackOptions.map((item) => (
+                <option key={`${item.stackId}:${item.version}`} value={item.key}>
+                  {item.key} ({item.name})
+                </option>
+              ))}
+            </select>
           </label>
         ) : (
           <>
             <label className="flex flex-col gap-1 text-sm">
               Campaign Key
-              <input
+              <select
                 value={campaignKey}
                 onChange={(event) => setCampaignKey(event.target.value)}
                 className="rounded-md border border-stone-300 px-2 py-1"
-              />
+              >
+                <option value="">All campaigns</option>
+                {campaignOptions.map((item) => (
+                  <option key={item.id} value={item.key}>
+                    {item.key}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Placement
-              <input
+              <select
                 value={placement}
                 onChange={(event) => setPlacement(event.target.value)}
                 className="rounded-md border border-stone-300 px-2 py-1"
-              />
+              >
+                <option value="">All placements</option>
+                {placementOptions.map((item) => (
+                  <option key={item.id} value={item.key}>
+                    {item.key}
+                  </option>
+                ))}
+              </select>
             </label>
           </>
         )}
