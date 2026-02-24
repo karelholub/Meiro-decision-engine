@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { DecisionStackVersionSummary, DecisionVersionSummary, InAppApplication, InAppPlacement } from "@decisioning/shared";
 import { apiClient, type InAppV2DecideResponse } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 
@@ -11,6 +12,10 @@ export default function InAppDecideDebuggerPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<InAppV2DecideResponse | null>(null);
+  const [apps, setApps] = useState<InAppApplication[]>([]);
+  const [placements, setPlacements] = useState<InAppPlacement[]>([]);
+  const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
+  const [stacks, setStacks] = useState<DecisionStackVersionSummary[]>([]);
 
   const [appKey, setAppKey] = useState("meiro_store");
   const [placement, setPlacement] = useState("home_top");
@@ -26,6 +31,49 @@ export default function InAppDecideDebuggerPage() {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
   }, []);
+
+  useEffect(() => {
+    const loadOptions = async () => {
+      try {
+        const [appsResponse, placementsResponse, decisionsResponse, stacksResponse] = await Promise.all([
+          apiClient.inapp.apps.list(),
+          apiClient.inapp.placements.list(),
+          apiClient.decisions.list({ status: "ACTIVE", page: 1, limit: 100 }),
+          apiClient.stacks.list({ status: "ACTIVE", page: 1, limit: 100 })
+        ]);
+        setApps(appsResponse.items);
+        setPlacements(placementsResponse.items);
+        setDecisions(decisionsResponse.items);
+        setStacks(stacksResponse.items);
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load debugger options");
+      }
+    };
+    void loadOptions();
+  }, [environment]);
+
+  useEffect(() => {
+    if (!appKey && apps[0]) {
+      setAppKey(apps[0].key);
+      return;
+    }
+    if (appKey && !apps.some((item) => item.key === appKey)) {
+      setAppKey("");
+    }
+  }, [appKey, apps]);
+
+  useEffect(() => {
+    if (!placement && placements[0]) {
+      setPlacement(placements[0].key);
+      return;
+    }
+    if (placement && !placements.some((item) => item.key === placement)) {
+      setPlacement("");
+    }
+  }, [placement, placements]);
+
+  const decisionKeyOptions = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
+  const stackKeyOptions = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
 
   const context = useMemo(() => {
     try {
@@ -85,27 +133,67 @@ export default function InAppDecideDebuggerPage() {
       <article className="panel grid gap-3 p-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           App Key
-          <input className="rounded-md border border-stone-300 px-2 py-1" value={appKey} onChange={(event) => setAppKey(event.target.value)} />
+          <select className="rounded-md border border-stone-300 px-2 py-1" value={appKey} onChange={(event) => setAppKey(event.target.value)}>
+            <option value="">Select app</option>
+            {apps.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Placement
-          <input
-            className="rounded-md border border-stone-300 px-2 py-1"
-            value={placement}
-            onChange={(event) => setPlacement(event.target.value)}
-          />
+          <select className="rounded-md border border-stone-300 px-2 py-1" value={placement} onChange={(event) => setPlacement(event.target.value)}>
+            <option value="">Select placement</option>
+            {placements.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Decision Key (optional)
-          <input
+          <select
             className="rounded-md border border-stone-300 px-2 py-1"
             value={decisionKey}
-            onChange={(event) => setDecisionKey(event.target.value)}
-          />
+            onChange={(event) => {
+              const next = event.target.value;
+              setDecisionKey(next);
+              if (next) {
+                setStackKey("");
+              }
+            }}
+          >
+            <option value="">None</option>
+            {decisionKeyOptions.map((key) => (
+              <option key={key} value={key}>
+                {key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Stack Key (optional)
-          <input className="rounded-md border border-stone-300 px-2 py-1" value={stackKey} onChange={(event) => setStackKey(event.target.value)} />
+          <select
+            className="rounded-md border border-stone-300 px-2 py-1"
+            value={stackKey}
+            onChange={(event) => {
+              const next = event.target.value;
+              setStackKey(next);
+              if (next) {
+                setDecisionKey("");
+              }
+            }}
+          >
+            <option value="">None</option>
+            {stackKeyOptions.map((key) => (
+              <option key={key} value={key}>
+                {key}
+              </option>
+            ))}
+          </select>
         </label>
 
         <label className="flex flex-col gap-1 text-sm">

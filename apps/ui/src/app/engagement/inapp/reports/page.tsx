@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { InAppOverviewReport } from "@decisioning/shared";
+import type { InAppApplication, InAppOverviewReport, InAppPlacement } from "@decisioning/shared";
 import { apiClient } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 
@@ -22,6 +22,8 @@ export default function InAppReportsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<InAppOverviewReport | null>(null);
+  const [apps, setApps] = useState<InAppApplication[]>([]);
+  const [placements, setPlacements] = useState<InAppPlacement[]>([]);
 
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -36,13 +38,19 @@ export default function InAppReportsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const response = await apiClient.inapp.reports.overview({
-        from: asIso(from),
-        to: asIso(to),
-        appKey: appKey.trim() || undefined,
-        placement: placement.trim() || undefined
-      });
-      setReport(response);
+      const [reportResponse, appsResponse, placementsResponse] = await Promise.all([
+        apiClient.inapp.reports.overview({
+          from: asIso(from),
+          to: asIso(to),
+          appKey: appKey.trim() || undefined,
+          placement: placement.trim() || undefined
+        }),
+        apiClient.inapp.apps.list(),
+        apiClient.inapp.placements.list()
+      ]);
+      setReport(reportResponse);
+      setApps(appsResponse.items);
+      setPlacements(placementsResponse.items);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load report");
@@ -54,6 +62,22 @@ export default function InAppReportsPage() {
   useEffect(() => {
     void load();
   }, [environment]);
+
+  useEffect(() => {
+    if (!appKey && apps[0]) {
+      setAppKey(apps[0].key);
+      return;
+    }
+    if (appKey && !apps.some((item) => item.key === appKey)) {
+      setAppKey("");
+    }
+  }, [apps, appKey]);
+
+  useEffect(() => {
+    if (placement && !placements.some((item) => item.key === placement)) {
+      setPlacement("");
+    }
+  }, [placements, placement]);
 
   const exportCsv = async () => {
     try {
@@ -105,11 +129,25 @@ export default function InAppReportsPage() {
         </label>
         <label className="flex flex-col gap-1 text-sm">
           App Key
-          <input value={appKey} onChange={(event) => setAppKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          <select value={appKey} onChange={(event) => setAppKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+            <option value="">All apps</option>
+            {apps.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Placement
-          <input value={placement} onChange={(event) => setPlacement(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          <select value={placement} onChange={(event) => setPlacement(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+            <option value="">All placements</option>
+            {placements.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="flex items-end gap-2">
           <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void load()} disabled={loading}>

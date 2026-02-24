@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { InAppEvent } from "@decisioning/shared";
+import type { InAppCampaign, InAppEvent } from "@decisioning/shared";
 import { apiClient } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 
@@ -21,6 +21,7 @@ export default function InAppEventsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<InAppEvent[]>([]);
+  const [campaigns, setCampaigns] = useState<InAppCampaign[]>([]);
 
   const [campaignKey, setCampaignKey] = useState("");
   const [messageId, setMessageId] = useState("");
@@ -36,15 +37,19 @@ export default function InAppEventsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const response = await apiClient.inapp.events.list({
-        campaignKey: campaignKey.trim() || undefined,
-        messageId: messageId.trim() || undefined,
-        profileId: profileId.trim() || undefined,
-        from: asIso(from),
-        to: asIso(to),
-        limit: 250
-      });
-      setItems(response.items);
+      const [eventsResponse, campaignsResponse] = await Promise.all([
+        apiClient.inapp.events.list({
+          campaignKey: campaignKey.trim() || undefined,
+          messageId: messageId.trim() || undefined,
+          profileId: profileId.trim() || undefined,
+          from: asIso(from),
+          to: asIso(to),
+          limit: 250
+        }),
+        apiClient.inapp.campaigns.list()
+      ]);
+      setItems(eventsResponse.items);
+      setCampaigns(campaignsResponse.items);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load events");
@@ -56,6 +61,14 @@ export default function InAppEventsPage() {
   useEffect(() => {
     void load();
   }, [environment]);
+
+  useEffect(() => {
+    if (campaignKey && !campaigns.some((item) => item.key === campaignKey)) {
+      setCampaignKey("");
+    }
+  }, [campaignKey, campaigns]);
+
+  const messageIds = [...new Set(items.map((item) => item.messageId))].slice(0, 50);
 
   const copy = async (value: string) => {
     try {
@@ -75,11 +88,23 @@ export default function InAppEventsPage() {
       <div className="panel grid gap-3 p-4 md:grid-cols-6">
         <label className="flex flex-col gap-1 text-sm">
           Campaign Key
-          <input value={campaignKey} onChange={(event) => setCampaignKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          <select value={campaignKey} onChange={(event) => setCampaignKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+            <option value="">All campaigns</option>
+            {campaigns.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Message ID
-          <input value={messageId} onChange={(event) => setMessageId(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          <input list="inapp-message-ids" value={messageId} onChange={(event) => setMessageId(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          <datalist id="inapp-message-ids">
+            {messageIds.map((id) => (
+              <option key={id} value={id} />
+            ))}
+          </datalist>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Profile ID

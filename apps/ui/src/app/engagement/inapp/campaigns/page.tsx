@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { InAppCampaign } from "@decisioning/shared";
+import type { InAppApplication, InAppCampaign, InAppPlacement, InAppTemplate } from "@decisioning/shared";
 import { apiClient } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 
 export default function InAppCampaignsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [items, setItems] = useState<InAppCampaign[]>([]);
+  const [apps, setApps] = useState<InAppApplication[]>([]);
+  const [placements, setPlacements] = useState<InAppPlacement[]>([]);
+  const [templates, setTemplates] = useState<InAppTemplate[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,12 +34,20 @@ export default function InAppCampaignsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const response = await apiClient.inapp.campaigns.list({
-        appKey: filterAppKey || undefined,
-        placementKey: filterPlacementKey || undefined,
-        status: filterStatus || undefined
-      });
-      setItems(response.items);
+      const [campaignsResponse, appsResponse, placementsResponse, templatesResponse] = await Promise.all([
+        apiClient.inapp.campaigns.list({
+          appKey: filterAppKey || undefined,
+          placementKey: filterPlacementKey || undefined,
+          status: filterStatus || undefined
+        }),
+        apiClient.inapp.apps.list(),
+        apiClient.inapp.placements.list(),
+        apiClient.inapp.templates.list()
+      ]);
+      setItems(campaignsResponse.items);
+      setApps(appsResponse.items);
+      setPlacements(placementsResponse.items);
+      setTemplates(templatesResponse.items);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load campaigns");
@@ -48,6 +59,39 @@ export default function InAppCampaignsPage() {
   useEffect(() => {
     void load();
   }, [environment]);
+
+  useEffect(() => {
+    if (filterAppKey && !apps.some((item) => item.key === filterAppKey)) {
+      setFilterAppKey("");
+    }
+    if (!createAppKey && apps[0]) {
+      setCreateAppKey(apps[0].key);
+    }
+    if (createAppKey && !apps.some((item) => item.key === createAppKey) && apps[0]) {
+      setCreateAppKey(apps[0].key);
+    }
+  }, [apps, createAppKey, filterAppKey]);
+
+  useEffect(() => {
+    if (filterPlacementKey && !placements.some((item) => item.key === filterPlacementKey)) {
+      setFilterPlacementKey("");
+    }
+    if (!createPlacementKey && placements[0]) {
+      setCreatePlacementKey(placements[0].key);
+    }
+    if (createPlacementKey && !placements.some((item) => item.key === createPlacementKey) && placements[0]) {
+      setCreatePlacementKey(placements[0].key);
+    }
+  }, [placements, createPlacementKey, filterPlacementKey]);
+
+  useEffect(() => {
+    if (!createTemplateKey && templates[0]) {
+      setCreateTemplateKey(templates[0].key);
+    }
+    if (createTemplateKey && !templates.some((item) => item.key === createTemplateKey) && templates[0]) {
+      setCreateTemplateKey(templates[0].key);
+    }
+  }, [templates, createTemplateKey]);
 
   const create = async () => {
     try {
@@ -98,19 +142,33 @@ export default function InAppCampaignsPage() {
       <div className="panel grid gap-3 p-4 md:grid-cols-4">
         <label className="flex flex-col gap-1 text-sm">
           App Key
-          <input
+          <select
             value={filterAppKey}
             onChange={(event) => setFilterAppKey(event.target.value)}
             className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          >
+            <option value="">All apps</option>
+            {apps.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Placement
-          <input
+          <select
             value={filterPlacementKey}
             onChange={(event) => setFilterPlacementKey(event.target.value)}
             className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          >
+            <option value="">All placements</option>
+            {placements.map((item) => (
+              <option key={item.id} value={item.key}>
+                {item.key}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Status
@@ -156,27 +214,48 @@ export default function InAppCampaignsPage() {
           </label>
           <label className="flex flex-col gap-1 text-sm">
             App Key
-            <input
+            <select
               value={createAppKey}
               onChange={(event) => setCreateAppKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            >
+              <option value="">Select app</option>
+              {apps.map((item) => (
+                <option key={item.id} value={item.key}>
+                  {item.key}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Placement Key
-            <input
+            <select
               value={createPlacementKey}
               onChange={(event) => setCreatePlacementKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            >
+              <option value="">Select placement</option>
+              {placements.map((item) => (
+                <option key={item.id} value={item.key}>
+                  {item.key}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             Template Key
-            <input
+            <select
               value={createTemplateKey}
               onChange={(event) => setCreateTemplateKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            >
+              <option value="">Select template</option>
+              {templates.map((item) => (
+                <option key={item.id} value={item.key}>
+                  {item.key}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="md:col-span-2">
             <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void create()}>
