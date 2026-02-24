@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { InAppApplication, InAppCampaign, InAppPlacement, InAppTemplate } from "@decisioning/shared";
+import type { CatalogContentBlock, CatalogOffer, InAppApplication, InAppCampaign, InAppPlacement, InAppTemplate } from "@decisioning/shared";
 import { apiClient } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 
@@ -12,6 +12,8 @@ export default function InAppCampaignsPage() {
   const [apps, setApps] = useState<InAppApplication[]>([]);
   const [placements, setPlacements] = useState<InAppPlacement[]>([]);
   const [templates, setTemplates] = useState<InAppTemplate[]>([]);
+  const [contentBlocks, setContentBlocks] = useState<CatalogContentBlock[]>([]);
+  const [offers, setOffers] = useState<CatalogOffer[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,6 +27,8 @@ export default function InAppCampaignsPage() {
   const [createAppKey, setCreateAppKey] = useState("meiro_store");
   const [createPlacementKey, setCreatePlacementKey] = useState("home_top");
   const [createTemplateKey, setCreateTemplateKey] = useState("banner_v1");
+  const [createContentKey, setCreateContentKey] = useState("HOME_TOP_BANNER_WINBACK");
+  const [createOfferKey, setCreateOfferKey] = useState("WINBACK10");
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -34,7 +38,7 @@ export default function InAppCampaignsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [campaignsResponse, appsResponse, placementsResponse, templatesResponse] = await Promise.all([
+      const [campaignsResponse, appsResponse, placementsResponse, templatesResponse, contentResponse, offersResponse] = await Promise.all([
         apiClient.inapp.campaigns.list({
           appKey: filterAppKey || undefined,
           placementKey: filterPlacementKey || undefined,
@@ -42,12 +46,16 @@ export default function InAppCampaignsPage() {
         }),
         apiClient.inapp.apps.list(),
         apiClient.inapp.placements.list(),
-        apiClient.inapp.templates.list()
+        apiClient.inapp.templates.list(),
+        apiClient.catalog.content.list(),
+        apiClient.catalog.offers.list()
       ]);
       setItems(campaignsResponse.items);
       setApps(appsResponse.items);
       setPlacements(placementsResponse.items);
       setTemplates(templatesResponse.items);
+      setContentBlocks(contentResponse.items);
+      setOffers(offersResponse.items);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load campaigns");
@@ -95,31 +103,42 @@ export default function InAppCampaignsPage() {
 
   const create = async () => {
     try {
+      const selectedContent = createContentKey.trim()
+        ? contentBlocks
+            .filter((item) => item.key === createContentKey.trim())
+            .sort((a, b) => b.version - a.version)[0]
+        : null;
+      const useCatalogContent = Boolean(selectedContent);
+
       await apiClient.inapp.campaigns.create({
         key: createKey.trim(),
         name: createName.trim(),
         appKey: createAppKey.trim(),
         placementKey: createPlacementKey.trim(),
-        templateKey: createTemplateKey.trim(),
+        templateKey: useCatalogContent ? selectedContent?.templateId : createTemplateKey.trim(),
+        contentKey: useCatalogContent ? createContentKey.trim() : undefined,
+        offerKey: createOfferKey.trim() || undefined,
         status: "DRAFT",
         priority: 10,
         ttlSeconds: 3600,
         holdoutEnabled: false,
         holdoutPercentage: 0,
         holdoutSalt: `${createKey.trim()}-holdout`,
-        variants: [
-          {
-            variantKey: "A",
-            weight: 100,
-            contentJson: {
-              title: "Hey {{first_name}} - quick pick for you",
-              subtitle: "RFM {{rfm}}",
-              cta: "Explore",
-              image: "https://cdn.example.com/banner.jpg",
-              deeplink: "app://home"
-            }
-          }
-        ],
+        variants: useCatalogContent
+          ? []
+          : [
+              {
+                variantKey: "A",
+                weight: 100,
+                contentJson: {
+                  title: "Hey {{first_name}} - quick pick for you",
+                  subtitle: "RFM {{rfm}}",
+                  cta: "Explore",
+                  image: "https://cdn.example.com/banner.jpg",
+                  deeplink: "app://home"
+                }
+              }
+            ],
         tokenBindingsJson: {
           first_name: "mx_first_name_last|takeFirst",
           rfm: "web_rfm|takeFirst"
@@ -257,6 +276,36 @@ export default function InAppCampaignsPage() {
               ))}
             </select>
           </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Content Key (optional)
+            <select
+              value={createContentKey}
+              onChange={(event) => setCreateContentKey(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            >
+              <option value="">None (raw variant payload)</option>
+              {[...new Set(contentBlocks.map((item) => item.key))].map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Offer Key (optional)
+            <select
+              value={createOfferKey}
+              onChange={(event) => setCreateOfferKey(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            >
+              <option value="">None</option>
+              {[...new Set(offers.map((item) => item.key))].map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="md:col-span-2">
             <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void create()}>
               Save Draft
@@ -279,6 +328,8 @@ export default function InAppCampaignsPage() {
                 </p>
                 <p className="text-xs text-stone-600">
                   priority {item.priority} · ttl {item.ttlSeconds}s · variants {item.variants.length}
+                  {item.contentKey ? ` · content ${item.contentKey}` : ""}
+                  {item.offerKey ? ` · offer ${item.offerKey}` : ""}
                 </p>
               </div>
               <div className="flex gap-2 text-sm">

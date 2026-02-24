@@ -377,6 +377,108 @@ const inAppTemplateSchema = {
   }
 };
 
+const upsertCatalogSeed = async () => {
+  await prisma.offer.upsert({
+    where: {
+      environment_key_version: {
+        environment: Environment.DEV,
+        key: "WINBACK10",
+        version: 1
+      }
+    },
+    update: {
+      name: "Winback 10% Off",
+      description: "Default winback discount offer for churn-risk users.",
+      status: "ACTIVE",
+      tags: toInputJson(["promo", "discount", "winback"]),
+      type: "discount",
+      valueJson: toInputJson({
+        percent: 10,
+        code: "WINBACK10"
+      }),
+      constraints: toInputJson({
+        minSpend: 1000,
+        newCustomersOnly: false
+      }),
+      activatedAt: new Date()
+    },
+    create: {
+      environment: Environment.DEV,
+      key: "WINBACK10",
+      version: 1,
+      name: "Winback 10% Off",
+      description: "Default winback discount offer for churn-risk users.",
+      status: "ACTIVE",
+      tags: toInputJson(["promo", "discount", "winback"]),
+      type: "discount",
+      valueJson: toInputJson({
+        percent: 10,
+        code: "WINBACK10"
+      }),
+      constraints: toInputJson({
+        minSpend: 1000,
+        newCustomersOnly: false
+      }),
+      activatedAt: new Date()
+    }
+  });
+
+  await prisma.contentBlock.upsert({
+    where: {
+      environment_key_version: {
+        environment: Environment.DEV,
+        key: "HOME_TOP_BANNER_WINBACK",
+        version: 1
+      }
+    },
+    update: {
+      name: "Home Top Winback Banner",
+      description: "Banner content block for winback journeys.",
+      status: "ACTIVE",
+      tags: toInputJson(["inapp", "home_top", "promo"]),
+      templateId: "banner_v1",
+      schemaJson: toInputJson(inAppTemplateSchema),
+      localesJson: toInputJson({
+        en: {
+          title: "Hey {{profile.first_name}} - welcome back",
+          subtitle: "Use code {{offer.code}} to save {{offer.percent}}%",
+          cta: "Redeem Offer",
+          image: "https://images.unsplash.com/photo-1483985988355-763728e1935b",
+          deeplink: "meiro-store://offers/winback"
+        }
+      }),
+      tokenBindings: toInputJson({
+        offer: "context.offer"
+      }),
+      activatedAt: new Date()
+    },
+    create: {
+      environment: Environment.DEV,
+      key: "HOME_TOP_BANNER_WINBACK",
+      version: 1,
+      name: "Home Top Winback Banner",
+      description: "Banner content block for winback journeys.",
+      status: "ACTIVE",
+      tags: toInputJson(["inapp", "home_top", "promo"]),
+      templateId: "banner_v1",
+      schemaJson: toInputJson(inAppTemplateSchema),
+      localesJson: toInputJson({
+        en: {
+          title: "Hey {{profile.first_name}} - welcome back",
+          subtitle: "Use code {{offer.code}} to save {{offer.percent}}%",
+          cta: "Redeem Offer",
+          image: "https://images.unsplash.com/photo-1483985988355-763728e1935b",
+          deeplink: "meiro-store://offers/winback"
+        }
+      }),
+      tokenBindings: toInputJson({
+        offer: "context.offer"
+      }),
+      activatedAt: new Date()
+    }
+  });
+};
+
 const upsertInAppMvpSeed = async () => {
   await prisma.inAppUser.upsert({
     where: { id: "seed-admin" },
@@ -470,6 +572,8 @@ const upsertInAppMvpSeed = async () => {
       appKey: "meiro_store",
       placementKey: "home_top",
       templateKey: "banner_v1",
+      contentKey: "HOME_TOP_BANNER_WINBACK",
+      offerKey: "WINBACK10",
       priority: 10,
       ttlSeconds: 3600,
       holdoutEnabled: false,
@@ -493,6 +597,8 @@ const upsertInAppMvpSeed = async () => {
       appKey: "meiro_store",
       placementKey: "home_top",
       templateKey: "banner_v1",
+      contentKey: "HOME_TOP_BANNER_WINBACK",
+      offerKey: "WINBACK10",
       priority: 10,
       ttlSeconds: 3600,
       holdoutEnabled: false,
@@ -624,6 +730,7 @@ const main = async () => {
   await upsertWbsInstance();
   await upsertWbsMapping();
   await upsertDlqConfig();
+  await upsertCatalogSeed();
   await upsertInAppMvpSeed();
   await upsertDecisionStack({
     key: "inapp_home_top_default",

@@ -283,6 +283,8 @@ model InAppCampaign {
   appKey                String
   placementKey          String
   templateKey           String
+  contentKey            String?
+  offerKey              String?
   priority              Int                @default(0)
   ttlSeconds            Int                @default(3600)
   startAt               DateTime?
@@ -306,6 +308,70 @@ model InAppCampaign {
   @@index([environment, appKey, placementKey, status])
   @@index([environment, status, priority])
   @@map("inapp_campaigns")
+}
+
+model Offer {
+  id          String      @id @default(uuid())
+  environment Environment @default(DEV)
+  key         String
+  name        String
+  description String?
+  status      String
+  version     Int
+  tags        Json?
+  type        String
+  valueJson   Json
+  constraints Json?
+  startAt     DateTime?
+  endAt       DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  activatedAt DateTime?
+
+  @@unique([environment, key, version])
+  @@index([environment, key, status])
+  @@index([environment, status, updatedAt])
+  @@map("offers")
+}
+
+model ContentBlock {
+  id           String      @id @default(uuid())
+  environment  Environment @default(DEV)
+  key          String
+  name         String
+  description  String?
+  status       String
+  version      Int
+  tags         Json?
+  templateId   String
+  schemaJson   Json?
+  localesJson  Json
+  tokenBindings Json?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  activatedAt  DateTime?
+
+  @@unique([environment, key, version])
+  @@index([environment, key, status])
+  @@index([environment, status, updatedAt])
+  @@map("content_blocks")
+}
+
+model CatalogAuditLog {
+  id          String      @id @default(uuid())
+  environment Environment @default(DEV)
+  entityType  String
+  entityId    String
+  entityKey   String
+  version     Int?
+  action      String
+  actorId     String
+  metaJson    Json?
+  createdAt   DateTime    @default(now())
+
+  @@index([environment, entityType, entityKey, createdAt])
+  @@index([environment, entityType, entityId, createdAt])
+  @@map("catalog_audit_logs")
 }
 
 model InAppCampaignVariant {

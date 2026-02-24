@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ActionType, DecisionOutput } from "@decisioning/dsl";
+import { apiClient } from "../../lib/api";
+import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
 interface ActionTemplatePickerProps {
   title?: string;
@@ -53,6 +55,13 @@ const ensureObjectPayload = (output: DecisionOutput): DecisionOutput => {
 export function ActionTemplatePicker({ title, value, onChange, readOnly, errorByPath, pathPrefix }: ActionTemplatePickerProps) {
   const safeValue = ensureObjectPayload(value);
   const payload = safeValue.payload;
+  const payloadRef = isRecord(payload.payloadRef) ? payload.payloadRef : {};
+  const selectedContentKey = typeof payloadRef.contentKey === "string" ? payloadRef.contentKey : "";
+  const selectedOfferKey = typeof payloadRef.offerKey === "string" ? payloadRef.offerKey : "";
+
+  const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
+  const [contentOptions, setContentOptions] = useState<Array<{ key: string; version: number; status: string }>>([]);
+  const [offerOptions, setOfferOptions] = useState<Array<{ key: string; version: number; status: string }>>([]);
 
   const [trackingJson, setTrackingJson] = useState(JSON.stringify(isRecord(payload.tracking) ? payload.tracking : {}, null, 2));
   const [nestedPayloadJson, setNestedPayloadJson] = useState(JSON.stringify(isRecord(payload.payload) ? payload.payload : {}, null, 2));
@@ -66,6 +75,64 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
     setPayloadError(null);
   }, [payload]);
 
+  useEffect(() => {
+    setEnvironment(getEnvironment());
+    return onEnvironmentChange(setEnvironment);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadCatalog = async () => {
+      try {
+        const [contentResponse, offerResponse] = await Promise.all([
+          apiClient.catalog.content.list(),
+          apiClient.catalog.offers.list()
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const latestContentByKey = new Map<string, { key: string; version: number; status: string }>();
+        for (const item of contentResponse.items) {
+          const current = latestContentByKey.get(item.key);
+          if (!current || item.version > current.version) {
+            latestContentByKey.set(item.key, {
+              key: item.key,
+              version: item.version,
+              status: item.status
+            });
+          }
+        }
+
+        const latestOffersByKey = new Map<string, { key: string; version: number; status: string }>();
+        for (const item of offerResponse.items) {
+          const current = latestOffersByKey.get(item.key);
+          if (!current || item.version > current.version) {
+            latestOffersByKey.set(item.key, {
+              key: item.key,
+              version: item.version,
+              status: item.status
+            });
+          }
+        }
+
+        setContentOptions([...latestContentByKey.values()].sort((a, b) => a.key.localeCompare(b.key)));
+        setOfferOptions([...latestOffersByKey.values()].sort((a, b) => a.key.localeCompare(b.key)));
+      } catch {
+        if (!cancelled) {
+          setContentOptions([]);
+          setOfferOptions([]);
+        }
+      }
+    };
+
+    void loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [environment]);
+
   const updatePayload = (patch: Record<string, unknown>) => {
     onChange({
       ...safeValue,
@@ -73,6 +140,34 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
         ...payload,
         ...patch
       }
+    });
+  };
+
+  const updatePayloadRef = (patch: { contentKey?: string; offerKey?: string }) => {
+    const nextRef: Record<string, unknown> = {
+      ...(isRecord(payload.payloadRef) ? payload.payloadRef : {}),
+      ...patch
+    };
+
+    if (!nextRef.contentKey) {
+      delete nextRef.contentKey;
+    }
+    if (!nextRef.offerKey) {
+      delete nextRef.offerKey;
+    }
+
+    const nextPayload: Record<string, unknown> = {
+      ...payload
+    };
+    if (Object.keys(nextRef).length > 0) {
+      nextPayload.payloadRef = nextRef;
+    } else {
+      delete nextPayload.payloadRef;
+    }
+
+    onChange({
+      ...safeValue,
+      payload: nextPayload
     });
   };
 
@@ -162,6 +257,41 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
 
       {safeValue.actionType === "message" ? (
         <div className="space-y-3 rounded-md border border-stone-200 p-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="flex flex-col gap-1 text-xs">
+              Content Block Reference
+              <select
+                value={selectedContentKey}
+                onChange={(event) => updatePayloadRef({ contentKey: event.target.value || undefined })}
+                disabled={readOnly}
+                className="rounded-md border border-stone-300 px-2 py-1"
+              >
+                <option value="">None (raw payload)</option>
+                {contentOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.key} (v{option.version}, {option.status})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs">
+              Offer Reference (optional)
+              <select
+                value={selectedOfferKey}
+                onChange={(event) => updatePayloadRef({ offerKey: event.target.value || undefined })}
+                disabled={readOnly}
+                className="rounded-md border border-stone-300 px-2 py-1"
+              >
+                <option value="">None</option>
+                {offerOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.key} (v{option.version}, {option.status})
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <div className="grid gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs">
               Show

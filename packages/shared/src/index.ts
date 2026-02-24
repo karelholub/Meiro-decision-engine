@@ -365,6 +365,8 @@ export interface InAppCampaign {
   appKey: string;
   placementKey: string;
   templateKey: string;
+  contentKey: string | null;
+  offerKey: string | null;
   priority: number;
   ttlSeconds: number;
   startAt: string | null;
@@ -382,6 +384,43 @@ export interface InAppCampaign {
   updatedAt: string;
   activatedAt: string | null;
   variants: InAppCampaignVariant[];
+}
+
+export interface CatalogOffer {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  version: number;
+  tags: string[];
+  type: "discount" | "free_shipping" | "bonus" | "content_only";
+  valueJson: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  startAt: string | null;
+  endAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt: string | null;
+}
+
+export interface CatalogContentBlock {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  version: number;
+  tags: string[];
+  templateId: string;
+  schemaJson: Record<string, unknown> | null;
+  localesJson: Record<string, unknown>;
+  tokenBindings: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt: string | null;
 }
 
 export interface InAppCampaignActivationPreviewConflict {

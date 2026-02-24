@@ -11,6 +11,7 @@ import type { FastifyBaseLogger } from "fastify";
 import type { JsonCache } from "../lib/cache";
 import { sha256, stableStringify } from "../lib/cacheKey";
 import { withTimeout } from "../lib/timeout";
+import { createCatalogResolver } from "./catalogResolver";
 
 export interface InAppV2DecideBody {
   appKey: string;
@@ -374,6 +375,10 @@ const buildInappV2CacheKey = (input: {
 const buildInappV2StaleKey = (cacheKey: string) => `${cacheKey}:stale`;
 
 export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
+  const catalogResolver = createCatalogResolver({
+    prisma: deps.prisma,
+    now: deps.now
+  });
   const getConfig = (environment: Environment) =>
     deps.getConfig?.(environment) ??
     deps.config ?? {
@@ -436,6 +441,31 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         })
       : [];
     const templatesByKey = new Map(templates.map((template) => [template.key, template]));
+    const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((value): value is string => Boolean(value)))];
+    const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((value): value is string => Boolean(value)))];
+    const [contentBlocks, offers] = await Promise.all([
+      contentKeys.length
+        ? deps.prisma.contentBlock.findMany({
+            where: {
+              environment: input.environment,
+              key: { in: contentKeys },
+              status: "ACTIVE"
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([]),
+      offerKeys.length
+        ? deps.prisma.offer.findMany({
+            where: {
+              environment: input.environment,
+              key: { in: offerKeys },
+              status: "ACTIVE"
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([])
+    ]);
+
     const checksum = hashSha256(
       stableStringify({
         campaigns: campaigns.map((campaign) => ({
@@ -445,6 +475,8 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           priority: campaign.priority,
           ttlSeconds: campaign.ttlSeconds,
           templateKey: campaign.templateKey,
+          contentKey: campaign.contentKey,
+          offerKey: campaign.offerKey,
           holdoutEnabled: campaign.holdoutEnabled,
           holdoutPercentage: campaign.holdoutPercentage,
           schedule: {
@@ -472,6 +504,20 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           .map((template) => ({
             key: template.key,
             updatedAt: template.updatedAt.toISOString()
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key)),
+        contentBlocks: contentBlocks
+          .map((item) => ({
+            key: item.key,
+            version: item.version,
+            updatedAt: item.updatedAt.toISOString()
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key)),
+        offers: offers
+          .map((item) => ({
+            key: item.key,
+            version: item.version,
+            updatedAt: item.updatedAt.toISOString()
           }))
           .sort((a, b) => a.key.localeCompare(b.key))
       })
@@ -674,14 +720,56 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         variants: selectedCampaign.variants
       })
     );
-    const selectedVariant = variantSelection.variant;
+    const selectedVariant =
+      variantSelection.variant ??
+      (selectedCampaign.contentKey
+        ? ({
+            variantKey: "content",
+            weight: 100,
+            contentJson: {}
+          } as (typeof selectedCampaign.variants)[number])
+        : null);
     if (!selectedVariant) {
       const response = buildNoShowResponse({ placement: input.body.placement });
       response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
       return { response, wbsMs, engineMs, fallbackReason: "VARIANT_NOT_FOUND" };
     }
 
-    const renderedPayload = await withEngineMs(() => renderTemplateValue(selectedVariant.contentJson, tokenValues));
+    const locale = typeof input.body.context?.locale === "string" ? input.body.context.locale : "en";
+    const baseContext = isObject(input.body.context) ? (input.body.context as Record<string, unknown>) : {};
+    const renderedVariantPayload = await withEngineMs(() => renderTemplateValue(selectedVariant.contentJson, tokenValues));
+    const resolvedOffer = selectedCampaign.offerKey
+      ? await withEngineMs(() =>
+          catalogResolver.resolveOffer({
+            environment: input.environment,
+            offerKey: selectedCampaign.offerKey as string,
+            now: contextNow
+          })
+        )
+      : null;
+    const resolvedContent = selectedCampaign.contentKey
+      ? await withEngineMs(() =>
+          catalogResolver.resolveContent({
+            environment: input.environment,
+            contentKey: selectedCampaign.contentKey as string,
+            locale,
+            profile,
+            context: {
+              ...baseContext,
+              ...(resolvedOffer?.valid ? { offer: resolvedOffer.value } : {})
+            },
+            now: contextNow
+          })
+        )
+      : null;
+
+    if (selectedCampaign.contentKey && !resolvedContent && selectedCampaign.variants.length === 0) {
+      const response = buildNoShowResponse({ placement: input.body.placement });
+      response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
+      return { response, wbsMs, engineMs, fallbackReason: "CONTENT_NOT_FOUND" };
+    }
+
+    const renderedPayload = resolvedContent?.payload ?? renderedVariantPayload;
     const ttlSeconds =
       selectedCampaign.ttlSeconds > 0
         ? selectedCampaign.ttlSeconds
@@ -691,9 +779,27 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     const messageWindow = Math.floor(contextNow.getTime() / (Math.max(1, ttlSeconds) * 1000));
     const messageId = `msg_${selectedCampaign.key}_${selectedVariant.variantKey}_${messageWindow}`;
 
-    const payload: Record<string, unknown> = isObject(renderedPayload)
-      ? (renderedPayload as Record<string, unknown>)
-      : { value: renderedPayload };
+    const payload: Record<string, unknown> = isObject(renderedPayload) ? { ...(renderedPayload as Record<string, unknown>) } : { value: renderedPayload };
+    if (resolvedOffer?.valid) {
+      payload.offer = {
+        type: resolvedOffer.type,
+        value: resolvedOffer.value,
+        constraints: resolvedOffer.constraints,
+        key: resolvedOffer.key,
+        version: resolvedOffer.version
+      };
+    }
+
+    const mergedTags = [
+      ...new Set([
+        ...((Array.isArray(payload.tags) ? payload.tags : []).filter((entry): entry is string => typeof entry === "string")),
+        ...(resolvedOffer?.tags ?? []),
+        ...(resolvedContent?.tags ?? [])
+      ])
+    ].sort((a, b) => a.localeCompare(b));
+    if (mergedTags.length > 0) {
+      payload.tags = mergedTags;
+    }
 
     const response: InAppDecideResponse = {
       show: true,

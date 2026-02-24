@@ -12,7 +12,7 @@ type NavItem = {
 };
 
 type NavGroup = {
-  id: "observe" | "build" | "engage" | "configure";
+  id: "observe" | "build" | "catalog" | "engage" | "configure";
   label: string;
   hint: string;
   items: NavItem[];
@@ -40,6 +40,15 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/decisions", label: "Decisions" },
       { href: "/stacks", label: "Decision Stacks" },
       { href: "/simulate", label: "Simulator" }
+    ]
+  },
+  {
+    id: "catalog",
+    label: "Catalog",
+    hint: "Reusable offers and content blocks",
+    items: [
+      { href: "/catalog/offers", label: "Offers" },
+      { href: "/catalog/content", label: "Content Blocks" }
     ]
   },
   {
@@ -74,6 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
 const defaultOpenState: Record<NavGroup["id"], boolean> = {
   observe: true,
   build: true,
+  catalog: false,
   engage: false,
   configure: false
 };

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type {
+  CatalogContentBlock,
+  CatalogOffer,
   InAppApplication,
   InAppAuditLog,
   InAppCampaign,
@@ -151,6 +153,8 @@ export default function InAppCampaignEditPage() {
   const [apps, setApps] = useState<InAppApplication[]>([]);
   const [placements, setPlacements] = useState<InAppPlacement[]>([]);
   const [templates, setTemplates] = useState<InAppTemplate[]>([]);
+  const [contentBlocks, setContentBlocks] = useState<CatalogContentBlock[]>([]);
+  const [offers, setOffers] = useState<CatalogOffer[]>([]);
 
   const [key, setKey] = useState("");
   const [name, setName] = useState("");
@@ -159,6 +163,8 @@ export default function InAppCampaignEditPage() {
   const [appKey, setAppKey] = useState("");
   const [placementKey, setPlacementKey] = useState("");
   const [templateKey, setTemplateKey] = useState("");
+  const [contentKey, setContentKey] = useState("");
+  const [offerKey, setOfferKey] = useState("");
   const [priority, setPriority] = useState("0");
   const [ttlSeconds, setTtlSeconds] = useState("3600");
   const [holdoutEnabled, setHoldoutEnabled] = useState(false);
@@ -186,7 +192,7 @@ export default function InAppCampaignEditPage() {
 
     setLoading(true);
     try {
-      const [campaignResponse, appsResponse, placementsResponse, templatesResponse, versionsResponse, auditResponse, previewResponse] =
+      const [campaignResponse, appsResponse, placementsResponse, templatesResponse, versionsResponse, auditResponse, previewResponse, contentResponse, offersResponse] =
         await Promise.all([
         apiClient.inapp.campaigns.get(campaignId),
         apiClient.inapp.apps.list(),
@@ -194,7 +200,9 @@ export default function InAppCampaignEditPage() {
         apiClient.inapp.templates.list(),
         apiClient.inapp.campaigns.versions(campaignId),
         apiClient.inapp.campaigns.audit(campaignId, 50),
-        apiClient.inapp.campaigns.activationPreview(campaignId)
+        apiClient.inapp.campaigns.activationPreview(campaignId),
+        apiClient.catalog.content.list(),
+        apiClient.catalog.offers.list()
       ]);
 
       const item = campaignResponse.item;
@@ -202,6 +210,8 @@ export default function InAppCampaignEditPage() {
       setApps(appsResponse.items);
       setPlacements(placementsResponse.items);
       setTemplates(templatesResponse.items);
+      setContentBlocks(contentResponse.items);
+      setOffers(offersResponse.items);
       setVersions(versionsResponse.items);
       setAuditLogs(auditResponse.items);
       setActivationPreview(previewResponse.item);
@@ -213,6 +223,8 @@ export default function InAppCampaignEditPage() {
       setAppKey(item.appKey);
       setPlacementKey(item.placementKey);
       setTemplateKey(item.templateKey);
+      setContentKey(item.contentKey ?? "");
+      setOfferKey(item.offerKey ?? "");
       setPriority(String(item.priority));
       setTtlSeconds(String(item.ttlSeconds));
       setHoldoutEnabled(item.holdoutEnabled);
@@ -356,6 +368,8 @@ export default function InAppCampaignEditPage() {
       appKey: appKey.trim(),
       placementKey: placementKey.trim(),
       templateKey: templateKey.trim(),
+      contentKey: contentKey.trim() || undefined,
+      offerKey: offerKey.trim() || undefined,
       priority: Number.parseInt(priority, 10) || 0,
       ttlSeconds: Number.parseInt(ttlSeconds, 10) || 3600,
       holdoutEnabled,
@@ -399,6 +413,8 @@ export default function InAppCampaignEditPage() {
       const response = await apiClient.inapp.campaigns.validate({
         templateKey: payload.templateKey,
         placementKey: payload.placementKey,
+        contentKey: payload.contentKey,
+        offerKey: payload.offerKey,
         variants: payload.variants,
         tokenBindingsJson: payload.tokenBindingsJson
       });
@@ -636,6 +652,36 @@ export default function InAppCampaignEditPage() {
               {templates.map((template) => (
                 <option key={template.id} value={template.key}>
                   {template.key}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Content Key (optional)
+            <select
+              value={contentKey}
+              onChange={(event) => setContentKey(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            >
+              <option value="">None (use variants)</option>
+              {[...new Set(contentBlocks.map((item) => item.key))].map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Offer Key (optional)
+            <select
+              value={offerKey}
+              onChange={(event) => setOfferKey(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+            >
+              <option value="">None</option>
+              {[...new Set(offers.map((item) => item.key))].map((key) => (
+                <option key={key} value={key}>
+                  {key}
                 </option>
               ))}
             </select>

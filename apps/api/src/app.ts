@@ -61,6 +61,7 @@ import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { createRetentionWorker } from "./jobs/retentionWorker";
 import { registerCacheRoutes } from "./routes/cache";
+import { registerCatalogRoutes } from "./routes/catalog";
 import { registerDlqRoutes } from "./routes/dlq";
 import { registerMaintenanceRoutes } from "./routes/maintenance";
 import { registerPrecomputeRoutes } from "./routes/precompute";
@@ -77,6 +78,7 @@ import {
   parseRuntimeSettings,
   type RuntimeSettings
 } from "./settings/runtimeSettings";
+import { createCatalogResolver } from "./services/catalogResolver";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -1297,6 +1299,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   const now = deps.now ?? (() => new Date());
   const stackNowMs = deps.stackNowMs;
+  const catalogResolver = createCatalogResolver({
+    prisma,
+    now
+  });
 
   const fetchActiveDecision = async (input: {
     environment: Environment;
@@ -1717,6 +1723,19 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       streamMaxLen: inappEventsStreamMaxLen
     },
     getInappEventsWorkerStatus: () => inappEventsWorker?.getStatus() ?? null
+  });
+
+  await registerCatalogRoutes({
+    app,
+    prisma,
+    meiro,
+    wbsAdapter,
+    now,
+    resolveEnvironment,
+    buildResponseError,
+    requireWriteAuth,
+    fetchActiveWbsInstance,
+    fetchActiveWbsMapping
   });
 
   await registerCacheRoutes({
@@ -3447,24 +3466,54 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       })
     );
 
+    const stackEvaluationContext = {
+      now: contextNow.toISOString(),
+      ...parsed.data.context,
+      requestId
+    };
+
     const stackResult = evaluateStack({
       stack: stackDefinition,
       profile,
-      context: {
-        now: contextNow.toISOString(),
-        ...parsed.data.context,
-        requestId
-      },
+      context: stackEvaluationContext,
       decisionsByKey,
       historyByDecisionKey,
       debug: Boolean(parsed.data.debug),
       nowMs: stackNowMs
     });
 
+    const resolvedStackFinal = await catalogResolver.resolvePayloadRef({
+      environment,
+      actionType: stackResult.final.actionType,
+      payload: stackResult.final.payload,
+      locale: typeof stackEvaluationContext.locale === "string" ? stackEvaluationContext.locale : undefined,
+      profile,
+      context: stackEvaluationContext,
+      now: contextNow
+    });
+
+    const resolvedStepsForLog = await Promise.all(
+      stackResult.steps.map(async (step) => {
+        const resolved = await catalogResolver.resolvePayloadRef({
+          environment,
+          actionType: step.actionType,
+          payload: step.output,
+          locale: typeof stackEvaluationContext.locale === "string" ? stackEvaluationContext.locale : undefined,
+          profile,
+          context: stackEvaluationContext,
+          now: contextNow
+        });
+        return {
+          ...step,
+          output: resolved.payload
+        };
+      })
+    );
+
     const response = {
       final: {
         actionType: stackResult.final.actionType,
-        payload: stackResult.final.payload
+        payload: resolvedStackFinal.payload
       },
       steps: stackResult.steps.map((step) => ({
         decisionKey: step.decisionKey,
@@ -3512,8 +3561,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         timestamp: contextNow,
         finalActionType: stackResult.final.actionType,
         finalReasonsJson: toInputJson(stackResult.final.reasonCodes ?? []),
-        stepsJson: toInputJson(redactSensitiveFields(stackResult.steps)),
-        payloadJson: toInputJson(redactSensitiveFields(stackResult.final.payload)),
+        stepsJson: toInputJson(redactSensitiveFields(resolvedStepsForLog)),
+        payloadJson: toInputJson(redactSensitiveFields(resolvedStackFinal.payload)),
         debugJson: parsed.data.debug ? toInputJson(redactSensitiveFields(response.debug ?? {})) : undefined,
         replayInputJson: toInputJson({
           stackKey: stackDefinition.key,
@@ -3594,13 +3643,15 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     const definition = parseDefinition(version.definitionJson);
     const nowDate = parseDateOrNow(parsed.data.context?.now, now);
 
+    const simulationContext = {
+      now: nowDate.toISOString(),
+      ...parsed.data.context
+    };
+
     const engineResult = evaluateDecision({
       definition,
       profile: parsed.data.profile,
-      context: {
-        now: nowDate.toISOString(),
-        ...parsed.data.context
-      },
+      context: simulationContext,
       history: {
         perProfilePerDay: 0,
         perProfilePerWeek: 0
@@ -3608,11 +3659,21 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       debug: true
     });
 
+    const resolvedSimulation = await catalogResolver.resolvePayloadRef({
+      environment: version.decision.environment ?? environment,
+      actionType: engineResult.actionType,
+      payload: engineResult.payload,
+      locale: typeof simulationContext.locale === "string" ? simulationContext.locale : undefined,
+      profile: parsed.data.profile,
+      context: simulationContext,
+      now: nowDate
+    });
+
     return {
       decisionId: engineResult.decisionId,
       version: engineResult.version,
       actionType: engineResult.actionType,
-      payload: engineResult.payload,
+      payload: resolvedSimulation.payload,
       outcome: engineResult.outcome,
       reasons: engineResult.reasons,
       selectedRuleId: engineResult.selectedRuleId,
@@ -4387,6 +4448,17 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
               }
             : engineResult;
 
+      const resolvedPayloadRef = await catalogResolver.resolvePayloadRef({
+        environment,
+        actionType: finalResult.actionType,
+        payload: finalResult.payload,
+        locale: typeof context.locale === "string" ? context.locale : undefined,
+        profile,
+        context,
+        now: nowDate
+      });
+      const finalPayload = resolvedPayloadRef.payload;
+
       const responseReasons = [...finalResult.reasons];
       const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
       if (parsed.data.debug) {
@@ -4396,6 +4468,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           audiences: profile.audiences,
           consents: profile.consents ?? []
         });
+        if (resolvedPayloadRef.debug.usedPayloadRef) {
+          integrationTrace.catalog = resolvedPayloadRef.debug;
+        }
       }
 
       if (!internalRefresh && finalResult.outcome !== "ERROR" && decisionDefinition.writeback?.enabled) {
@@ -4439,7 +4514,12 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       }
 
       if (deps.policyHook?.postDecision) {
-        await deps.policyHook.postDecision({ result: finalResult });
+        await deps.policyHook.postDecision({
+          result: {
+            ...finalResult,
+            payload: finalPayload
+          }
+        });
       }
 
       const latencyMs = Number((process.hrtime.bigint() - started) / 1000000n);
@@ -4463,7 +4543,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             version: activeVersion.version,
             profileId: profile.profileId,
             actionType: finalResult.actionType,
-            payloadJson: toInputJson(finalResult.payload),
+            payloadJson: toInputJson(finalPayload),
             outcome: finalResult.outcome,
             reasonsJson: toInputJson(responseReasons),
             debugTraceJson: parsed.data.debug
@@ -4488,7 +4568,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         decisionId: finalResult.decisionId,
         version: finalResult.version,
         actionType: finalResult.actionType,
-        payload: finalResult.payload,
+        payload: finalPayload,
         outcome: finalResult.outcome,
         reasons: responseReasons,
         latencyMs,
@@ -4505,8 +4585,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
       if (finalResult.outcome !== "ERROR") {
         const ttlFromPayload =
-          typeof finalResult.payload.ttl_seconds === "number" && finalResult.payload.ttl_seconds > 0
-            ? Math.floor(finalResult.payload.ttl_seconds)
+          typeof finalPayload.ttl_seconds === "number" && finalPayload.ttl_seconds > 0
+            ? Math.floor(finalPayload.ttl_seconds)
             : reliabilityConfig.cachePolicy.ttlSeconds;
         await persistRealtimeCache({
           response: response as Record<string, unknown>,

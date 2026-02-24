@@ -128,27 +128,42 @@ const campaignVariantInputSchema = z.object({
   contentJson: z.record(z.unknown())
 });
 
-const inAppCampaignUpsertSchema = z.object({
-  key: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  status: z.nativeEnum(InAppCampaignStatus).optional(),
-  appKey: z.string().min(1),
-  placementKey: z.string().min(1),
-  templateKey: z.string().min(1),
-  priority: z.number().int().optional(),
-  ttlSeconds: z.number().int().positive().optional(),
-  startAt: z.string().datetime().nullable().optional(),
-  endAt: z.string().datetime().nullable().optional(),
-  holdoutEnabled: z.boolean().optional(),
-  holdoutPercentage: z.number().int().min(0).max(100).optional(),
-  holdoutSalt: z.string().optional(),
-  capsPerProfilePerDay: z.number().int().positive().nullable().optional(),
-  capsPerProfilePerWeek: z.number().int().positive().nullable().optional(),
-  eligibilityAudiencesAny: z.array(z.string()).nullable().optional(),
-  tokenBindingsJson: z.record(z.union([z.string(), z.object({ sourcePath: z.string(), transforms: z.array(z.string()).optional() })])).nullable().optional(),
-  variants: z.array(campaignVariantInputSchema).min(1)
-});
+const inAppCampaignUpsertSchema = z
+  .object({
+    key: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    status: z.nativeEnum(InAppCampaignStatus).optional(),
+    appKey: z.string().min(1),
+    placementKey: z.string().min(1),
+    templateKey: z.string().min(1),
+    contentKey: z.string().min(1).optional(),
+    offerKey: z.string().min(1).optional(),
+    priority: z.number().int().optional(),
+    ttlSeconds: z.number().int().positive().optional(),
+    startAt: z.string().datetime().nullable().optional(),
+    endAt: z.string().datetime().nullable().optional(),
+    holdoutEnabled: z.boolean().optional(),
+    holdoutPercentage: z.number().int().min(0).max(100).optional(),
+    holdoutSalt: z.string().optional(),
+    capsPerProfilePerDay: z.number().int().positive().nullable().optional(),
+    capsPerProfilePerWeek: z.number().int().positive().nullable().optional(),
+    eligibilityAudiencesAny: z.array(z.string()).nullable().optional(),
+    tokenBindingsJson: z
+      .record(z.union([z.string(), z.object({ sourcePath: z.string(), transforms: z.array(z.string()).optional() })]))
+      .nullable()
+      .optional(),
+    variants: z.array(campaignVariantInputSchema).optional()
+  })
+  .superRefine((value, ctx) => {
+    if ((!value.variants || value.variants.length === 0) && !value.contentKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["variants"],
+        message: "Provide at least one variant or set contentKey"
+      });
+    }
+  });
 
 const inAppCampaignListQuerySchema = z.object({
   appKey: z.string().optional(),
@@ -164,7 +179,9 @@ const campaignValidateSchema = z.object({
   templateKey: z.string().optional(),
   templateSchema: z.unknown().optional(),
   placementKey: z.string().optional(),
-  variants: z.array(campaignVariantInputSchema),
+  contentKey: z.string().optional(),
+  offerKey: z.string().optional(),
+  variants: z.array(campaignVariantInputSchema).optional(),
   tokenBindingsJson: z.record(z.union([z.string(), z.object({ sourcePath: z.string(), transforms: z.array(z.string()).optional() })])).optional()
 });
 
@@ -487,6 +504,7 @@ const validateCampaignPayload = (input: {
   templateSchema: unknown;
   placementAllowedTemplateKeys: string[] | null;
   templateKey: string;
+  contentKey?: string;
   variants: Array<{ variantKey: string; weight: number; contentJson: Record<string, unknown> }>;
   tokenBindingsJson?: Record<string, unknown>;
 }) => {
@@ -503,23 +521,32 @@ const validateCampaignPayload = (input: {
     }
   }
 
+  const hasVariants = input.variants.length > 0;
   const totalWeight = input.variants.reduce((sum, variant) => sum + variant.weight, 0);
-  if (totalWeight <= 0) {
-    errors.push("Variant weight total must be greater than 0");
-  }
-  if (totalWeight > 100) {
-    errors.push("Variant weight total must be <= 100");
+  if (hasVariants) {
+    if (totalWeight <= 0) {
+      errors.push("Variant weight total must be greater than 0");
+    }
+    if (totalWeight > 100) {
+      errors.push("Variant weight total must be <= 100");
+    }
   }
 
-  for (const variant of input.variants) {
-    if (!isObject(variant.contentJson)) {
-      errors.push(`Variant '${variant.variantKey}' contentJson must be an object`);
-      continue;
-    }
-    for (const requiredField of templateValidation.required) {
-      const fieldValue = variant.contentJson[requiredField];
-      if (fieldValue === undefined || fieldValue === null || (typeof fieldValue === "string" && fieldValue.trim().length === 0)) {
-        errors.push(`Variant '${variant.variantKey}' is missing required template field '${requiredField}'`);
+  if (!hasVariants && !input.contentKey) {
+    errors.push("At least one variant is required when contentKey is not provided");
+  }
+
+  if (hasVariants) {
+    for (const variant of input.variants) {
+      if (!isObject(variant.contentJson)) {
+        errors.push(`Variant '${variant.variantKey}' contentJson must be an object`);
+        continue;
+      }
+      for (const requiredField of templateValidation.required) {
+        const fieldValue = variant.contentJson[requiredField];
+        if (fieldValue === undefined || fieldValue === null || (typeof fieldValue === "string" && fieldValue.trim().length === 0)) {
+          errors.push(`Variant '${variant.variantKey}' is missing required template field '${requiredField}'`);
+        }
       }
     }
   }
@@ -615,6 +642,8 @@ const serializeCampaign = (item: {
   appKey: string;
   placementKey: string;
   templateKey: string;
+  contentKey: string | null;
+  offerKey: string | null;
   priority: number;
   ttlSeconds: number;
   startAt: Date | null;
@@ -650,6 +679,8 @@ const serializeCampaign = (item: {
     appKey: item.appKey,
     placementKey: item.placementKey,
     templateKey: item.templateKey,
+    contentKey: item.contentKey,
+    offerKey: item.offerKey,
     priority: item.priority,
     ttlSeconds: item.ttlSeconds,
     startAt: item.startAt?.toISOString() ?? null,
@@ -739,6 +770,8 @@ interface CampaignSnapshot {
     appKey: string;
     placementKey: string;
     templateKey: string;
+    contentKey: string | null;
+    offerKey: string | null;
     priority: number;
     ttlSeconds: number;
     startAt: string | null;
@@ -790,6 +823,8 @@ const makeCampaignSnapshot = (campaign: {
   appKey: string;
   placementKey: string;
   templateKey: string;
+  contentKey: string | null;
+  offerKey: string | null;
   priority: number;
   ttlSeconds: number;
   startAt: Date | null;
@@ -818,6 +853,8 @@ const makeCampaignSnapshot = (campaign: {
       appKey: campaign.appKey,
       placementKey: campaign.placementKey,
       templateKey: campaign.templateKey,
+      contentKey: campaign.contentKey,
+      offerKey: campaign.offerKey,
       priority: campaign.priority,
       ttlSeconds: campaign.ttlSeconds,
       startAt: campaign.startAt?.toISOString() ?? null,
@@ -1384,7 +1421,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
     }
 
-    const [template, placement] = await Promise.all([
+    const variantsInput = parsed.data.variants ?? [];
+
+    const [template, placement, contentBlock, offer] = await Promise.all([
       prisma.inAppTemplate.findFirst({
         where: {
           environment,
@@ -1396,7 +1435,29 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           environment,
           key: parsed.data.placementKey
         }
-      })
+      }),
+      parsed.data.contentKey
+        ? prisma.contentBlock.findFirst({
+            where: {
+              environment,
+              key: parsed.data.contentKey
+            },
+            orderBy: {
+              version: "desc"
+            }
+          })
+        : Promise.resolve(null),
+      parsed.data.offerKey
+        ? prisma.offer.findFirst({
+            where: {
+              environment,
+              key: parsed.data.offerKey
+            },
+            orderBy: {
+              version: "desc"
+            }
+          })
+        : Promise.resolve(null)
     ]);
 
     if (!template) {
@@ -1407,13 +1468,37 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, `Placement '${parsed.data.placementKey}' does not exist`);
     }
 
+    if (parsed.data.contentKey && !contentBlock) {
+      return buildResponseError(reply, 400, `Content block '${parsed.data.contentKey}' does not exist`);
+    }
+    if (parsed.data.offerKey && !offer) {
+      return buildResponseError(reply, 400, `Offer '${parsed.data.offerKey}' does not exist`);
+    }
+    if (contentBlock && parsed.data.templateKey && parsed.data.templateKey !== contentBlock.templateId) {
+      return buildResponseError(
+        reply,
+        400,
+        `templateKey '${parsed.data.templateKey}' does not match content block templateId '${contentBlock.templateId}'`
+      );
+    }
+
+    const contentTemplateId = contentBlock?.templateId;
+    if (contentTemplateId && contentTemplateId !== parsed.data.templateKey) {
+      return buildResponseError(
+        reply,
+        400,
+        `templateKey '${parsed.data.templateKey}' does not match content block templateId '${contentTemplateId}'`
+      );
+    }
+
     const validation = validateCampaignPayload({
       templateSchema: template.schemaJson,
       placementAllowedTemplateKeys: Array.isArray(placement.allowedTemplateKeys)
         ? (placement.allowedTemplateKeys as string[])
         : null,
       templateKey: parsed.data.templateKey,
-      variants: parsed.data.variants,
+      contentKey: parsed.data.contentKey,
+      variants: variantsInput,
       tokenBindingsJson: parsed.data.tokenBindingsJson as Record<string, unknown> | undefined
     });
 
@@ -1432,6 +1517,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           appKey: parsed.data.appKey,
           placementKey: parsed.data.placementKey,
           templateKey: parsed.data.templateKey,
+          contentKey: parsed.data.contentKey ?? null,
+          offerKey: parsed.data.offerKey ?? null,
           priority: parsed.data.priority ?? 0,
           ttlSeconds: parsed.data.ttlSeconds ?? 3600,
           startAt: parsed.data.startAt ? new Date(parsed.data.startAt) : null,
@@ -1445,13 +1532,15 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
             ? toInputJson(parsed.data.eligibilityAudiencesAny)
             : Prisma.JsonNull,
           tokenBindingsJson: parsed.data.tokenBindingsJson ? toInputJson(parsed.data.tokenBindingsJson) : Prisma.JsonNull,
-          variants: {
-            create: parsed.data.variants.map((variant) => ({
-              variantKey: variant.variantKey,
-              weight: variant.weight,
-              contentJson: toInputJson(variant.contentJson)
-            }))
-          }
+          variants: variantsInput.length
+            ? {
+                create: variantsInput.map((variant) => ({
+                  variantKey: variant.variantKey,
+                  weight: variant.weight,
+                  contentJson: toInputJson(variant.contentJson)
+                }))
+              }
+            : undefined
         },
         include: {
           variants: true
@@ -1520,7 +1609,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 404, "Campaign not found");
     }
 
-    const [template, placement] = await Promise.all([
+    const variantsInput = parsed.data.variants ?? [];
+
+    const [template, placement, contentBlock, offer] = await Promise.all([
       prisma.inAppTemplate.findFirst({
         where: {
           environment,
@@ -1532,7 +1623,29 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           environment,
           key: parsed.data.placementKey
         }
-      })
+      }),
+      parsed.data.contentKey
+        ? prisma.contentBlock.findFirst({
+            where: {
+              environment,
+              key: parsed.data.contentKey
+            },
+            orderBy: {
+              version: "desc"
+            }
+          })
+        : Promise.resolve(null),
+      parsed.data.offerKey
+        ? prisma.offer.findFirst({
+            where: {
+              environment,
+              key: parsed.data.offerKey
+            },
+            orderBy: {
+              version: "desc"
+            }
+          })
+        : Promise.resolve(null)
     ]);
 
     if (!template) {
@@ -1543,13 +1656,30 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, `Placement '${parsed.data.placementKey}' does not exist`);
     }
 
+    if (parsed.data.contentKey && !contentBlock) {
+      return buildResponseError(reply, 400, `Content block '${parsed.data.contentKey}' does not exist`);
+    }
+    if (parsed.data.offerKey && !offer) {
+      return buildResponseError(reply, 400, `Offer '${parsed.data.offerKey}' does not exist`);
+    }
+
+    const contentTemplateId = contentBlock?.templateId;
+    if (contentTemplateId && contentTemplateId !== parsed.data.templateKey) {
+      return buildResponseError(
+        reply,
+        400,
+        `templateKey '${parsed.data.templateKey}' does not match content block templateId '${contentTemplateId}'`
+      );
+    }
+
     const validation = validateCampaignPayload({
       templateSchema: template.schemaJson,
       placementAllowedTemplateKeys: Array.isArray(placement.allowedTemplateKeys)
         ? (placement.allowedTemplateKeys as string[])
         : null,
       templateKey: parsed.data.templateKey,
-      variants: parsed.data.variants,
+      contentKey: parsed.data.contentKey,
+      variants: variantsInput,
       tokenBindingsJson: parsed.data.tokenBindingsJson as Record<string, unknown> | undefined
     });
 
@@ -1570,6 +1700,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           appKey: parsed.data.appKey,
           placementKey: parsed.data.placementKey,
           templateKey: parsed.data.templateKey,
+          contentKey: parsed.data.contentKey ?? null,
+          offerKey: parsed.data.offerKey ?? null,
           priority: parsed.data.priority ?? 0,
           ttlSeconds: parsed.data.ttlSeconds ?? 3600,
           startAt: parsed.data.startAt ? new Date(parsed.data.startAt) : null,
@@ -1584,7 +1716,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
             : Prisma.JsonNull,
           tokenBindingsJson: parsed.data.tokenBindingsJson ? toInputJson(parsed.data.tokenBindingsJson) : Prisma.JsonNull
         }
-      });
+      })
 
       await tx.inAppCampaignVariant.deleteMany({
         where: {
@@ -1592,14 +1724,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         }
       });
 
-      await tx.inAppCampaignVariant.createMany({
-        data: parsed.data.variants.map((variant) => ({
-          campaignId: params.data.id,
-          variantKey: variant.variantKey,
-          weight: variant.weight,
-          contentJson: toInputJson(variant.contentJson)
-        }))
-      });
+      if (variantsInput.length > 0) {
+        await tx.inAppCampaignVariant.createMany({
+          data: variantsInput.map((variant) => ({
+            campaignId: params.data.id,
+            variantKey: variant.variantKey,
+            weight: variant.weight,
+            contentJson: toInputJson(variant.contentJson)
+          }))
+        });
+      }
 
       return tx.inAppCampaign.findFirstOrThrow({
         where: {
@@ -2039,6 +2173,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           appKey: snapshot.campaign.appKey,
           placementKey: snapshot.campaign.placementKey,
           templateKey: snapshot.campaign.templateKey,
+          contentKey: snapshot.campaign.contentKey ?? null,
+          offerKey: snapshot.campaign.offerKey ?? null,
           priority: snapshot.campaign.priority,
           ttlSeconds: snapshot.campaign.ttlSeconds,
           startAt: snapshot.campaign.startAt ? new Date(snapshot.campaign.startAt) : null,
@@ -2059,14 +2195,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       await tx.inAppCampaignVariant.deleteMany({
         where: { campaignId: existing.id }
       });
-      await tx.inAppCampaignVariant.createMany({
-        data: snapshot.variants.map((variant) => ({
-          campaignId: existing.id,
-          variantKey: variant.variantKey,
-          weight: variant.weight,
-          contentJson: toInputJson(variant.contentJson)
-        }))
-      });
+      if (snapshot.variants.length > 0) {
+        await tx.inAppCampaignVariant.createMany({
+          data: snapshot.variants.map((variant) => ({
+            campaignId: existing.id,
+            variantKey: variant.variantKey,
+            weight: variant.weight,
+            contentJson: toInputJson(variant.contentJson)
+          }))
+        });
+      }
 
       return tx.inAppCampaign.findFirstOrThrow({
         where: { id: existing.id },
@@ -2146,6 +2284,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
               appKey: source.appKey,
               placementKey: source.placementKey,
               templateKey: source.templateKey,
+              contentKey: source.contentKey,
+              offerKey: source.offerKey,
               priority: source.priority,
               ttlSeconds: source.ttlSeconds,
               startAt: source.startAt,
@@ -2172,6 +2312,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
               appKey: source.appKey,
               placementKey: source.placementKey,
               templateKey: source.templateKey,
+              contentKey: source.contentKey,
+              offerKey: source.offerKey,
               priority: source.priority,
               ttlSeconds: source.ttlSeconds,
               startAt: source.startAt,
@@ -2190,14 +2332,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       await tx.inAppCampaignVariant.deleteMany({
         where: { campaignId: targetCampaign.id }
       });
-      await tx.inAppCampaignVariant.createMany({
-        data: source.variants.map((variant) => ({
-          campaignId: targetCampaign.id,
-          variantKey: variant.variantKey,
-          weight: variant.weight,
-          contentJson: variant.contentJson as Prisma.InputJsonValue
-        }))
-      });
+      if (source.variants.length > 0) {
+        await tx.inAppCampaignVariant.createMany({
+          data: source.variants.map((variant) => ({
+            campaignId: targetCampaign.id,
+            variantKey: variant.variantKey,
+            weight: variant.weight,
+            contentJson: variant.contentJson as Prisma.InputJsonValue
+          }))
+        });
+      }
 
       return tx.inAppCampaign.findFirstOrThrow({
         where: {
@@ -2342,9 +2486,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
     }
 
+    const variantsInput = parsed.data.variants ?? [];
+    const needsTemplateValidation = variantsInput.length > 0;
+
+    if (!needsTemplateValidation && !parsed.data.contentKey) {
+      return buildResponseError(reply, 400, "Provide variants or contentKey");
+    }
+
     const template = parsed.data.templateSchema
       ? { schemaJson: parsed.data.templateSchema }
-      : parsed.data.templateKey
+      : parsed.data.templateKey && needsTemplateValidation
         ? await prisma.inAppTemplate.findFirst({
             where: {
               environment,
@@ -2353,8 +2504,40 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           })
         : null;
 
-    if (!template) {
+    if (needsTemplateValidation && !template) {
       return buildResponseError(reply, 400, "templateKey or templateSchema is required");
+    }
+
+    const [contentBlock, offer] = await Promise.all([
+      parsed.data.contentKey
+        ? prisma.contentBlock.findFirst({
+            where: {
+              environment,
+              key: parsed.data.contentKey
+            },
+            orderBy: {
+              version: "desc"
+            }
+          })
+        : Promise.resolve(null),
+      parsed.data.offerKey
+        ? prisma.offer.findFirst({
+            where: {
+              environment,
+              key: parsed.data.offerKey
+            },
+            orderBy: {
+              version: "desc"
+            }
+          })
+        : Promise.resolve(null)
+    ]);
+
+    if (parsed.data.contentKey && !contentBlock) {
+      return buildResponseError(reply, 400, `Content block '${parsed.data.contentKey}' does not exist`);
+    }
+    if (parsed.data.offerKey && !offer) {
+      return buildResponseError(reply, 400, `Offer '${parsed.data.offerKey}' does not exist`);
     }
 
     const placement = parsed.data.placementKey
@@ -2366,16 +2549,17 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         })
       : null;
 
-    const templateKey = parsed.data.templateKey ?? "inline_template";
+    const templateKey = parsed.data.templateKey ?? contentBlock?.templateId ?? "inline_template";
     const validation = validateCampaignPayload({
-      templateSchema: template.schemaJson,
+      templateSchema: template?.schemaJson ?? {},
       placementAllowedTemplateKeys: placement
         ? Array.isArray(placement.allowedTemplateKeys)
           ? (placement.allowedTemplateKeys as string[])
           : null
         : null,
       templateKey,
-      variants: parsed.data.variants,
+      contentKey: parsed.data.contentKey,
+      variants: variantsInput,
       tokenBindingsJson: parsed.data.tokenBindingsJson
     });
 

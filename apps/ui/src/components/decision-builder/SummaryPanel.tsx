@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { DecisionValidationResponse } from "@decisioning/shared";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import type { ValidationByStep } from "./types";
 import { getDecisionSummaryText } from "./wizard-utils";
+import { apiClient } from "../../lib/api";
 
 interface SummaryPanelProps {
   definition: DecisionDefinition;
@@ -16,9 +17,55 @@ const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
 export function SummaryPanel({ definition, validation, groupedErrors, readOnlyReasons }: SummaryPanelProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [catalogPreview, setCatalogPreview] = useState<unknown | null>(null);
 
   const summaryText = useMemo(() => getDecisionSummaryText(definition), [definition]);
   const jsonPreview = useMemo(() => (previewOpen ? pretty(definition) : ""), [definition, previewOpen]);
+  const referencedContentKey = useMemo(() => {
+    for (const rule of definition.flow.rules) {
+      const thenRef = (rule.then.payload as Record<string, unknown> | undefined)?.payloadRef;
+      if (thenRef && typeof thenRef === "object" && typeof (thenRef as { contentKey?: unknown }).contentKey === "string") {
+        return (thenRef as { contentKey: string }).contentKey;
+      }
+      const elseRef = (rule.else?.payload as Record<string, unknown> | undefined)?.payloadRef;
+      if (elseRef && typeof elseRef === "object" && typeof (elseRef as { contentKey?: unknown }).contentKey === "string") {
+        return (elseRef as { contentKey: string }).contentKey;
+      }
+    }
+    const defaultRef = (definition.outputs.default?.payload as Record<string, unknown> | undefined)?.payloadRef;
+    if (defaultRef && typeof defaultRef === "object" && typeof (defaultRef as { contentKey?: unknown }).contentKey === "string") {
+      return (defaultRef as { contentKey: string }).contentKey;
+    }
+    return null;
+  }, [definition]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPreview = async () => {
+      if (!referencedContentKey) {
+        setCatalogPreview(null);
+        return;
+      }
+      try {
+        const response = await apiClient.catalog.content.preview(referencedContentKey, {
+          locale: "en",
+          context: {}
+        });
+        if (!cancelled) {
+          setCatalogPreview(response);
+        }
+      } catch {
+        if (!cancelled) {
+          setCatalogPreview(null);
+        }
+      }
+    };
+
+    void loadPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [referencedContentKey]);
 
   const copyJson = async () => {
     try {
@@ -52,6 +99,12 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
         <Link href="/docs/decision-builder" className="inline-flex text-xs underline">
           Read Decision Builder guide
         </Link>
+        {catalogPreview ? (
+          <details className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+            <summary className="cursor-pointer font-medium">Resolved catalog preview</summary>
+            <pre className="mt-2 max-h-56 overflow-auto">{JSON.stringify(catalogPreview, null, 2)}</pre>
+          </details>
+        ) : null}
       </section>
 
       {readOnlyReasons.length > 0 ? (

@@ -1,6 +1,8 @@
 import { getEnvironment } from "./environment";
 import type {
   ActivationPreviewResponse,
+  CatalogContentBlock,
+  CatalogOffer,
   DecisionDetailsResponse,
   DecisionReportResponse,
   DecisionStackDetailsResponse,
@@ -394,6 +396,105 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(input)
     }),
+  catalog: {
+    offers: {
+      list: (params: { key?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; q?: string } = {}) =>
+        apiFetch<{ items: CatalogOffer[] }>(`/v1/catalog/offers${toQuery(params)}`),
+      create: (input: Record<string, unknown>) =>
+        apiFetch<{ item: CatalogOffer; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/catalog/offers`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      update: (id: string, input: Record<string, unknown>) =>
+        apiFetch<{ item: CatalogOffer; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/catalog/offers/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(input)
+        }),
+      activate: (key: string, version?: number) =>
+        apiFetch<{ item: CatalogOffer }>(`/v1/catalog/offers/${key}/activate`, {
+          method: "POST",
+          body: JSON.stringify(version ? { version } : {})
+        }),
+      archive: (key: string) =>
+        apiFetch<{ archivedKey: string }>(`/v1/catalog/offers/${key}/archive`, {
+          method: "POST",
+          body: JSON.stringify({})
+        }),
+      validate: (input: Record<string, unknown>) =>
+        apiFetch<{ valid: boolean; errors: string[]; warnings: string[] }>(`/v1/catalog/offers/validate`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    },
+    content: {
+      list: (params: { key?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; q?: string } = {}) =>
+        apiFetch<{ items: CatalogContentBlock[] }>(`/v1/catalog/content${toQuery(params)}`),
+      create: (input: Record<string, unknown>) =>
+        apiFetch<{ item: CatalogContentBlock; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(
+          `/v1/catalog/content`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        ),
+      update: (id: string, input: Record<string, unknown>) =>
+        apiFetch<{ item: CatalogContentBlock; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(
+          `/v1/catalog/content/${id}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(input)
+          }
+        ),
+      activate: (key: string, version?: number) =>
+        apiFetch<{ item: CatalogContentBlock }>(`/v1/catalog/content/${key}/activate`, {
+          method: "POST",
+          body: JSON.stringify(version ? { version } : {})
+        }),
+      archive: (key: string) =>
+        apiFetch<{ archivedKey: string }>(`/v1/catalog/content/${key}/archive`, {
+          method: "POST",
+          body: JSON.stringify({})
+        }),
+      validate: (input: Record<string, unknown>) =>
+        apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; requiredFields: string[]; localeKeys: string[] }>(
+          `/v1/catalog/content/validate`,
+          {
+            method: "POST",
+            body: JSON.stringify(input)
+          }
+        ),
+      preview: (
+        key: string,
+        input: {
+          locale?: string;
+          profileId?: string;
+          lookup?: { attribute: string; value: string };
+          profile?: Record<string, unknown>;
+          context?: Record<string, unknown>;
+          derived?: Record<string, unknown>;
+          missingTokenValue?: string;
+        }
+      ) =>
+        apiFetch<{
+          item: {
+            contentKey: string;
+            version: number;
+            templateId: string;
+            locale: string;
+            payload: Record<string, unknown> | unknown;
+            tags: string[];
+          };
+          debug: {
+            profileSource: string;
+            missingTokens: string[];
+            contextKeys: string[];
+          };
+        }>(`/v1/catalog/content/${key}/preview`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    }
+  },
   inapp: {
     apps: {
       list: () => apiFetch<{ items: InAppApplication[] }>(`/v1/inapp/apps`),
