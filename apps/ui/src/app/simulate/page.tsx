@@ -10,6 +10,7 @@ import type {
 } from "@decisioning/shared";
 import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../lib/lookup-attributes";
 
 type SimulationProfile = {
   profileId: string;
@@ -473,6 +474,13 @@ export default function SimulatePage() {
 
   const activeDecisionKeys = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
   const activeStackKeys = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
+  const decideLookupAttributeSelectValue = isCommonLookupAttribute(lookupAttribute) ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const stackLookupAttributeSelectValue = isCommonLookupAttribute(stackLookupAttribute)
+    ? stackLookupAttribute
+    : CUSTOM_LOOKUP_ATTRIBUTE;
+  const inAppLookupAttributeSelectValue = isCommonLookupAttribute(inAppLookupAttribute)
+    ? inAppLookupAttribute
+    : CUSTOM_LOOKUP_ATTRIBUTE;
 
   const copyJson = async (value: unknown) => {
     try {
@@ -627,11 +635,35 @@ export default function SimulatePage() {
                   <>
                     <label className="flex flex-col gap-1 text-sm">
                       Lookup attribute
-                      <input
-                        value={lookupAttribute}
-                        onChange={(event) => setLookupAttribute(event.target.value)}
+                      <select
+                        value={decideLookupAttributeSelectValue}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
+                            if (isCommonLookupAttribute(lookupAttribute)) {
+                              setLookupAttribute("");
+                            }
+                            return;
+                          }
+                          setLookupAttribute(next);
+                        }}
                         className="rounded-md border border-stone-300 px-2 py-1"
-                      />
+                      >
+                        {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                          <option key={attribute} value={attribute}>
+                            {attribute}
+                          </option>
+                        ))}
+                        <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>
+                      </select>
+                      {decideLookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
+                        <input
+                          value={lookupAttribute}
+                          onChange={(event) => setLookupAttribute(event.target.value)}
+                          className="rounded-md border border-stone-300 px-2 py-1"
+                          placeholder="custom attribute key"
+                        />
+                      ) : null}
                     </label>
                     <label className="flex flex-col gap-1 text-sm">
                       Lookup value
@@ -688,11 +720,35 @@ export default function SimulatePage() {
               <>
                 <label className="flex flex-col gap-1 text-sm">
                   Lookup attribute
-                  <input
-                    value={stackLookupAttribute}
-                    onChange={(event) => setStackLookupAttribute(event.target.value)}
+                  <select
+                    value={stackLookupAttributeSelectValue}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
+                        if (isCommonLookupAttribute(stackLookupAttribute)) {
+                          setStackLookupAttribute("");
+                        }
+                        return;
+                      }
+                      setStackLookupAttribute(next);
+                    }}
                     className="rounded-md border border-stone-300 px-2 py-1"
-                  />
+                  >
+                    {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                      <option key={attribute} value={attribute}>
+                        {attribute}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>
+                  </select>
+                  {stackLookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
+                    <input
+                      value={stackLookupAttribute}
+                      onChange={(event) => setStackLookupAttribute(event.target.value)}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                      placeholder="custom attribute key"
+                    />
+                  ) : null}
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   Lookup value
@@ -767,11 +823,35 @@ export default function SimulatePage() {
               <>
                 <label className="flex flex-col gap-1 text-sm">
                   Lookup attribute
-                  <input
-                    value={inAppLookupAttribute}
-                    onChange={(event) => setInAppLookupAttribute(event.target.value)}
+                  <select
+                    value={inAppLookupAttributeSelectValue}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
+                        if (isCommonLookupAttribute(inAppLookupAttribute)) {
+                          setInAppLookupAttribute("");
+                        }
+                        return;
+                      }
+                      setInAppLookupAttribute(next);
+                    }}
                     className="rounded-md border border-stone-300 px-2 py-1"
-                  />
+                  >
+                    {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                      <option key={attribute} value={attribute}>
+                        {attribute}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>
+                  </select>
+                  {inAppLookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
+                    <input
+                      value={inAppLookupAttribute}
+                      onChange={(event) => setInAppLookupAttribute(event.target.value)}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                      placeholder="custom attribute key"
+                    />
+                  ) : null}
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   Lookup value

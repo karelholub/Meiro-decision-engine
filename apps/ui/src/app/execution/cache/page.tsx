@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../lib/lookup-attributes";
 
 type CacheStats = {
   environment: "DEV" | "STAGE" | "PROD";
@@ -25,6 +26,7 @@ export default function ExecutionCachePage() {
   const [alsoExpireResults, setAlsoExpireResults] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const lookupAttributeSelectValue = isCommonLookupAttribute(lookupAttribute) ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -120,11 +122,35 @@ export default function ExecutionCachePage() {
           <>
             <label className="flex flex-col gap-1 text-sm">
               Lookup Attribute
-              <input
+              <select
                 className="rounded-md border border-stone-300 px-2 py-1"
-                value={lookupAttribute}
-                onChange={(event) => setLookupAttribute(event.target.value)}
-              />
+                value={lookupAttributeSelectValue}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
+                    if (isCommonLookupAttribute(lookupAttribute)) {
+                      setLookupAttribute("");
+                    }
+                    return;
+                  }
+                  setLookupAttribute(next);
+                }}
+              >
+                {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                  <option key={attribute} value={attribute}>
+                    {attribute}
+                  </option>
+                ))}
+                <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>
+              </select>
+              {lookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
+                <input
+                  className="rounded-md border border-stone-300 px-2 py-1"
+                  value={lookupAttribute}
+                  onChange={(event) => setLookupAttribute(event.target.value)}
+                  placeholder="custom attribute key"
+                />
+              ) : null}
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Lookup Value

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { WbsInstanceSettings } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../lib/lookup-attributes";
 
 export default function WbsSettingsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -23,6 +24,7 @@ export default function WbsSettingsPage() {
   const [testSegmentValue, setTestSegmentValue] = useState("107");
   const [testRequestUrl, setTestRequestUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const testAttributeSelectValue = isCommonLookupAttribute(testAttribute) ? testAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -197,12 +199,35 @@ export default function WbsSettingsPage() {
 
         <label className="flex flex-col gap-1 text-sm">
           Test lookup attribute
-          <input
-            value={testAttribute}
-            onChange={(event) => setTestAttribute(event.target.value)}
+          <select
+            value={testAttributeSelectValue}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
+                if (isCommonLookupAttribute(testAttribute)) {
+                  setTestAttribute("");
+                }
+                return;
+              }
+              setTestAttribute(next);
+            }}
             className="rounded-md border border-stone-300 px-2 py-1"
-            placeholder="email"
-          />
+          >
+            {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+              <option key={attribute} value={attribute}>
+                {attribute}
+              </option>
+            ))}
+            <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>
+          </select>
+          {testAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
+            <input
+              value={testAttribute}
+              onChange={(event) => setTestAttribute(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1"
+              placeholder="custom attribute key"
+            />
+          ) : null}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
