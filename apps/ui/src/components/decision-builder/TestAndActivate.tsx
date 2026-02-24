@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import type { ActivationPreviewResponse } from "@decisioning/shared";
 
 export interface WizardSimulationResult {
   outcome: string;
@@ -21,6 +22,7 @@ interface TestAndActivateProps {
   onRunSimulation: (profileJson: string) => Promise<void>;
   onActivate: (activationNote: string) => Promise<void>;
   activating: boolean;
+  activationPreview?: ActivationPreviewResponse | null;
 }
 
 export function TestAndActivate({
@@ -32,7 +34,8 @@ export function TestAndActivate({
   simulationError,
   onRunSimulation,
   onActivate,
-  activating
+  activating,
+  activationPreview
 }: TestAndActivateProps) {
   const [profileJson, setProfileJson] = useState(
     JSON.stringify(
@@ -150,6 +153,29 @@ export function TestAndActivate({
           {activating ? "Activating..." : "Activate"}
         </button>
       </article>
+
+      {activationPreview?.policyImpact ? (
+        <article className="rounded-md border border-stone-200 p-4 text-sm">
+          <h3 className="font-semibold">Policy Impact</h3>
+          <p className="mt-1 text-xs text-stone-600">Dry-run evaluation of draft rule actions against active orchestration policies.</p>
+          <div className="mt-3 space-y-2">
+            {activationPreview.policyImpact.actions.map((action) => (
+              <div key={`${action.ruleId}:${action.actionType}`} className="rounded border border-stone-200 bg-stone-50 p-2 text-xs">
+                <p>
+                  <strong>{action.ruleId}</strong> {"->"} {action.actionType} [{action.allowed ? "allowed" : "blocked"}]
+                </p>
+                <p>Tags: {action.effectiveTags.length ? action.effectiveTags.join(", ") : "none"}</p>
+                {action.blockedBy ? (
+                  <p>
+                    Blocked by {action.blockedBy.policyKey}/{action.blockedBy.ruleId} ({action.blockedBy.reasonCode})
+                  </p>
+                ) : null}
+                {action.warning ? <p className="text-amber-700">{action.warning}</p> : null}
+              </div>
+            ))}
+          </div>
+        </article>
+      ) : null}
     </section>
   );
 }

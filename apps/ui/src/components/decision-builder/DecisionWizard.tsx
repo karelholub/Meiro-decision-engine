@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DecisionDefinition } from "@decisioning/dsl";
-import type { DecisionValidationResponse } from "@decisioning/shared";
+import type { ActivationPreviewResponse, DecisionValidationResponse } from "@decisioning/shared";
 import { ActionTemplatePicker } from "./ActionTemplatePicker";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { GuardrailsEditor } from "./GuardrailsEditor";
@@ -29,6 +29,7 @@ interface DecisionWizardProps {
   onOpenAdvanced: () => void;
   onRunSimulation: (definition: DecisionDefinition, profileJson: string) => Promise<WizardSimulationResult>;
   onActivate: (activationNote: string) => Promise<void>;
+  activationPreview?: ActivationPreviewResponse | null;
 }
 
 const STEP_PREFIX: Record<WizardStepId, string[]> = {
@@ -122,7 +123,8 @@ export function DecisionWizard({
   onDraftChange,
   onOpenAdvanced,
   onRunSimulation,
-  onActivate
+  onActivate,
+  activationPreview
 }: DecisionWizardProps) {
   const [activeStep, setActiveStep] = useState<WizardStepId>("template");
   const [draft, setDraft] = useState<DecisionDefinition>(() => ensureDecisionDefinitionDefaults(initialDefinition));
@@ -1005,6 +1007,7 @@ export function DecisionWizard({
               onRunSimulation={runSimulation}
               onActivate={runActivation}
               activating={activating}
+              activationPreview={activationPreview}
             />
           </section>
         ) : null}

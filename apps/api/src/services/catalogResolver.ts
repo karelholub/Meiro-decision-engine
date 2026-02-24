@@ -1,5 +1,6 @@
 import type { Environment, PrismaClient } from "@prisma/client";
 import type { EngineContext, EngineProfile } from "@decisioning/engine";
+import type { JsonCache } from "../lib/cache";
 
 const TOKEN_PATTERN = /\{\{\s*([^}]+)\s*\}\}/g;
 
@@ -34,7 +35,21 @@ const normalizeTags = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0))];
+  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+};
+
+const mergeTags = (...groups: Array<string[] | undefined>): string[] => {
+  return [...new Set(groups.flatMap((group) => (Array.isArray(group) ? group : [])))].sort((a, b) => a.localeCompare(b));
+};
+
+const parseDate = (value: string | null): Date | null => {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
 const normalizeTokenBindings = (value: unknown): Record<string, string> => {
@@ -253,16 +268,141 @@ interface CatalogResolverDeps {
   prisma: PrismaClient;
   now?: () => Date;
   missingTokenValue?: string;
+  cache?: JsonCache;
+  cacheTtlSeconds?: number;
+  lruMaxEntries?: number;
 }
+
+interface ActiveOfferCacheEntry {
+  key: string;
+  version: number;
+  type: string;
+  valueJson: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  tags: string[];
+  startAt: string | null;
+  endAt: string | null;
+}
+
+interface ActiveContentCacheEntry {
+  key: string;
+  version: number;
+  templateId: string;
+  localesJson: Record<string, unknown>;
+  tokenBindings: Record<string, unknown>;
+  tags: string[];
+}
+
+interface LruEntry<T> {
+  expiresAtMs: number;
+  value: T;
+}
+
+const createLruTtlCache = <T>(maxEntries: number) => {
+  const store = new Map<string, LruEntry<T>>();
+
+  const get = (key: string, nowMs: number): T | undefined => {
+    const entry = store.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expiresAtMs <= nowMs) {
+      store.delete(key);
+      return undefined;
+    }
+    store.delete(key);
+    store.set(key, entry);
+    return entry.value;
+  };
+
+  const set = (key: string, value: T, ttlMs: number, nowMs: number) => {
+    store.delete(key);
+    store.set(key, { value, expiresAtMs: nowMs + ttlMs });
+    while (store.size > maxEntries) {
+      const oldest = store.keys().next().value as string | undefined;
+      if (!oldest) {
+        break;
+      }
+      store.delete(oldest);
+    }
+  };
+
+  return { get, set };
+};
 
 export const createCatalogResolver = (deps: CatalogResolverDeps) => {
   const nowFn = deps.now ?? (() => new Date());
+  const cacheTtlSeconds = Math.max(1, deps.cacheTtlSeconds ?? 30);
+  const cacheTtlMs = cacheTtlSeconds * 1000;
+  const lruMaxEntries = Math.max(100, deps.lruMaxEntries ?? 500);
+  const offerLru = createLruTtlCache<ActiveOfferCacheEntry | null>(lruMaxEntries);
+  const contentLru = createLruTtlCache<ActiveContentCacheEntry | null>(lruMaxEntries);
 
-  const resolveOffer = async (input: {
+  const redisEnabled = Boolean(deps.cache?.enabled);
+
+  const offerCacheKey = (environment: Environment, offerKey: string) => `catalog:active:offer:${environment}:${offerKey}`;
+  const contentCacheKey = (environment: Environment, contentKey: string) => `catalog:active:content:${environment}:${contentKey}`;
+
+  const serializeOffer = (offer: {
+    key: string;
+    version: number;
+    type: string;
+    valueJson: unknown;
+    constraints: unknown;
+    tags: unknown;
+    startAt: Date | null;
+    endAt: Date | null;
+  }): ActiveOfferCacheEntry => {
+    return {
+      key: offer.key,
+      version: offer.version,
+      type: offer.type,
+      valueJson: isObject(offer.valueJson) ? offer.valueJson : {},
+      constraints: isObject(offer.constraints) ? offer.constraints : {},
+      tags: normalizeTags(offer.tags),
+      startAt: offer.startAt?.toISOString() ?? null,
+      endAt: offer.endAt?.toISOString() ?? null
+    };
+  };
+
+  const serializeContent = (content: {
+    key: string;
+    version: number;
+    templateId: string;
+    localesJson: unknown;
+    tokenBindings: unknown;
+    tags: unknown;
+  }): ActiveContentCacheEntry => {
+    return {
+      key: content.key,
+      version: content.version,
+      templateId: content.templateId,
+      localesJson: parseLocaleMap(content.localesJson),
+      tokenBindings: isObject(content.tokenBindings) ? content.tokenBindings : {},
+      tags: normalizeTags(content.tags)
+    };
+  };
+
+  const getActiveOffer = async (input: {
     environment: Environment;
     offerKey: string;
-    now?: Date;
-  }): Promise<ResolvedOffer | null> => {
+  }): Promise<ActiveOfferCacheEntry | null> => {
+    const cacheKey = offerCacheKey(input.environment, input.offerKey);
+    const nowMs = Date.now();
+    const local = offerLru.get(cacheKey, nowMs);
+    if (local !== undefined) {
+      return local;
+    }
+
+    if (redisEnabled) {
+      const cached = await deps.cache!.getJson<{ found: boolean; entry?: ActiveOfferCacheEntry }>(cacheKey);
+      if (cached && typeof cached.found === "boolean") {
+        const value = cached.found ? cached.entry ?? null : null;
+        offerLru.set(cacheKey, value, cacheTtlMs, nowMs);
+        return value;
+      }
+    }
+
     const offer = await deps.prisma.offer.findFirst({
       where: {
         environment: input.environment,
@@ -273,7 +413,61 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
         version: "desc"
       }
     });
+    const value = offer ? serializeOffer(offer) : null;
+    offerLru.set(cacheKey, value, cacheTtlMs, nowMs);
+    if (redisEnabled) {
+      await deps.cache!.setJson(cacheKey, value ? { found: true, entry: value } : { found: false }, cacheTtlSeconds);
+    }
+    return value;
+  };
 
+  const getActiveContent = async (input: {
+    environment: Environment;
+    contentKey: string;
+  }): Promise<ActiveContentCacheEntry | null> => {
+    const cacheKey = contentCacheKey(input.environment, input.contentKey);
+    const nowMs = Date.now();
+    const local = contentLru.get(cacheKey, nowMs);
+    if (local !== undefined) {
+      return local;
+    }
+
+    if (redisEnabled) {
+      const cached = await deps.cache!.getJson<{ found: boolean; entry?: ActiveContentCacheEntry }>(cacheKey);
+      if (cached && typeof cached.found === "boolean") {
+        const value = cached.found ? cached.entry ?? null : null;
+        contentLru.set(cacheKey, value, cacheTtlMs, nowMs);
+        return value;
+      }
+    }
+
+    const content = await deps.prisma.contentBlock.findFirst({
+      where: {
+        environment: input.environment,
+        key: input.contentKey,
+        status: "ACTIVE"
+      },
+      orderBy: {
+        version: "desc"
+      }
+    });
+    const value = content ? serializeContent(content) : null;
+    contentLru.set(cacheKey, value, cacheTtlMs, nowMs);
+    if (redisEnabled) {
+      await deps.cache!.setJson(cacheKey, value ? { found: true, entry: value } : { found: false }, cacheTtlSeconds);
+    }
+    return value;
+  };
+
+  const resolveOffer = async (input: {
+    environment: Environment;
+    offerKey: string;
+    now?: Date;
+  }): Promise<ResolvedOffer | null> => {
+    const offer = await getActiveOffer({
+      environment: input.environment,
+      offerKey: input.offerKey
+    });
     if (!offer) {
       return null;
     }
@@ -281,17 +475,17 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
     const effectiveNow = input.now ?? nowFn();
     const valid = isWithinWindow({
       now: effectiveNow,
-      startAt: offer.startAt,
-      endAt: offer.endAt
+      startAt: parseDate(offer.startAt),
+      endAt: parseDate(offer.endAt)
     });
 
     return {
       key: offer.key,
       version: offer.version,
       type: offer.type,
-      value: isObject(offer.valueJson) ? offer.valueJson : {},
-      constraints: isObject(offer.constraints) ? offer.constraints : {},
-      tags: normalizeTags(offer.tags),
+      value: offer.valueJson,
+      constraints: offer.constraints,
+      tags: offer.tags,
       valid
     };
   };
@@ -306,22 +500,15 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
     now?: Date;
     missingTokenValue?: string;
   }): Promise<ResolvedContent | null> => {
-    const content = await deps.prisma.contentBlock.findFirst({
-      where: {
-        environment: input.environment,
-        key: input.contentKey,
-        status: "ACTIVE"
-      },
-      orderBy: {
-        version: "desc"
-      }
+    const content = await getActiveContent({
+      environment: input.environment,
+      contentKey: input.contentKey
     });
-
     if (!content) {
       return null;
     }
 
-    const locales = parseLocaleMap(content.localesJson);
+    const locales = content.localesJson;
     const picked = pickLocalePayload({ locales, requestedLocale: input.locale });
     const missingTokens = new Set<string>();
     const missingTokenValue = input.missingTokenValue ?? deps.missingTokenValue ?? "";
@@ -353,9 +540,31 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
       templateId: content.templateId,
       locale: picked.locale,
       payload: rendered,
-      tags: normalizeTags(content.tags),
+      tags: content.tags,
       missingTokens: [...missingTokens].sort((a, b) => a.localeCompare(b))
     };
+  };
+
+  const resolveOfferTags = async (input: { environment: Environment; offerKey?: string | null }): Promise<string[]> => {
+    if (!input.offerKey) {
+      return [];
+    }
+    const resolved = await resolveOffer({
+      environment: input.environment,
+      offerKey: input.offerKey
+    });
+    return resolved?.tags ?? [];
+  };
+
+  const resolveContentTags = async (input: { environment: Environment; contentKey?: string | null }): Promise<string[]> => {
+    if (!input.contentKey) {
+      return [];
+    }
+    const resolved = await getActiveContent({
+      environment: input.environment,
+      contentKey: input.contentKey
+    });
+    return resolved?.tags ?? [];
   };
 
   const resolvePayloadRef = async (input: {
@@ -379,9 +588,10 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
   }> => {
     const payloadRefRaw = input.payload.payloadRef;
     if (!isObject(payloadRefRaw)) {
+      const tags = normalizeTags(input.payload.tags);
       return {
         payload: input.payload,
-        tags: normalizeTags(input.payload.tags),
+        tags,
         debug: {
           usedPayloadRef: false
         }
@@ -457,11 +667,7 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
       }
     }
 
-    const tags = [...new Set([
-      ...normalizeTags(basePayload.tags),
-      ...normalizeTags(resolvedOffer?.tags),
-      ...normalizeTags(resolvedContent?.tags)
-    ])].sort((a, b) => a.localeCompare(b));
+    const tags = mergeTags(normalizeTags(basePayload.tags), resolvedOffer?.tags, resolvedContent?.tags);
 
     if (tags.length > 0) {
       basePayload.tags = tags;
@@ -498,6 +704,8 @@ export const createCatalogResolver = (deps: CatalogResolverDeps) => {
   return {
     resolveOffer,
     resolveContent,
+    resolveOfferTags,
+    resolveContentTags,
     resolvePayloadRef
   };
 };

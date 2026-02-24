@@ -3,6 +3,17 @@ import type { EngineContext, EngineProfile } from "@decisioning/engine";
 
 export type DecisionEnvironment = "DEV" | "STAGE" | "PROD";
 
+export interface ActionDescriptorV1 {
+  actionType: string;
+  appKey?: string;
+  placement?: string;
+  offerKey?: string;
+  contentKey?: string;
+  campaignKey?: string;
+  tags: string[];
+  metadata?: Record<string, unknown>;
+}
+
 export interface DecisionVersionSummary {
   decisionId: string;
   versionId: string;
@@ -69,6 +80,28 @@ export interface ActivationPreviewResponse {
     policiesChanged: boolean;
   };
   warnings: string[];
+  policyImpact?: {
+    actions: Array<{
+      ruleId: string;
+      actionType: string;
+      offerKey?: string;
+      contentKey?: string;
+      campaignKey?: string;
+      effectiveTags: string[];
+      allowed: boolean;
+      blockedBy?: {
+        policyKey: string;
+        ruleId: string;
+        reasonCode: string;
+      };
+      evaluatedRules: Array<{
+        ruleId: string;
+        result: "allow" | "block" | "skip";
+        reasonCode?: string;
+      }>;
+      warning?: string;
+    }>;
+  };
 }
 
 export interface SimulationRequest {
@@ -191,6 +224,15 @@ export interface LogsQueryResponseItem {
   latencyMs: number;
   replayAvailable?: boolean;
   trace?: unknown;
+  policy?: {
+    allowed: boolean;
+    blockingRule?: {
+      policyKey: string;
+      ruleId: string;
+      reasonCode: string;
+    };
+    tags: string[];
+  } | null;
 }
 
 export interface LogsQueryResponse {
@@ -217,6 +259,16 @@ export interface LogDetailsResponse {
     reasons: Array<{ code: string; detail?: string }>;
     latencyMs: number;
     trace?: unknown;
+    actionDescriptor?: ActionDescriptorV1 | null;
+    policy?: {
+      allowed: boolean;
+      blockingRule?: {
+        policyKey: string;
+        ruleId: string;
+        reasonCode: string;
+      };
+      tags: string[];
+    } | null;
     replayInput?: {
       decisionId?: string;
       decisionKey?: string;
@@ -230,6 +282,33 @@ export interface LogDetailsResponse {
       context?: Partial<EngineContext>;
     } | null;
   } | null;
+}
+
+export interface CatalogTagsResponse {
+  offerTags: string[];
+  contentTags: string[];
+  campaignTags: string[];
+}
+
+export interface OrchestrationPolicyPreviewResponse {
+  allowed: boolean;
+  blockedBy?: {
+    policyKey: string;
+    ruleId: string;
+    reasonCode: string;
+  };
+  evaluatedRules: Array<{
+    ruleId: string;
+    result: "allow" | "block" | "skip";
+    reasonCode?: string;
+  }>;
+  effectiveTags: string[];
+  counters?: {
+    perDayUsed?: number;
+    perDayLimit?: number;
+    perWeekUsed?: number;
+    perWeekLimit?: number;
+  };
 }
 
 export interface ConversionEventInput {
@@ -444,6 +523,21 @@ export interface InAppCampaignActivationPreview {
   canActivate: boolean;
   warnings: string[];
   conflicts: InAppCampaignActivationPreviewConflict[];
+  policyImpact?: {
+    actionDescriptor: ActionDescriptorV1;
+    allowed: boolean;
+    blockedBy?: {
+      policyKey: string;
+      ruleId: string;
+      reasonCode: string;
+    };
+    evaluatedRules: Array<{
+      ruleId: string;
+      result: "allow" | "block" | "skip";
+      reasonCode?: string;
+    }>;
+    warning?: string;
+  };
 }
 
 export interface InAppCampaignVersion {

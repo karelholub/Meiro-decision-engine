@@ -12,6 +12,7 @@ import type { JsonCache } from "../lib/cache";
 import { sha256, stableStringify } from "../lib/cacheKey";
 import { withTimeout } from "../lib/timeout";
 import { createCatalogResolver } from "./catalogResolver";
+import { buildActionDescriptor, type RuntimeActionDescriptor } from "./actionDescriptor";
 import type { OrchestrationService } from "./orchestrationService";
 
 export interface InAppV2DecideBody {
@@ -52,6 +53,24 @@ export interface InAppV2DecideResponse extends InAppDecideResponse {
       engine: number;
     };
     policyRules?: unknown[];
+    policy?: {
+      allowed: boolean;
+      blockingRule?: {
+        policyKey: string;
+        ruleId: string;
+        reasonCode: string;
+      };
+      tags: string[];
+    };
+    actionDescriptor?: {
+      actionType: string;
+      appKey?: string;
+      placement?: string;
+      offerKey?: string;
+      contentKey?: string;
+      campaignKey?: string;
+      tags: string[];
+    };
     fallbackReason?: string;
   };
 }
@@ -559,6 +578,16 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     engineMs: number;
     fallbackReason?: string;
     policyDebugRules?: unknown[];
+    policy?: {
+      allowed: boolean;
+      blockingRule?: {
+        policyKey: string;
+        ruleId: string;
+        reasonCode: string;
+      };
+      tags: string[];
+    };
+    actionDescriptor?: RuntimeActionDescriptor;
   }> => {
     const startedAtMs = Date.now();
     const runtimeConfig = getConfig(input.environment);
@@ -687,7 +716,19 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     let selectedOrchestrationEval:
       | Awaited<ReturnType<NonNullable<InAppV2RuntimeDeps["orchestration"]>["evaluateAction"]>>
       | undefined;
+    let selectedDescriptor: RuntimeActionDescriptor | null = null;
     let policyBlockedReason: string | undefined;
+    let policySummary:
+      | {
+          allowed: boolean;
+          blockingRule?: {
+            policyKey: string;
+            ruleId: string;
+            reasonCode: string;
+          };
+          tags: string[];
+        }
+      | undefined;
 
     for (const campaign of campaignSet.campaigns) {
       if (!campaignPassesSchedule(campaign, contextNow)) {
@@ -729,22 +770,52 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
 
       if (deps.orchestration) {
         const candidateTags = extractVariantTags(candidateVariant.contentJson);
+        const candidateDescriptor = await buildActionDescriptor(
+          {
+            actionType: "inapp_message",
+            actionKey: campaign.key,
+            campaignKey: campaign.key,
+            offerKey: campaign.offerKey ?? undefined,
+            contentKey: campaign.contentKey ?? undefined,
+            tags: candidateTags,
+            payload: {
+              appKey: input.body.appKey,
+              placement: input.body.placement,
+              payloadRef: {
+                ...(campaign.offerKey ? { offerKey: campaign.offerKey } : {}),
+                ...(campaign.contentKey ? { contentKey: campaign.contentKey } : {})
+              }
+            }
+          },
+          {
+            environment: input.environment,
+            appKey: input.body.appKey,
+            placement: input.body.placement,
+            explicitTags: candidateTags,
+            catalogResolver,
+            metadata: {
+              source: "v2_inapp_decide_candidate",
+              campaignKey: campaign.key
+            }
+          }
+        );
         const policyEval = await deps.orchestration.evaluateAction({
           environment: input.environment,
           appKey: input.body.appKey,
           profileId: profile.profileId,
-          action: {
-            actionType: "inapp_message",
-            actionKey: campaign.key,
-            tags: candidateTags,
-            placement: input.body.placement,
-            appKey: input.body.appKey
-          },
+          action: candidateDescriptor,
           now: contextNow,
           debug: true
         });
+        selectedPolicyDebugRules = policyEval.debugRules;
+        selectedDescriptor = candidateDescriptor;
         if (!policyEval.allowed) {
           policyBlockedReason = policyEval.reasons[0]?.code ?? "ORCHESTRATION_BLOCKED";
+          policySummary = {
+            allowed: false,
+            ...(policyEval.blockedBy ? { blockingRule: policyEval.blockedBy } : {}),
+            tags: candidateDescriptor.tags
+          };
           input.logger.info(
             {
               event: "orchestration_inapp_blocked",
@@ -757,7 +828,10 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           continue;
         }
         selectedOrchestrationEval = policyEval;
-        selectedPolicyDebugRules = policyEval.debugRules;
+        policySummary = {
+          allowed: true,
+          tags: candidateDescriptor.tags
+        };
       }
 
       selectedCampaign = campaign;
@@ -773,7 +847,9 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         wbsMs,
         engineMs,
         fallbackReason: policyBlockedReason ?? "NO_ACTIVE_CAMPAIGN",
-        policyDebugRules: selectedPolicyDebugRules
+        policyDebugRules: selectedPolicyDebugRules,
+        ...(policySummary ? { policy: policySummary } : {}),
+        ...(selectedDescriptor ? { actionDescriptor: selectedDescriptor } : {})
       };
     }
 
@@ -855,7 +931,8 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       ...new Set([
         ...((Array.isArray(payload.tags) ? payload.tags : []).filter((entry): entry is string => typeof entry === "string")),
         ...(resolvedOffer?.tags ?? []),
-        ...(resolvedContent?.tags ?? [])
+        ...(resolvedContent?.tags ?? []),
+        ...(selectedDescriptor?.tags ?? [])
       ])
     ].sort((a, b) => a.localeCompare(b));
     if (mergedTags.length > 0) {
@@ -879,13 +956,18 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       await deps.orchestration.recordExposure({
         environment: input.environment,
         profileId: profile.profileId,
-        action: {
-          actionType: "inapp_message",
-          actionKey: selectedCampaign.key,
-          tags: mergedTags,
-          placement: input.body.placement,
-          appKey: input.body.appKey
-        },
+        action:
+          selectedDescriptor ??
+          ({
+            actionType: "inapp_message",
+            actionKey: selectedCampaign.key,
+            campaignKey: selectedCampaign.key,
+            offerKey: selectedCampaign.offerKey ?? undefined,
+            contentKey: selectedCampaign.contentKey ?? undefined,
+            tags: mergedTags,
+            placement: input.body.placement,
+            appKey: input.body.appKey
+          } as RuntimeActionDescriptor),
         now: contextNow,
         evaluation: selectedOrchestrationEval,
         metadata: {
@@ -905,7 +987,9 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       response,
       wbsMs,
       engineMs,
-      policyDebugRules: selectedPolicyDebugRules
+      policyDebugRules: selectedPolicyDebugRules,
+      ...(policySummary ? { policy: policySummary } : {}),
+      ...(selectedDescriptor ? { actionDescriptor: selectedDescriptor } : {})
     };
   };
 
@@ -974,6 +1058,16 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       servedStale: boolean;
       fallbackReason?: string;
       policyDebugRules?: unknown[];
+      policy?: {
+        allowed: boolean;
+        blockingRule?: {
+          policyKey: string;
+          ruleId: string;
+          reasonCode: string;
+        };
+        tags: string[];
+      };
+      actionDescriptor?: RuntimeActionDescriptor;
       wbsMs: number;
       engineMs: number;
     }): InAppV2DecideResponse => {
@@ -992,6 +1086,20 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           },
           ...(Array.isArray(result.policyDebugRules) && result.policyDebugRules.length > 0
             ? { policyRules: result.policyDebugRules }
+            : {}),
+          ...(result.policy ? { policy: result.policy } : {}),
+          ...(result.actionDescriptor
+            ? {
+                actionDescriptor: {
+                  actionType: result.actionDescriptor.actionType,
+                  ...(result.actionDescriptor.appKey ? { appKey: result.actionDescriptor.appKey } : {}),
+                  ...(result.actionDescriptor.placement ? { placement: result.actionDescriptor.placement } : {}),
+                  ...(result.actionDescriptor.offerKey ? { offerKey: result.actionDescriptor.offerKey } : {}),
+                  ...(result.actionDescriptor.contentKey ? { contentKey: result.actionDescriptor.contentKey } : {}),
+                  ...(result.actionDescriptor.campaignKey ? { campaignKey: result.actionDescriptor.campaignKey } : {}),
+                  tags: result.actionDescriptor.tags
+                }
+              }
             : {}),
           ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {})
         }
@@ -1139,6 +1247,8 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         servedStale: false,
         fallbackReason: evaluated.fallbackReason,
         policyDebugRules: evaluated.policyDebugRules,
+        policy: evaluated.policy,
+        actionDescriptor: evaluated.actionDescriptor,
         wbsMs: evaluated.wbsMs,
         engineMs: evaluated.engineMs
       });

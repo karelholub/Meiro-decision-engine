@@ -2226,6 +2226,54 @@ describe("API", () => {
     await app.close();
   });
 
+  it("returns unique catalog tags from offers/content/campaigns", async () => {
+    const { prisma } = makePrisma();
+    (prisma as any).offer = {
+      findMany: vi.fn().mockResolvedValue([
+        { tags: ["promo", "home_top", "promo"] },
+        { tags: ["seasonal", "promo"] }
+      ])
+    };
+    (prisma as any).contentBlock = {
+      findMany: vi.fn().mockResolvedValue([
+        { tags: ["home_top", "article"] },
+        { tags: ["article", "campaign_tag"] }
+      ])
+    };
+    (prisma as any).inAppCampaign = {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          variants: [{ contentJson: { tags: ["campaign_tag", "promo"] } }, { contentJson: { tags: ["campaign_tag"] } }]
+        }
+      ])
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/catalog/tags",
+      headers: { "x-env": "DEV" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.offerTags).toEqual(["home_top", "promo", "seasonal"]);
+    expect(body.contentTags).toEqual(["article", "campaign_tag", "home_top"]);
+    expect(body.campaignTags).toEqual(["campaign_tag", "promo"]);
+
+    await app.close();
+  });
+
   it("returns paginated logs with replay metadata and details", async () => {
     const { prisma } = makePrisma();
     const timestamp = new Date("2026-02-19T12:00:00.000Z");
@@ -2399,6 +2447,214 @@ describe("API", () => {
     expect(body.outcome).toBe("NOT_ELIGIBLE");
     expect(Array.isArray(body.reasons)).toBe(true);
     expect(body.reasons.some((reason: { code?: string }) => reason.code === "GLOBAL_CAP")).toBe(true);
+
+    await app.close();
+  });
+
+  it("previews and blocks catalog-tagged decision actions with mutex rule and logs blocking rule id", async () => {
+    const { prisma, orchestrationPolicies, decisionLogCreate } = makePrisma();
+    const nowDate = new Date("2026-02-24T12:00:00.000Z");
+    const decisionId = "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f";
+
+    const activeDefinition = createDefaultDecisionDefinition({
+      id: decisionId,
+      key: "cart_recovery",
+      name: "Cart Recovery",
+      version: 1,
+      status: "ACTIVE"
+    });
+    activeDefinition.flow.rules = [
+      {
+        id: "promo_rule",
+        priority: 1,
+        then: {
+          actionType: "message",
+          payload: {
+            payloadRef: {
+              offerKey: "offer_promo",
+              contentKey: "content_home"
+            }
+          }
+        }
+      }
+    ];
+    activeDefinition.outputs.default = { actionType: "noop", payload: {} };
+
+    const draftDefinition = {
+      ...activeDefinition,
+      version: 2,
+      status: "DRAFT" as const,
+      activatedAt: null,
+      updatedAt: nowDate.toISOString()
+    };
+
+    prisma.decision.findFirst.mockResolvedValueOnce({
+      id: decisionId,
+      key: "cart_recovery",
+      environment: "DEV",
+      name: "Cart Recovery",
+      description: "",
+      versions: [
+        {
+          id: "version-draft",
+          decisionId,
+          version: 2,
+          status: "DRAFT",
+          definitionJson: draftDefinition,
+          createdAt: nowDate,
+          updatedAt: nowDate,
+          activatedAt: null
+        },
+        {
+          id: "version-active",
+          decisionId,
+          version: 1,
+          status: "ACTIVE",
+          definitionJson: activeDefinition,
+          createdAt: nowDate,
+          updatedAt: nowDate,
+          activatedAt: nowDate
+        }
+      ]
+    });
+    prisma.decisionVersion.findFirst.mockImplementation(async (args?: any) => {
+      if (args?.where?.status === "ACTIVE") {
+        return {
+          id: "version-active",
+          decisionId,
+          version: 1,
+          status: "ACTIVE",
+          definitionJson: activeDefinition,
+          decision: {
+            id: decisionId,
+            key: "cart_recovery",
+            environment: "DEV",
+            name: "Cart Recovery",
+            description: ""
+          }
+        };
+      }
+      return null;
+    });
+
+    (prisma as any).offer = {
+      findFirst: vi.fn().mockResolvedValue({
+        key: "offer_promo",
+        version: 1,
+        type: "discount",
+        valueJson: { percent: 10 },
+        constraints: {},
+        tags: ["promo"],
+        startAt: null,
+        endAt: null
+      })
+    };
+    (prisma as any).contentBlock = {
+      findFirst: vi.fn().mockResolvedValue({
+        key: "content_home",
+        version: 1,
+        templateId: "tpl_home",
+        localesJson: { en: { headline: "hi" } },
+        tokenBindings: {},
+        tags: ["home_top"]
+      })
+    };
+    (prisma as any).orchestrationEvent.findFirst.mockResolvedValue({
+      ts: nowDate
+    });
+
+    orchestrationPolicies.push({
+      id: "orchestr-policy-mutex",
+      environment: "DEV",
+      appKey: null,
+      key: "global_orch",
+      name: "Global Orchestration",
+      description: null,
+      status: "ACTIVE",
+      version: 1,
+      policyJson: {
+        schemaVersion: "orchestration_policy.v1",
+        defaults: {
+          mode: "fail_closed",
+          fallbackAction: {
+            actionType: "noop",
+            payload: {}
+          }
+        },
+        rules: [
+          {
+            id: "promo_mutex",
+            type: "mutex_group",
+            groupKey: "promo_any",
+            appliesTo: {
+              actionTypes: ["message"],
+              tagsAny: ["promo"]
+            },
+            window: {
+              seconds: 86_400
+            },
+            reasonCode: "MUTEX_PROMO"
+          }
+        ]
+      },
+      createdAt: nowDate,
+      updatedAt: nowDate,
+      activatedAt: nowDate
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => nowDate
+    });
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/v1/decisions/${decisionId}/preview-activation`,
+      headers: { "x-env": "DEV" },
+      payload: {
+        profileId: "p-1001",
+        appKey: "meiro_store",
+        placement: "home_top"
+      }
+    });
+    expect(preview.statusCode).toBe(200);
+    const previewBody = preview.json();
+    expect(Array.isArray(previewBody.policyImpact?.actions)).toBe(true);
+    expect(previewBody.policyImpact.actions[0].blockedBy?.ruleId).toBe("promo_mutex");
+    expect(previewBody.warnings.some((warning: string) => warning.includes("blocked"))).toBe(true);
+
+    const decide = await app.inject({
+      method: "POST",
+      url: "/v1/decide",
+      headers: { "x-env": "DEV" },
+      payload: {
+        decisionKey: "cart_recovery",
+        profileId: "p-1001",
+        context: {
+          now: nowDate.toISOString(),
+          appKey: "meiro_store",
+          placement: "home_top"
+        },
+        debug: true
+      }
+    });
+    expect(decide.statusCode).toBe(200);
+    const decideBody = decide.json();
+    expect(decideBody.actionType).toBe("noop");
+    expect(decideBody.reasons.some((reason: { code?: string }) => reason.code === "MUTEX_PROMO")).toBe(true);
+
+    const createdLogCall = decisionLogCreate.mock.calls.at(-1)?.[0];
+    const createdDebugTrace = createdLogCall?.data?.debugTraceJson as Record<string, unknown> | undefined;
+    expect((createdDebugTrace?.policy as { blockingRule?: { ruleId?: string } } | undefined)?.blockingRule?.ruleId).toBe(
+      "promo_mutex"
+    );
 
     await app.close();
   });

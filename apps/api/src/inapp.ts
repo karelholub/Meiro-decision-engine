@@ -15,6 +15,8 @@ import type { JsonCache } from "./lib/cache";
 import { InAppV2EventsError, createInAppV2EventsService } from "./services/inappV2Events";
 import { createInAppV2RuntimeService } from "./services/inappV2Runtime";
 import type { OrchestrationService } from "./services/orchestrationService";
+import { createCatalogResolver } from "./services/catalogResolver";
+import { buildActionDescriptor } from "./services/actionDescriptor";
 import { getInAppGovernanceAllowedStatuses, getInAppGovernanceTransitionError } from "./lib/inappGovernance";
 
 interface WbsInstanceRecord {
@@ -89,7 +91,7 @@ export interface RegisterInAppRoutesDeps {
     lastFlushAt: string | null;
     lastError: string | null;
   } | null;
-  orchestration?: Pick<OrchestrationService, "evaluateAction" | "recordExposure" | "hasActivePolicies">;
+  orchestration?: Pick<OrchestrationService, "evaluateAction" | "previewAction" | "recordExposure" | "hasActivePolicies">;
 }
 
 const toInputJson = (value: unknown): Prisma.InputJsonValue => {
@@ -815,6 +817,29 @@ interface CampaignActivationPreview {
   canActivate: boolean;
   warnings: string[];
   conflicts: CampaignActivationPreviewConflict[];
+  policyImpact?: {
+    actionDescriptor: {
+      actionType: string;
+      appKey?: string;
+      placement?: string;
+      offerKey?: string;
+      contentKey?: string;
+      campaignKey?: string;
+      tags: string[];
+    };
+    allowed: boolean;
+    blockedBy?: {
+      policyKey: string;
+      ruleId: string;
+      reasonCode: string;
+    };
+    evaluatedRules: Array<{
+      ruleId: string;
+      result: "allow" | "block" | "skip";
+      reasonCode?: string;
+    }>;
+    warning?: string;
+  };
 }
 
 const makeCampaignSnapshot = (campaign: {
@@ -981,6 +1006,11 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     eventsStream,
     getInappEventsWorkerStatus
   } = deps;
+  const catalogResolver = createCatalogResolver({
+    prisma,
+    cache,
+    now
+  });
 
   const inAppV2Runtime = createInAppV2RuntimeService({
     prisma,
@@ -1370,9 +1400,16 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         status: true,
         appKey: true,
         placementKey: true,
+        contentKey: true,
+        offerKey: true,
         priority: true,
         startAt: true,
-        endAt: true
+        endAt: true,
+        variants: {
+          select: {
+            contentJson: true
+          }
+        }
       }
     });
 
@@ -1401,11 +1438,89 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       }
     });
 
+    const preview = buildCampaignActivationPreview({
+      campaign,
+      activeCandidates
+    });
+
+    if (deps.orchestration?.previewAction) {
+      const variants = Array.isArray(campaign.variants) ? campaign.variants : [];
+      const offerKey = typeof campaign.offerKey === "string" && campaign.offerKey.trim().length > 0 ? campaign.offerKey : null;
+      const contentKey =
+        typeof campaign.contentKey === "string" && campaign.contentKey.trim().length > 0 ? campaign.contentKey : null;
+      const collectTags = (value: unknown): string[] =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          : [];
+      const campaignTags = [
+        ...new Set(
+          variants.flatMap((variant) => {
+            if (!isObject(variant.contentJson)) {
+              return [];
+            }
+            return collectTags(variant.contentJson.tags);
+          })
+        )
+      ].sort((left, right) => left.localeCompare(right));
+
+      const descriptor = await buildActionDescriptor(
+        {
+          actionType: "inapp_message",
+          offerKey: offerKey ?? undefined,
+          contentKey: contentKey ?? undefined,
+          campaignKey: campaign.key,
+          tags: campaignTags
+        },
+        {
+          environment,
+          appKey: campaign.appKey,
+          placement: campaign.placementKey,
+          campaignTags,
+          catalogResolver,
+          metadata: {
+            source: "v1_inapp_activation_preview",
+            campaignKey: campaign.key
+          }
+        }
+      );
+      const previewResult = await deps.orchestration.previewAction({
+        environment,
+        appKey: campaign.appKey,
+        action: descriptor,
+        now: now()
+      });
+      const requiresProfile = previewResult.evaluatedRules.some((entry) => entry.requiresProfile);
+      const warning = !previewResult.allowed
+        ? `This campaign action is likely to be blocked by ${previewResult.blockedBy?.policyKey ?? "policy"}/${previewResult.blockedBy?.ruleId ?? "rule"}.`
+        : requiresProfile
+          ? "Cap and counter checks require a profile for full policy impact preview."
+          : undefined;
+      if (warning) {
+        preview.warnings = [...new Set([...preview.warnings, warning])];
+      }
+      preview.policyImpact = {
+        actionDescriptor: {
+          actionType: descriptor.actionType,
+          ...(descriptor.appKey ? { appKey: descriptor.appKey } : {}),
+          ...(descriptor.placement ? { placement: descriptor.placement } : {}),
+          ...(descriptor.offerKey ? { offerKey: descriptor.offerKey } : {}),
+          ...(descriptor.contentKey ? { contentKey: descriptor.contentKey } : {}),
+          ...(descriptor.campaignKey ? { campaignKey: descriptor.campaignKey } : {}),
+          tags: descriptor.tags
+        },
+        allowed: previewResult.allowed,
+        ...(previewResult.blockedBy ? { blockedBy: previewResult.blockedBy } : {}),
+        evaluatedRules: previewResult.evaluatedRules.map((entry) => ({
+          ruleId: entry.ruleId,
+          result: entry.result,
+          ...(entry.reasonCode ? { reasonCode: entry.reasonCode } : {})
+        })),
+        ...(warning ? { warning } : {})
+      };
+    }
+
     return {
-      item: buildCampaignActivationPreview({
-        campaign,
-        activeCandidates
-      })
+      item: preview
     };
   });
 
@@ -2982,6 +3097,13 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     const variantKey = response.tracking.variant_id.trim();
     const messageId = response.tracking.message_id.trim();
     const fallbackReason = response.debug.fallbackReason;
+    const payloadForLog: Record<string, unknown> = isObject(response.payload) ? { ...response.payload } : {};
+    if (response.debug.policy) {
+      payloadForLog._policy = response.debug.policy;
+    }
+    if (response.debug.actionDescriptor) {
+      payloadForLog._actionDescriptor = response.debug.actionDescriptor;
+    }
 
     try {
       await prisma.inAppDecisionLog.create({
@@ -2994,7 +3116,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           variantKey: variantKey.length > 0 ? variantKey : null,
           shown: response.show,
           reasonsJson: toInputJson(buildInAppDecisionReasons({ show: response.show, fallbackReason })),
-          payloadJson: toInputJson(redactSensitiveFields(response.payload)),
+          payloadJson: toInputJson(redactSensitiveFields(payloadForLog)),
           replayInputJson: toInputJson({
             appKey: parsed.data.appKey,
             placement: parsed.data.placement,

@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Environment, Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import type { JsonCache } from "../lib/cache";
+import { createCatalogResolver } from "../services/catalogResolver";
 import type { OrchestrationService } from "../services/orchestrationService";
+import { buildActionDescriptor } from "../services/actionDescriptor";
 
 const policyListQuerySchema = z.object({
   appKey: z.string().min(1).optional(),
@@ -11,6 +14,10 @@ const policyListQuerySchema = z.object({
 
 const policyIdParamsSchema = z.object({
   id: z.string().uuid()
+});
+
+const policyKeyParamsSchema = z.object({
+  key: z.string().min(1)
 });
 
 const policyCreateSchema = z.object({
@@ -40,6 +47,26 @@ const orchestrationEventInputSchema = z.object({
   groupKey: z.string().min(1).optional(),
   ts: z.string().datetime().optional(),
   metadata: z.record(z.unknown()).optional()
+});
+
+const policyPreviewBodySchema = z.object({
+  appKey: z.string().min(1).optional(),
+  placement: z.string().min(1).optional(),
+  candidateAction: z.object({
+    actionType: z.string().min(1),
+    offerKey: z.string().min(1).optional(),
+    contentKey: z.string().min(1).optional(),
+    campaignKey: z.string().min(1).optional(),
+    tags: z.array(z.string()).optional()
+  }),
+  profileId: z.string().min(1).optional(),
+  lookup: z
+    .object({
+      attribute: z.string().min(1),
+      value: z.string().min(1)
+    })
+    .optional(),
+  context: z.record(z.unknown()).optional()
 });
 
 const serializePolicy = (item: {
@@ -75,12 +102,19 @@ const serializePolicy = (item: {
 export const registerOrchestrationRoutes = async (deps: {
   app: FastifyInstance;
   prisma: PrismaClient;
+  cache?: JsonCache;
+  now?: () => Date;
   orchestration: OrchestrationService;
-  resolveEnvironment: (request: FastifyRequest, reply: FastifyReply) => string | null;
+  resolveEnvironment: (request: FastifyRequest, reply: FastifyReply) => Environment | null;
   buildResponseError: (reply: FastifyReply, statusCode: number, error: string, details?: unknown) => unknown;
   requireWriteAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
 }) => {
   const { app, prisma, orchestration, resolveEnvironment, buildResponseError, requireWriteAuth } = deps;
+  const catalogResolver = createCatalogResolver({
+    prisma,
+    cache: deps.cache,
+    now: deps.now
+  });
 
   app.get("/v1/orchestration/policies", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
@@ -327,6 +361,116 @@ export const registerOrchestrationRoutes = async (deps: {
     orchestration.invalidatePolicyCache(environment, archived.appKey ?? undefined);
     return {
       item: serializePolicy(archived)
+    };
+  });
+
+  app.post("/v1/orchestration/policies/:key/preview", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = policyKeyParamsSchema.safeParse(request.params);
+    const parsed = policyPreviewBodySchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return buildResponseError(reply, 400, "Invalid request", {
+        params: params.success ? undefined : params.error.flatten(),
+        body: parsed.success ? undefined : parsed.error.flatten()
+      });
+    }
+
+    const appKey = parsed.data.appKey;
+    const policies = await prisma.orchestrationPolicy.findMany({
+      where: {
+        environment,
+        key: params.data.key,
+        status: {
+          in: ["DRAFT", "ACTIVE"]
+        },
+        ...(appKey
+          ? {
+              OR: [{ appKey }, { appKey: null }]
+            }
+          : {})
+      },
+      orderBy: [{ version: "desc" }, { updatedAt: "desc" }]
+    });
+
+    const selectedPolicy =
+      [...policies].sort((left, right) => {
+        const leftScope = appKey ? (left.appKey === appKey ? 2 : left.appKey === null ? 1 : 0) : left.appKey === null ? 2 : 1;
+        const rightScope = appKey
+          ? right.appKey === appKey
+            ? 2
+            : right.appKey === null
+              ? 1
+              : 0
+          : right.appKey === null
+            ? 2
+            : 1;
+        if (leftScope !== rightScope) {
+          return rightScope - leftScope;
+        }
+        const leftStatus = left.status === "DRAFT" ? 2 : 1;
+        const rightStatus = right.status === "DRAFT" ? 2 : 1;
+        if (leftStatus !== rightStatus) {
+          return rightStatus - leftStatus;
+        }
+        if (left.version !== right.version) {
+          return right.version - left.version;
+        }
+        return right.updatedAt.getTime() - left.updatedAt.getTime();
+      })[0] ?? null;
+
+    if (!selectedPolicy) {
+      return buildResponseError(reply, 404, "Policy not found");
+    }
+
+    const descriptor = await buildActionDescriptor(
+      {
+        actionType: parsed.data.candidateAction.actionType,
+        offerKey: parsed.data.candidateAction.offerKey,
+        contentKey: parsed.data.candidateAction.contentKey,
+        campaignKey: parsed.data.candidateAction.campaignKey,
+        tags: parsed.data.candidateAction.tags
+      },
+      {
+        environment,
+        appKey: parsed.data.appKey,
+        placement: parsed.data.placement,
+        explicitTags: parsed.data.candidateAction.tags,
+        catalogResolver,
+        metadata: parsed.data.context
+      }
+    );
+
+    const resolvedProfileId =
+      parsed.data.profileId ??
+      (parsed.data.lookup ? `lookup:${parsed.data.lookup.attribute}:${parsed.data.lookup.value}` : undefined);
+    const result = await orchestration.previewAction({
+      environment,
+      appKey: descriptor.appKey ?? parsed.data.appKey,
+      profileId: resolvedProfileId,
+      action: descriptor,
+      now: deps.now ? deps.now() : new Date(),
+      policyOverride: {
+        key: selectedPolicy.key,
+        version: selectedPolicy.version,
+        appKey: selectedPolicy.appKey,
+        policyJson: selectedPolicy.policyJson
+      }
+    });
+
+    return {
+      allowed: result.allowed,
+      blockedBy: result.blockedBy,
+      evaluatedRules: result.evaluatedRules.map((entry) => ({
+        ruleId: entry.ruleId,
+        result: entry.result,
+        ...(entry.reasonCode ? { reasonCode: entry.reasonCode } : {})
+      })),
+      effectiveTags: result.effectiveTags,
+      ...(result.counters ? { counters: result.counters } : {})
     };
   });
 

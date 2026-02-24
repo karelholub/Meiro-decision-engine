@@ -30,7 +30,17 @@ export default function LogsPage() {
   const [campaignOptions, setCampaignOptions] = useState<InAppCampaign[]>([]);
   const [placementOptions, setPlacementOptions] = useState<InAppPlacement[]>([]);
   const [items, setItems] = useState<LogsQueryResponseItem[]>([]);
-  const [expanded, setExpanded] = useState<Record<string, { trace?: unknown; payload?: unknown }>>({});
+  const [expanded, setExpanded] = useState<
+    Record<
+      string,
+      {
+        trace?: unknown;
+        payload?: unknown;
+        policy?: LogsQueryResponseItem["policy"];
+        actionDescriptor?: unknown;
+      }
+    >
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -130,7 +140,9 @@ export default function LogsPage() {
         ...current,
         [id]: {
           trace: response.item?.trace,
-          payload: response.item?.payload
+          payload: response.item?.payload,
+          policy: response.item?.policy ?? null,
+          actionDescriptor: response.item?.actionDescriptor ?? null
         }
       }));
     } catch (err) {
@@ -284,7 +296,7 @@ export default function LogsPage() {
               <th className="border-b border-stone-200 px-3 py-2">Outcome</th>
               <th className="border-b border-stone-200 px-3 py-2">Action</th>
               <th className="border-b border-stone-200 px-3 py-2">Reasons</th>
-              <th className="border-b border-stone-200 px-3 py-2">Policy reasons</th>
+              <th className="border-b border-stone-200 px-3 py-2">Policy</th>
               <th className="border-b border-stone-200 px-3 py-2">Latency</th>
               <th className="border-b border-stone-200 px-3 py-2">Actions</th>
             </tr>
@@ -300,10 +312,23 @@ export default function LogsPage() {
                   <td className="border-b border-stone-100 px-3 py-2">{item.actionType}</td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.reasons.map((reason) => reason.code).join(", ")}</td>
                   <td className="border-b border-stone-100 px-3 py-2">
-                    {item.reasons
-                      .map((reason) => reason.code)
-                      .filter((code) => isPolicyCode(code))
-                      .join(", ") || "none"}
+                    {item.policy ? (
+                      item.policy.allowed ? (
+                        "Allowed"
+                      ) : (
+                        <>
+                          Blocked
+                          {item.policy.blockingRule
+                            ? `: ${item.policy.blockingRule.policyKey}/${item.policy.blockingRule.ruleId}`
+                            : ""}
+                        </>
+                      )
+                    ) : (
+                      item.reasons
+                        .map((reason) => reason.code)
+                        .filter((code) => isPolicyCode(code))
+                        .join(", ") || "none"
+                    )}
                   </td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.latencyMs}ms</td>
                   <td className="border-b border-stone-100 px-3 py-2">
@@ -322,7 +347,7 @@ export default function LogsPage() {
                 {expanded[item.id] ? (
                   <tr key={`${item.id}-expanded`}>
                     <td colSpan={9} className="border-b border-stone-100 bg-stone-50 px-3 py-2">
-                      <div className="grid gap-3 md:grid-cols-2">
+                      <div className="grid gap-3 md:grid-cols-3">
                         <div>
                           <p className="mb-1 text-xs font-semibold">Payload</p>
                           <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-2 text-xs">
@@ -334,6 +359,20 @@ export default function LogsPage() {
                           <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-2 text-xs">
                             {JSON.stringify(expanded[item.id]?.trace ?? {}, null, 2)}
                           </pre>
+                        </div>
+                        <div className="space-y-2">
+                          <div>
+                            <p className="mb-1 text-xs font-semibold">Policy</p>
+                            <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-2 text-xs">
+                              {JSON.stringify(expanded[item.id]?.policy ?? null, null, 2)}
+                            </pre>
+                          </div>
+                          <div>
+                            <p className="mb-1 text-xs font-semibold">Action Descriptor</p>
+                            <pre className="overflow-auto rounded-md border border-stone-200 bg-white p-2 text-xs">
+                              {JSON.stringify(expanded[item.id]?.actionDescriptor ?? null, null, 2)}
+                            </pre>
+                          </div>
                         </div>
                       </div>
                     </td>

@@ -81,7 +81,8 @@ import {
   type RuntimeSettings
 } from "./settings/runtimeSettings";
 import { createCatalogResolver } from "./services/catalogResolver";
-import { createOrchestrationService, type ActionDescriptor } from "./services/orchestrationService";
+import { buildActionDescriptor, type RuntimeActionDescriptor } from "./services/actionDescriptor";
+import { createOrchestrationService } from "./services/orchestrationService";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -176,6 +177,21 @@ const updateDraftBodySchema = z.object({
 const validateDraftBodySchema = z
   .object({
     definition: z.unknown().optional()
+  })
+  .optional();
+
+const previewActivationBodySchema = z
+  .object({
+    appKey: z.string().min(1).optional(),
+    placement: z.string().min(1).optional(),
+    profileId: z.string().min(1).optional(),
+    lookup: z
+      .object({
+        attribute: z.string().min(1),
+        value: z.string().min(1)
+      })
+      .optional(),
+    context: z.record(z.unknown()).optional()
   })
   .optional();
 
@@ -602,54 +618,77 @@ const sanitizeDebugTraceForLog = (trace: unknown): unknown => {
   return next;
 };
 
-const toStringTags = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
+const parsePolicySummary = (
+  value: unknown
+):
+  | {
+      allowed: boolean;
+      blockingRule?: {
+        policyKey: string;
+        ruleId: string;
+        reasonCode: string;
+      };
+      tags: string[];
+    }
+  | null => {
+  if (!isPlainObject(value) || typeof value.allowed !== "boolean") {
+    return null;
   }
-  return [...new Set(value.filter((entry) => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))];
+  const tags = Array.isArray(value.tags)
+    ? value.tags.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+
+  const blockingCandidate = isPlainObject(value.blockingRule)
+    ? value.blockingRule
+    : isPlainObject(value.blockedBy)
+      ? value.blockedBy
+      : null;
+  const blockingRule =
+    blockingCandidate &&
+    typeof blockingCandidate.policyKey === "string" &&
+    typeof blockingCandidate.ruleId === "string" &&
+    typeof blockingCandidate.reasonCode === "string"
+      ? {
+          policyKey: blockingCandidate.policyKey,
+          ruleId: blockingCandidate.ruleId,
+          reasonCode: blockingCandidate.reasonCode
+        }
+      : undefined;
+
+  return {
+    allowed: value.allowed,
+    ...(blockingRule ? { blockingRule } : {}),
+    tags: [...new Set(tags)].sort((left, right) => left.localeCompare(right))
+  };
 };
 
-const toActionDescriptor = (input: {
-  actionType: string;
-  payload: Record<string, unknown>;
-  context?: Record<string, unknown>;
-  appKey?: string;
-  placement?: string;
-}): ActionDescriptor => {
-  const payload = input.payload;
-  const actionKeyCandidates = [
-    payload.actionKey,
-    payload.campaignId,
-    payload.campaign_id,
-    payload.offerId,
-    payload.offerKey,
-    payload.contentId,
-    payload.contentKey,
-    payload.templateId,
-    payload.templateKey
-  ];
-  const actionKey = actionKeyCandidates.find((candidate) => typeof candidate === "string" && candidate.trim().length > 0) as
-    | string
-    | undefined;
-  const tags = toStringTags(payload.tags);
-  const placement =
-    typeof payload.placement === "string" && payload.placement.trim().length > 0
-      ? payload.placement
-      : typeof input.context?.placement === "string"
-        ? input.context.placement
-        : input.placement;
-  const appKey =
-    typeof payload.appKey === "string" && payload.appKey.trim().length > 0
-      ? payload.appKey
-      : typeof input.context?.appKey === "string"
-        ? input.context.appKey
-        : input.appKey;
+const parseActionDescriptorSummary = (
+  value: unknown
+):
+  | {
+      actionType: string;
+      appKey?: string;
+      placement?: string;
+      offerKey?: string;
+      contentKey?: string;
+      campaignKey?: string;
+      tags: string[];
+    }
+  | null => {
+  if (!isPlainObject(value) || typeof value.actionType !== "string") {
+    return null;
+  }
+  const tags = Array.isArray(value.tags)
+    ? value.tags.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
   return {
-    actionType: input.actionType,
-    actionKey,
-    tags,
-    placement,
-    appKey
+    actionType: value.actionType,
+    ...(typeof value.appKey === "string" ? { appKey: value.appKey } : {}),
+    ...(typeof value.placement === "string" ? { placement: value.placement } : {}),
+    ...(typeof value.offerKey === "string" ? { offerKey: value.offerKey } : {}),
+    ...(typeof value.contentKey === "string" ? { contentKey: value.contentKey } : {}),
+    ...(typeof value.campaignKey === "string" ? { campaignKey: value.campaignKey } : {}),
+    tags: [...new Set(tags)].sort((left, right) => left.localeCompare(right))
   };
 };
 
@@ -740,6 +779,7 @@ const evaluateStackWithOrchestration = async (input: {
   nowMs?: () => number;
   environment: Environment;
   orchestration: ReturnType<typeof createOrchestrationService>;
+  catalogResolver: ReturnType<typeof createCatalogResolver>;
 }): Promise<StackEvaluationResult & { policyDebugRules: Array<Record<string, unknown>> }> => {
   const hrNow = () => Number(process.hrtime.bigint() / 1000000n);
   const readNow = input.nowMs ?? hrNow;
@@ -748,6 +788,7 @@ const evaluateStackWithOrchestration = async (input: {
   const maxSteps = Math.min(input.stack.limits.maxSteps, stepHardCap);
   const maxTotalMs = input.stack.limits.maxTotalMs;
   const nowDate = new Date(input.context.now);
+  const contextRecord = input.context as unknown as Record<string, unknown>;
   const policyDebugRules: Array<Record<string, unknown>> = [];
 
   const exportsState: Record<string, unknown> = { suppressed: false };
@@ -836,15 +877,32 @@ const evaluateStackWithOrchestration = async (input: {
 
     const matched = Boolean(result.selectedRuleId);
     let actionType = result.actionType;
-    let payload = result.payload;
+    const resolvedForPolicy = await input.catalogResolver.resolvePayloadRef({
+      environment: input.environment,
+      actionType,
+      payload: result.payload,
+      locale: typeof input.context.locale === "string" ? input.context.locale : undefined,
+      profile: input.profile,
+      context: input.context,
+      now: nowDate
+    });
+    let payload = resolvedForPolicy.payload;
     let reasonCodes = result.reasons.map((reason) => reason.code);
 
     if (result.outcome === "ELIGIBLE") {
-      const descriptor = toActionDescriptor({
-        actionType,
-        payload,
-        context: input.context as unknown as Record<string, unknown>
-      });
+      const descriptor = await buildActionDescriptor(
+        {
+          actionType,
+          payload: result.payload,
+          tags: resolvedForPolicy.tags
+        },
+        {
+          environment: input.environment,
+          appKey: typeof contextRecord.appKey === "string" ? contextRecord.appKey : undefined,
+          placement: typeof contextRecord.placement === "string" ? contextRecord.placement : undefined,
+          catalogResolver: input.catalogResolver
+        }
+      );
       const orchestrationEvaluation = await input.orchestration.evaluateAction({
         environment: input.environment,
         appKey: descriptor.appKey,
@@ -2152,6 +2210,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   await registerCatalogRoutes({
     app,
     prisma,
+    cache,
     meiro,
     wbsAdapter,
     now,
@@ -2186,6 +2245,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   await registerOrchestrationRoutes({
     app,
     prisma,
+    cache,
+    now,
     orchestration,
     resolveEnvironment: (request, reply) => resolveEnvironment(request, reply),
     buildResponseError,
@@ -2940,7 +3001,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
-    if (!params.success) {
+    const body = previewActivationBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
       return buildResponseError(reply, 400, "Invalid decision id");
     }
 
@@ -2977,13 +3039,99 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       warnings.push("Rules were removed compared to active version.");
     }
 
+    const previewNow = now();
+    const previewProfileId =
+      body.data?.profileId ?? (body.data?.lookup ? `lookup:${body.data.lookup.attribute}:${body.data.lookup.value}` : undefined);
+    const locale = typeof body.data?.context?.locale === "string" ? body.data.context.locale : undefined;
+    const policyImpactActions = await Promise.all(
+      draftDefinition.flow.rules.map(async (rule) => {
+        const resolvedAction = await catalogResolver.resolvePayloadRef({
+          environment,
+          actionType: rule.then.actionType,
+          payload: rule.then.payload,
+          locale,
+          context: body.data?.context,
+          now: previewNow
+        });
+        const descriptor = await buildActionDescriptor(
+          {
+            actionType: rule.then.actionType,
+            payload: rule.then.payload,
+            tags: resolvedAction.tags
+          },
+          {
+            environment,
+            appKey: body.data?.appKey,
+            placement: body.data?.placement,
+            catalogResolver,
+            metadata: {
+              source: "v1_decisions_preview_activation",
+              decisionKey: draftDefinition.key,
+              decisionVersion: draftDefinition.version
+            }
+          }
+        );
+
+        const previewResult = await orchestration.previewAction({
+          environment,
+          appKey: descriptor.appKey ?? body.data?.appKey,
+          profileId: previewProfileId,
+          action: descriptor,
+          now: previewNow
+        });
+
+        const blockedRule = previewResult.blockedBy
+          ? previewResult.evaluatedRules.find((entry) => entry.ruleId === previewResult.blockedBy?.ruleId)
+          : undefined;
+        const requiresProfile = previewResult.evaluatedRules.some((entry) => entry.requiresProfile);
+
+        let warning: string | undefined;
+        if (!previewResult.allowed && previewResult.blockedBy) {
+          if (blockedRule?.ruleType === "mutex_group") {
+            warning = `This action is likely to be blocked by mutex rule ${previewResult.blockedBy.ruleId}.`;
+          } else if (blockedRule?.ruleType === "frequency_cap") {
+            warning = "This action violates a global cap for at least one profile.";
+          } else if (blockedRule?.ruleType === "cooldown") {
+            warning = "This action is likely to be blocked by cooldown after trigger events.";
+          } else {
+            warning = `This action is likely to be blocked by policy rule ${previewResult.blockedBy.ruleId}.`;
+          }
+        } else if (requiresProfile) {
+          warning = "Cap and counter checks require a profile for full impact preview.";
+        }
+        if (warning) {
+          warnings.push(warning);
+        }
+
+        return {
+          ruleId: rule.id,
+          actionType: rule.then.actionType,
+          ...(descriptor.offerKey ? { offerKey: descriptor.offerKey } : {}),
+          ...(descriptor.contentKey ? { contentKey: descriptor.contentKey } : {}),
+          ...(descriptor.campaignKey ? { campaignKey: descriptor.campaignKey } : {}),
+          effectiveTags: previewResult.effectiveTags,
+          allowed: previewResult.allowed,
+          ...(previewResult.blockedBy ? { blockedBy: previewResult.blockedBy } : {}),
+          evaluatedRules: previewResult.evaluatedRules.map((entry) => ({
+            ruleId: entry.ruleId,
+            result: entry.result,
+            ...(entry.reasonCode ? { reasonCode: entry.reasonCode } : {})
+          })),
+          ...(warning ? { warning } : {})
+        };
+      })
+    );
+
     return {
       decisionId: decision.id,
       environment,
       draftVersion: draft.version,
       activeVersion: active?.version ?? null,
       diffSummary,
-      warnings
+      warnings: [...new Set(warnings)],
+      policyImpact: {
+        actions: policyImpactActions
+      }
     };
   });
 
@@ -3919,7 +4067,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       debug: Boolean(parsed.data.debug),
       nowMs: stackNowMs,
       environment,
-      orchestration
+      orchestration,
+      catalogResolver
     });
 
     const resolvedStackFinal = await catalogResolver.resolvePayloadRef({
@@ -3950,11 +4099,23 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       })
     );
 
-    const finalDescriptor = toActionDescriptor({
-      actionType: stackResult.final.actionType,
-      payload: resolvedStackFinal.payload,
-      context: stackEvaluationContext as unknown as Record<string, unknown>
-    });
+    const finalDescriptor = await buildActionDescriptor(
+      {
+        actionType: stackResult.final.actionType,
+        payload: stackResult.final.payload,
+        tags: resolvedStackFinal.tags
+      },
+      {
+        environment,
+        appKey: typeof stackEvaluationContext.appKey === "string" ? stackEvaluationContext.appKey : undefined,
+        placement: typeof stackEvaluationContext.placement === "string" ? stackEvaluationContext.placement : undefined,
+        catalogResolver,
+        metadata: {
+          source: "v1_decide_stack_final",
+          stackKey: stackDefinition.key
+        }
+      }
+    );
     const finalOrchestrationEvaluation = await orchestration.evaluateAction({
       environment,
       appKey: finalDescriptor.appKey,
@@ -4019,7 +4180,17 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
               ...(lookupSummary ? { lookup: lookupSummary } : {}),
               orchestration: {
                 stepRules: stackResult.policyDebugRules,
-                finalRules: finalOrchestrationEvaluation.debugRules
+                finalRules: finalOrchestrationEvaluation.debugRules,
+                finalBlockedBy: finalOrchestrationEvaluation.blockedBy,
+                finalActionDescriptor: {
+                  actionType: finalDescriptor.actionType,
+                  appKey: finalDescriptor.appKey,
+                  placement: finalDescriptor.placement,
+                  offerKey: finalDescriptor.offerKey,
+                  contentKey: finalDescriptor.contentKey,
+                  campaignKey: finalDescriptor.campaignKey,
+                  tags: finalDescriptor.tags
+                }
               }
             }
           : {})
@@ -4961,11 +5132,24 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       const responseReasons = [...finalResult.reasons];
       const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
 
-      const orchestrationDescriptor = toActionDescriptor({
-        actionType: runtimeActionType,
-        payload: runtimePayload,
-        context: parsed.data.context as Record<string, unknown> | undefined
-      });
+      const orchestrationDescriptor = await buildActionDescriptor(
+        {
+          actionType: finalResult.actionType,
+          payload: finalResult.payload,
+          tags: resolvedPayloadRef.tags
+        },
+        {
+          environment,
+          appKey: parsed.data.context?.appKey,
+          placement: parsed.data.context?.placement,
+          catalogResolver,
+          metadata: {
+            source: "v1_decide",
+            decisionKey: decisionDefinition.key,
+            decisionVersion: decisionDefinition.version
+          }
+        }
+      );
       const orchestrationEvaluation =
         runtimeOutcome === "ELIGIBLE"
           ? await orchestration.evaluateAction({
@@ -4988,7 +5172,16 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             event: "orchestration_policy_blocked",
             requestId,
             profileId: profile.profileId,
-            reasonCode: orchestrationEvaluation.reasons[0]?.code ?? "ORCHESTRATION_BLOCKED"
+            reasonCode: orchestrationEvaluation.reasons[0]?.code ?? "ORCHESTRATION_BLOCKED",
+            blockedBy: orchestrationEvaluation.blockedBy,
+            actionDescriptor: {
+              actionType: orchestrationDescriptor.actionType,
+              placement: orchestrationDescriptor.placement,
+              offerKey: orchestrationDescriptor.offerKey,
+              contentKey: orchestrationDescriptor.contentKey,
+              campaignKey: orchestrationDescriptor.campaignKey,
+              tags: orchestrationDescriptor.tags
+            }
           },
           "Decision action blocked by orchestration policy"
         );
@@ -5008,7 +5201,17 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           integrationTrace.orchestration = {
             allowed: orchestrationEvaluation.allowed,
             reasons: orchestrationEvaluation.reasons,
-            rules: orchestrationEvaluation.debugRules
+            rules: orchestrationEvaluation.debugRules,
+            blockedBy: orchestrationEvaluation.blockedBy,
+            actionDescriptor: {
+              actionType: orchestrationDescriptor.actionType,
+              appKey: orchestrationDescriptor.appKey,
+              placement: orchestrationDescriptor.placement,
+              offerKey: orchestrationDescriptor.offerKey,
+              contentKey: orchestrationDescriptor.contentKey,
+              campaignKey: orchestrationDescriptor.campaignKey,
+              tags: orchestrationDescriptor.tags
+            }
           };
         }
       }
@@ -5077,6 +5280,31 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           })
         : undefined;
 
+      const actionDescriptorForLog: RuntimeActionDescriptor | null = orchestrationEvaluation ? orchestrationDescriptor : null;
+      const policyForLog = orchestrationEvaluation
+        ? {
+            allowed: orchestrationEvaluation.allowed,
+            blockingRule: orchestrationEvaluation.blockedBy,
+            tags: orchestrationDescriptor.tags
+          }
+        : null;
+      const baseLogTrace = {
+        actionDescriptor: actionDescriptorForLog
+          ? {
+              actionType: actionDescriptorForLog.actionType,
+              placement: actionDescriptorForLog.placement,
+              appKey: actionDescriptorForLog.appKey,
+              offerKey: actionDescriptorForLog.offerKey,
+              contentKey: actionDescriptorForLog.contentKey,
+              campaignKey: actionDescriptorForLog.campaignKey,
+              tags: actionDescriptorForLog.tags
+            }
+          : null,
+        policy: policyForLog
+      };
+      const sanitizedTrace = traceEnvelope ? sanitizeDebugTraceForLog(traceEnvelope) : null;
+      const sanitizedTraceRecord = isPlainObject(sanitizedTrace) ? sanitizedTrace : {};
+
       if (!internalRefresh) {
         await prisma.decisionLog.create({
           data: {
@@ -5088,11 +5316,12 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             payloadJson: toInputJson(runtimePayload),
             outcome: runtimeOutcome,
             reasonsJson: toInputJson(responseReasons),
-            debugTraceJson: parsed.data.debug
-              ? traceEnvelope
-                ? toInputJson(sanitizeDebugTraceForLog(traceEnvelope))
-                : Prisma.JsonNull
-              : undefined,
+            debugTraceJson: traceEnvelope
+              ? toInputJson({
+                  ...baseLogTrace,
+                  ...sanitizedTraceRecord
+                })
+              : toInputJson(baseLogTrace),
             inputJson: toInputJson({
               decisionId: parsed.data.decisionId,
               decisionKey: parsed.data.decisionKey,
@@ -5137,15 +5366,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       }
 
       if (!internalRefresh && orchestrationEvaluation?.allowed && runtimeOutcome === "ELIGIBLE" && isExposureAction(runtimeActionType)) {
-        const descriptor = toActionDescriptor({
-          actionType: runtimeActionType,
-          payload: runtimePayload,
-          context: parsed.data.context as Record<string, unknown> | undefined
-        });
         await orchestration.recordExposure({
           environment,
           profileId: profile.profileId,
-          action: descriptor,
+          action: orchestrationDescriptor,
           now: nowDate,
           evaluation: orchestrationEvaluation,
           metadata: {
@@ -5420,21 +5644,25 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         limit,
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
-        items: logs.map((log) => ({
-          id: log.id,
-          logType: "inapp",
-          requestId: log.correlationId,
-          decisionId: log.campaignKey ?? "inapp",
-          version: 1,
-          profileId: log.profileId,
-          timestamp: log.createdAt.toISOString(),
-          actionType: log.shown ? "message" : "noop",
-          outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
-          reasons: log.reasonsJson,
-          latencyMs: log.totalMs ?? 0,
-          replayAvailable: log.replayInputJson !== null,
-          trace: includeTrace ? log.payloadJson : undefined
-        }))
+        items: logs.map((log) => {
+          const payloadRecord = isPlainObject(log.payloadJson) ? log.payloadJson : {};
+          return {
+            id: log.id,
+            logType: "inapp",
+            requestId: log.correlationId,
+            decisionId: log.campaignKey ?? "inapp",
+            version: 1,
+            profileId: log.profileId,
+            timestamp: log.createdAt.toISOString(),
+            actionType: log.shown ? "message" : "noop",
+            outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
+            reasons: log.reasonsJson,
+            latencyMs: log.totalMs ?? 0,
+            replayAvailable: log.replayInputJson !== null,
+            trace: includeTrace ? log.payloadJson : undefined,
+            policy: parsePolicySummary(payloadRecord._policy)
+          };
+        })
       };
     }
 
@@ -5469,21 +5697,25 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       limit,
       total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
-      items: logs.map((log) => ({
-        id: log.id,
-        logType: "decision",
-        requestId: log.requestId,
-        decisionId: log.decisionId,
-        version: log.version,
-        profileId: log.profileId,
-        timestamp: log.timestamp.toISOString(),
-        actionType: log.actionType,
-        outcome: log.outcome,
-        reasons: log.reasonsJson,
-        latencyMs: log.latencyMs,
-        replayAvailable: log.inputJson !== null,
-        trace: includeTrace ? log.debugTraceJson : undefined
-      }))
+      items: logs.map((log) => {
+        const traceRecord = isPlainObject(log.debugTraceJson) ? log.debugTraceJson : {};
+        return {
+          id: log.id,
+          logType: "decision",
+          requestId: log.requestId,
+          decisionId: log.decisionId,
+          version: log.version,
+          profileId: log.profileId,
+          timestamp: log.timestamp.toISOString(),
+          actionType: log.actionType,
+          outcome: log.outcome,
+          reasons: log.reasonsJson,
+          latencyMs: log.latencyMs,
+          replayAvailable: log.inputJson !== null,
+          trace: includeTrace ? log.debugTraceJson : undefined,
+          policy: parsePolicySummary(traceRecord.policy)
+        };
+      })
     };
   });
 
@@ -5546,6 +5778,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         return buildResponseError(reply, 404, "Log not found");
       }
 
+      const payloadRecord = isPlainObject(log.payloadJson) ? log.payloadJson : {};
+      const payload = { ...payloadRecord };
+      delete payload._policy;
+      delete payload._actionDescriptor;
+
       return {
         item: {
           id: log.id,
@@ -5556,11 +5793,13 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           profileId: log.profileId,
           timestamp: log.createdAt.toISOString(),
           actionType: log.shown ? "message" : "noop",
-          payload: (log.payloadJson ?? {}) as Record<string, unknown>,
+          payload,
           outcome: log.shown ? "ELIGIBLE" : "NOT_ELIGIBLE",
           reasons: log.reasonsJson,
           latencyMs: log.totalMs ?? 0,
           trace: query.data.includeTrace ? log.payloadJson : undefined,
+          actionDescriptor: parseActionDescriptorSummary(payloadRecord._actionDescriptor),
+          policy: parsePolicySummary(payloadRecord._policy),
           replayInput: (log.replayInputJson ?? null) as Record<string, unknown> | null
         }
       };
@@ -5582,6 +5821,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       return buildResponseError(reply, 404, "Log not found");
     }
 
+    const traceRecord = isPlainObject(log.debugTraceJson) ? log.debugTraceJson : {};
+
     return {
       item: {
         id: log.id,
@@ -5597,6 +5838,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         reasons: log.reasonsJson,
         latencyMs: log.latencyMs,
         trace: query.data.includeTrace ? log.debugTraceJson : undefined,
+        actionDescriptor: parseActionDescriptorSummary(traceRecord.actionDescriptor),
+        policy: parsePolicySummary(traceRecord.policy),
         replayInput: (log.inputJson ?? null) as Record<string, unknown> | null
       }
     };

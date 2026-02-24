@@ -491,7 +491,25 @@ export default function SimulatePage() {
       .map((entry) => (isRecord(entry) && typeof entry.code === "string" ? entry.code : null))
       .filter((entry): entry is string => Boolean(entry));
     const allowed = orchestration.allowed !== false;
-    return { allowed, reasons };
+    const blockedBy = isRecord(orchestration.blockedBy)
+      ? {
+          policyKey: typeof orchestration.blockedBy.policyKey === "string" ? orchestration.blockedBy.policyKey : undefined,
+          ruleId: typeof orchestration.blockedBy.ruleId === "string" ? orchestration.blockedBy.ruleId : undefined,
+          reasonCode: typeof orchestration.blockedBy.reasonCode === "string" ? orchestration.blockedBy.reasonCode : undefined
+        }
+      : null;
+    return { allowed, reasons, blockedBy };
+  }, [decisionResult?.trace]);
+
+  const decisionActionDescriptor = useMemo(() => {
+    if (!isRecord(decisionResult?.trace) || !isRecord(decisionResult.trace.integration)) {
+      return null;
+    }
+    const orchestration = decisionResult.trace.integration.orchestration;
+    if (!isRecord(orchestration) || !isRecord(orchestration.actionDescriptor)) {
+      return null;
+    }
+    return orchestration.actionDescriptor;
   }, [decisionResult?.trace]);
 
   const stackPolicyOutcome = useMemo(() => {
@@ -506,15 +524,41 @@ export default function SimulatePage() {
     const blockedCodes = finalRules
       .filter((entry) => isRecord(entry) && entry.blocked === true && typeof entry.reasonCode === "string")
       .map((entry) => String((entry as Record<string, unknown>).reasonCode));
+    const blockedBy = isRecord(orchestration.finalBlockedBy)
+      ? {
+          policyKey: typeof orchestration.finalBlockedBy.policyKey === "string" ? orchestration.finalBlockedBy.policyKey : undefined,
+          ruleId: typeof orchestration.finalBlockedBy.ruleId === "string" ? orchestration.finalBlockedBy.ruleId : undefined,
+          reasonCode:
+            typeof orchestration.finalBlockedBy.reasonCode === "string" ? orchestration.finalBlockedBy.reasonCode : undefined
+        }
+      : null;
     return {
       allowed: blockedCodes.length === 0,
-      reasons: blockedCodes
+      reasons: blockedCodes,
+      blockedBy
     };
+  }, [stackResult?.debug]);
+
+  const stackActionDescriptor = useMemo(() => {
+    if (!isRecord(stackResult?.debug) || !isRecord(stackResult.debug.orchestration)) {
+      return null;
+    }
+    return isRecord(stackResult.debug.orchestration.finalActionDescriptor)
+      ? stackResult.debug.orchestration.finalActionDescriptor
+      : null;
   }, [stackResult?.debug]);
 
   const inAppPolicyOutcome = useMemo(() => {
     if (!inAppResult) {
       return null;
+    }
+    if (isRecord(inAppResult.debug.policy)) {
+      const blockingRule = isRecord(inAppResult.debug.policy.blockingRule) ? inAppResult.debug.policy.blockingRule : null;
+      return {
+        allowed: inAppResult.debug.policy.allowed === true,
+        reasons: blockingRule && typeof blockingRule.reasonCode === "string" ? [blockingRule.reasonCode] : [],
+        blockedBy: blockingRule
+      };
     }
     const fallbackReason = inAppResult.debug.fallbackReason;
     const policyRules = Array.isArray(inAppResult.debug.policyRules) ? inAppResult.debug.policyRules : [];
@@ -524,7 +568,8 @@ export default function SimulatePage() {
     const reasons = blockedCodes.length > 0 ? blockedCodes : fallbackReason && isPolicyCode(fallbackReason) ? [fallbackReason] : [];
     return {
       allowed: reasons.length === 0,
-      reasons
+      reasons,
+      blockedBy: null
     };
   }, [inAppResult]);
 
@@ -974,6 +1019,24 @@ export default function SimulatePage() {
                       ? decisionPolicyOutcome.reasons.join(", ")
                       : "none"}
                   </p>
+                  {decisionPolicyOutcome?.blockedBy ? (
+                    <p>
+                      Blocking rule: {String(decisionPolicyOutcome.blockedBy.policyKey ?? "-")}/
+                      {String(decisionPolicyOutcome.blockedBy.ruleId ?? "-")}
+                    </p>
+                  ) : null}
+                  <p>
+                    Offer/Content:{" "}
+                    {decisionActionDescriptor
+                      ? `${String(decisionActionDescriptor.offerKey ?? "-")} / ${String(decisionActionDescriptor.contentKey ?? "-")}`
+                      : "-"}
+                  </p>
+                  <p>
+                    Tags:{" "}
+                    {decisionActionDescriptor && Array.isArray(decisionActionDescriptor.tags)
+                      ? decisionActionDescriptor.tags.join(", ") || "none"
+                      : "none"}
+                  </p>
                 </div>
                 <details>
                   <summary className="cursor-pointer font-medium">Payload</summary>
@@ -1062,6 +1125,24 @@ export default function SimulatePage() {
                   <p className="font-semibold">Policy outcome</p>
                   <p>State: {stackPolicyOutcome ? (stackPolicyOutcome.allowed ? "Allowed" : "Blocked") : "n/a"}</p>
                   <p>Reasons: {stackPolicyOutcome?.reasons.length ? stackPolicyOutcome.reasons.join(", ") : "none"}</p>
+                  {stackPolicyOutcome?.blockedBy ? (
+                    <p>
+                      Blocking rule: {String(stackPolicyOutcome.blockedBy.policyKey ?? "-")}/
+                      {String(stackPolicyOutcome.blockedBy.ruleId ?? "-")}
+                    </p>
+                  ) : null}
+                  <p>
+                    Offer/Content:{" "}
+                    {stackActionDescriptor
+                      ? `${String(stackActionDescriptor.offerKey ?? "-")} / ${String(stackActionDescriptor.contentKey ?? "-")}`
+                      : "-"}
+                  </p>
+                  <p>
+                    Tags:{" "}
+                    {stackActionDescriptor && Array.isArray(stackActionDescriptor.tags)
+                      ? stackActionDescriptor.tags.join(", ") || "none"
+                      : "none"}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(stackResult)}>
@@ -1132,6 +1213,24 @@ export default function SimulatePage() {
                   <p className="font-semibold">Policy outcome</p>
                   <p>State: {inAppPolicyOutcome ? (inAppPolicyOutcome.allowed ? "Allowed" : "Blocked") : "n/a"}</p>
                   <p>Reasons: {inAppPolicyOutcome?.reasons.length ? inAppPolicyOutcome.reasons.join(", ") : "none"}</p>
+                  {inAppPolicyOutcome?.blockedBy && isRecord(inAppPolicyOutcome.blockedBy) ? (
+                    <p>
+                      Blocking rule: {String(inAppPolicyOutcome.blockedBy.policyKey ?? "-")}/
+                      {String(inAppPolicyOutcome.blockedBy.ruleId ?? "-")}
+                    </p>
+                  ) : null}
+                  <p>
+                    Offer/Content:{" "}
+                    {inAppResult.debug.actionDescriptor
+                      ? `${inAppResult.debug.actionDescriptor.offerKey ?? "-"} / ${inAppResult.debug.actionDescriptor.contentKey ?? "-"}`
+                      : "-"}
+                  </p>
+                  <p>
+                    Tags:{" "}
+                    {inAppResult.debug.actionDescriptor?.tags?.length
+                      ? inAppResult.debug.actionDescriptor.tags.join(", ")
+                      : "none"}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(inAppResult)}>

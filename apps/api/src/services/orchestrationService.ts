@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { PrismaClient } from "@prisma/client";
+import type { ActionDescriptorV1 } from "@decisioning/shared";
 import type { JsonCache } from "../lib/cache";
 import {
   orchestrationPolicySchema,
@@ -9,12 +10,9 @@ import {
   type OrchestrationPolicyDocument
 } from "../orchestration/schema";
 
-export interface ActionDescriptor {
-  actionType: string;
+export interface ActionDescriptor extends ActionDescriptorV1 {
   actionKey?: string;
-  tags?: string[];
-  placement?: string;
-  appKey?: string;
+  tags: string[];
 }
 
 export interface OrchestrationReason {
@@ -61,6 +59,34 @@ interface MutexRuleContext {
   markerKey: string;
 }
 
+export interface OrchestrationBlockedBy {
+  policyKey: string;
+  ruleId: string;
+  reasonCode: string;
+}
+
+export interface OrchestrationPreviewRuleResult {
+  policyKey: string;
+  ruleId: string;
+  ruleType?: "frequency_cap" | "mutex_group" | "cooldown";
+  result: "allow" | "block" | "skip";
+  reasonCode?: string;
+  requiresProfile?: boolean;
+}
+
+export interface OrchestrationPreviewResult {
+  allowed: boolean;
+  blockedBy?: OrchestrationBlockedBy;
+  evaluatedRules: OrchestrationPreviewRuleResult[];
+  effectiveTags: string[];
+  counters?: {
+    perDayUsed?: number;
+    perDayLimit?: number;
+    perWeekUsed?: number;
+    perWeekLimit?: number;
+  };
+}
+
 export interface OrchestrationEvaluationResult {
   allowed: boolean;
   reasons: OrchestrationReason[];
@@ -69,6 +95,7 @@ export interface OrchestrationEvaluationResult {
   applicableFrequencyRules: FrequencyRuleContext[];
   applicableMutexRules: MutexRuleContext[];
   matchedMutexGroupKey?: string;
+  blockedBy?: OrchestrationBlockedBy;
 }
 
 export interface OrchestrationService {
@@ -84,6 +111,19 @@ export interface OrchestrationService {
     now: Date;
     debug?: boolean;
   }): Promise<OrchestrationEvaluationResult>;
+  previewAction(input: {
+    environment: string;
+    appKey?: string;
+    profileId?: string;
+    action: ActionDescriptor;
+    now: Date;
+    policyOverride?: {
+      key: string;
+      version: number;
+      appKey?: string | null;
+      policyJson: unknown;
+    };
+  }): Promise<OrchestrationPreviewResult>;
   recordExposure(input: {
     environment: string;
     profileId: string;
@@ -639,6 +679,11 @@ export const createOrchestrationService = (deps: {
             if (blocked) {
               return {
                 allowed: false,
+                blockedBy: {
+                  policyKey: policy.key,
+                  ruleId: rule.id,
+                  reasonCode: rule.reasonCode
+                },
                 reasons: [
                   {
                     code: rule.reasonCode,
@@ -728,6 +773,11 @@ export const createOrchestrationService = (deps: {
             if (blocked) {
               return {
                 allowed: false,
+                blockedBy: {
+                  policyKey: policy.key,
+                  ruleId: rule.id,
+                  reasonCode: rule.reasonCode
+                },
                 reasons: [
                   {
                     code: rule.reasonCode,
@@ -807,6 +857,11 @@ export const createOrchestrationService = (deps: {
           if (blocked) {
             return {
               allowed: false,
+              blockedBy: {
+                policyKey: policy.key,
+                ruleId: rule.id,
+                reasonCode: rule.reasonCode
+              },
               reasons: [
                 {
                   code: rule.reasonCode,
@@ -832,6 +887,11 @@ export const createOrchestrationService = (deps: {
         if (policy.defaults.mode === "fail_closed") {
           return {
             allowed: false,
+            blockedBy: {
+              policyKey: policy.key,
+              ruleId: "orchestration_eval_error",
+              reasonCode: "ORCHESTRATION_EVAL_ERROR"
+            },
             reasons: [
               {
                 code: "ORCHESTRATION_EVAL_ERROR",
@@ -854,6 +914,358 @@ export const createOrchestrationService = (deps: {
       debugRules,
       applicableFrequencyRules,
       applicableMutexRules
+    };
+  };
+
+  const previewAction = async (input: {
+    environment: string;
+    appKey?: string;
+    profileId?: string;
+    action: ActionDescriptor;
+    now: Date;
+    policyOverride?: {
+      key: string;
+      version: number;
+      appKey?: string | null;
+      policyJson: unknown;
+    };
+  }): Promise<OrchestrationPreviewResult> => {
+    const effectiveTags = toTags(input.action.tags);
+    const evaluatedRules: OrchestrationPreviewRuleResult[] = [];
+    let counters: OrchestrationPreviewResult["counters"];
+
+    const policies: LoadedPolicy[] = [];
+    if (input.policyOverride) {
+      const parsed = orchestrationPolicySchema.safeParse(input.policyOverride.policyJson);
+      if (parsed.success) {
+        policies.push({
+          id: `preview:${input.policyOverride.key}:${input.policyOverride.version}`,
+          key: input.policyOverride.key,
+          version: input.policyOverride.version,
+          appKey: input.policyOverride.appKey ?? null,
+          defaults: parsed.data.defaults,
+          rules: parsed.data.rules
+        });
+      }
+    } else {
+      const loaded = await loadActivePolicies(input.environment, input.appKey);
+      policies.push(...loaded);
+    }
+
+    if (policies.length === 0) {
+      return {
+        allowed: true,
+        evaluatedRules,
+        effectiveTags
+      };
+    }
+
+    for (const policy of policies) {
+      try {
+        for (const rule of policy.rules) {
+          if (rule.type === "frequency_cap") {
+            const applied = matchesRuleAppliesTo({
+              action: input.action,
+              actionTypes: rule.appliesTo.actionTypes,
+              tagsAny: rule.appliesTo.tagsAny
+            });
+            if (!applied) {
+              evaluatedRules.push({
+                policyKey: policy.key,
+                ruleId: rule.id,
+                ruleType: "frequency_cap",
+                result: "skip"
+              });
+              continue;
+            }
+            if (!input.profileId) {
+              evaluatedRules.push({
+                policyKey: policy.key,
+                ruleId: rule.id,
+                ruleType: "frequency_cap",
+                result: "skip",
+                reasonCode: "REQUIRES_PROFILE",
+                requiresProfile: true
+              });
+              continue;
+            }
+
+            const identity = buildRuleIdentity(policy, rule.id);
+            const scopeValue = buildScopeValue({
+              rule,
+              action: input.action,
+              requestAppKey: input.appKey
+            });
+            const dayKey = buildFrequencyCounterKey({
+              environment: input.environment,
+              profileId: input.profileId,
+              ruleIdentity: identity,
+              scopeValue,
+              period: "day",
+              bucket: dayBucket(input.now)
+            });
+            const weekKey = buildFrequencyCounterKey({
+              environment: input.environment,
+              profileId: input.profileId,
+              ruleIdentity: identity,
+              scopeValue,
+              period: "week",
+              bucket: weekBucket(input.now)
+            });
+
+            const actionTypes = rule.appliesTo.actionTypes?.length ? rule.appliesTo.actionTypes : [input.action.actionType];
+            const dayStartsAt = startOfDayUtc(input.now);
+            const weekStartsAt = startOfWeekUtc(input.now);
+            const [perDay, perWeek] = await Promise.all([
+              typeof rule.limits.perDay === "number"
+                ? (await readCounter(dayKey)) ??
+                  (await countMatchingEvents({
+                    environment: input.environment,
+                    profileId: input.profileId,
+                    actionTypes,
+                    startsAt: dayStartsAt,
+                    scope: rule.scope,
+                    appKey: input.action.appKey ?? input.appKey,
+                    placement: input.action.placement
+                  }))
+                : 0,
+              typeof rule.limits.perWeek === "number"
+                ? (await readCounter(weekKey)) ??
+                  (await countMatchingEvents({
+                    environment: input.environment,
+                    profileId: input.profileId,
+                    actionTypes,
+                    startsAt: weekStartsAt,
+                    scope: rule.scope,
+                    appKey: input.action.appKey ?? input.appKey,
+                    placement: input.action.placement
+                  }))
+                : 0
+            ]);
+
+            if (!counters) {
+              counters = {
+                perDayUsed: perDay,
+                perDayLimit: rule.limits.perDay,
+                perWeekUsed: perWeek,
+                perWeekLimit: rule.limits.perWeek
+              };
+            }
+
+            const blocked =
+              (typeof rule.limits.perDay === "number" && perDay >= rule.limits.perDay) ||
+              (typeof rule.limits.perWeek === "number" && perWeek >= rule.limits.perWeek);
+
+            evaluatedRules.push({
+              policyKey: policy.key,
+              ruleId: rule.id,
+              ruleType: "frequency_cap",
+              result: blocked ? "block" : "allow",
+              ...(blocked ? { reasonCode: rule.reasonCode } : {})
+            });
+
+            if (blocked) {
+              return {
+                allowed: false,
+                blockedBy: {
+                  policyKey: policy.key,
+                  ruleId: rule.id,
+                  reasonCode: rule.reasonCode
+                },
+                evaluatedRules,
+                effectiveTags,
+                ...(counters ? { counters } : {})
+              };
+            }
+            continue;
+          }
+
+          if (rule.type === "mutex_group") {
+            const applied = matchesRuleAppliesTo({
+              action: input.action,
+              actionTypes: rule.appliesTo.actionTypes,
+              tagsAny: rule.appliesTo.tagsAny
+            });
+            if (!applied) {
+              evaluatedRules.push({
+                policyKey: policy.key,
+                ruleId: rule.id,
+                ruleType: "mutex_group",
+                result: "skip"
+              });
+              continue;
+            }
+            if (!input.profileId) {
+              evaluatedRules.push({
+                policyKey: policy.key,
+                ruleId: rule.id,
+                ruleType: "mutex_group",
+                result: "allow",
+                reasonCode: "STATIC_MODE"
+              });
+              continue;
+            }
+
+            const markerKey = buildMutexKey({
+              environment: input.environment,
+              profileId: input.profileId,
+              groupKey: rule.groupKey
+            });
+            const markerTs = await readMarkerTs(markerKey);
+            const windowStartMs = input.now.getTime() - rule.window.seconds * 1000;
+            let blocked = markerTs !== null && markerTs >= windowStartMs;
+            if (!blocked && prisma.orchestrationEvent?.findFirst) {
+              const found = await prisma.orchestrationEvent.findFirst({
+                where: {
+                  environment: input.environment,
+                  profileId: input.profileId,
+                  groupKey: rule.groupKey,
+                  ts: {
+                    gte: new Date(windowStartMs)
+                  }
+                },
+                orderBy: {
+                  ts: "desc"
+                },
+                select: {
+                  ts: true
+                }
+              });
+              blocked = Boolean(found);
+            }
+
+            evaluatedRules.push({
+              policyKey: policy.key,
+              ruleId: rule.id,
+              ruleType: "mutex_group",
+              result: blocked ? "block" : "allow",
+              ...(blocked ? { reasonCode: rule.reasonCode } : {})
+            });
+            if (blocked) {
+              return {
+                allowed: false,
+                blockedBy: {
+                  policyKey: policy.key,
+                  ruleId: rule.id,
+                  reasonCode: rule.reasonCode
+                },
+                evaluatedRules,
+                effectiveTags,
+                ...(counters ? { counters } : {})
+              };
+            }
+            continue;
+          }
+
+          const blocks = intersects(effectiveTags, rule.blocks.tagsAny);
+          if (!blocks) {
+            evaluatedRules.push({
+              policyKey: policy.key,
+              ruleId: rule.id,
+              ruleType: "cooldown",
+              result: "skip"
+            });
+            continue;
+          }
+          if (!input.profileId) {
+            evaluatedRules.push({
+              policyKey: policy.key,
+              ruleId: rule.id,
+              ruleType: "cooldown",
+              result: "allow",
+              reasonCode: "STATIC_MODE"
+            });
+            continue;
+          }
+
+          const markerKey = buildCooldownKey({
+            environment: input.environment,
+            profileId: input.profileId,
+            eventType: rule.trigger.eventType
+          });
+          const markerTs = await readMarkerTs(markerKey);
+          const windowStartMs = input.now.getTime() - rule.window.seconds * 1000;
+          let blocked = markerTs !== null && markerTs >= windowStartMs;
+          if (!blocked && prisma.orchestrationEvent?.findFirst) {
+            const found = await prisma.orchestrationEvent.findFirst({
+              where: {
+                environment: input.environment,
+                profileId: input.profileId,
+                actionType: rule.trigger.eventType,
+                ts: {
+                  gte: new Date(windowStartMs)
+                }
+              },
+              orderBy: {
+                ts: "desc"
+              },
+              select: {
+                ts: true
+              }
+            });
+            blocked = Boolean(found);
+          }
+
+          evaluatedRules.push({
+            policyKey: policy.key,
+            ruleId: rule.id,
+            ruleType: "cooldown",
+            result: blocked ? "block" : "allow",
+            ...(blocked ? { reasonCode: rule.reasonCode } : {})
+          });
+
+          if (blocked) {
+            return {
+              allowed: false,
+              blockedBy: {
+                policyKey: policy.key,
+                ruleId: rule.id,
+                reasonCode: rule.reasonCode
+              },
+              evaluatedRules,
+              effectiveTags,
+              ...(counters ? { counters } : {})
+            };
+          }
+        }
+      } catch (error) {
+        deps.logger.error(
+          {
+            err: error,
+            policyKey: policy.key,
+            policyVersion: policy.version
+          },
+          "Orchestration policy preview failed"
+        );
+        if (policy.defaults.mode === "fail_closed") {
+          return {
+            allowed: false,
+            blockedBy: {
+              policyKey: policy.key,
+              ruleId: "orchestration_eval_error",
+              reasonCode: "ORCHESTRATION_EVAL_ERROR"
+            },
+            evaluatedRules: [
+              ...evaluatedRules,
+              {
+                policyKey: policy.key,
+                ruleId: "orchestration_eval_error",
+                result: "block",
+                reasonCode: "ORCHESTRATION_EVAL_ERROR"
+              }
+            ],
+            effectiveTags,
+            ...(counters ? { counters } : {})
+          };
+        }
+      }
+    }
+
+    return {
+      allowed: true,
+      evaluatedRules,
+      effectiveTags,
+      ...(counters ? { counters } : {})
     };
   };
 
@@ -995,6 +1407,7 @@ export const createOrchestrationService = (deps: {
     invalidatePolicyCache,
     hasActivePolicies,
     evaluateAction,
+    previewAction,
     recordExposure,
     recordExternalEvent
   };

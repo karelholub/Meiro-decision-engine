@@ -103,7 +103,8 @@ describe("orchestration service", () => {
       profileId: "p-1001",
       action: {
         actionType: "message",
-        actionKey: "campaign_1"
+        actionKey: "campaign_1",
+        tags: []
       },
       now
     });

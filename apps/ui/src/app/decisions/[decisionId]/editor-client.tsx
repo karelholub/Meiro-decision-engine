@@ -560,6 +560,25 @@ export default function DecisionEditorClient({
           ) : (
             <p>No activation warnings.</p>
           )}
+          {activationPreview.policyImpact?.actions?.length ? (
+            <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-3">
+              <p className="font-semibold">Policy Impact</p>
+              {activationPreview.policyImpact.actions.map((action) => (
+                <div key={`${action.ruleId}:${action.actionType}`} className="rounded border border-stone-200 bg-white p-2 text-xs">
+                  <p>
+                    <strong>{action.ruleId}</strong> {"->"} {action.actionType} [{action.allowed ? "allowed" : "blocked"}]
+                  </p>
+                  <p>Tags: {action.effectiveTags.length ? action.effectiveTags.join(", ") : "none"}</p>
+                  {action.blockedBy ? (
+                    <p>
+                      Blocked by {action.blockedBy.policyKey}/{action.blockedBy.ruleId} ({action.blockedBy.reasonCode})
+                    </p>
+                  ) : null}
+                  {action.warning ? <p className="text-amber-700">{action.warning}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -570,6 +589,7 @@ export default function DecisionEditorClient({
             validation={validation}
             environment={details.environment}
             readOnlyReasons={unsupported.supported ? [] : unsupported.reasons}
+            activationPreview={activationPreview}
             onDraftChange={handleWizardDraftChange}
             onOpenAdvanced={() => switchTab("advanced")}
             onRunSimulation={async (definition, profileJson) => {

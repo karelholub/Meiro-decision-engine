@@ -1,9 +1,10 @@
-import { Prisma } from "@prisma/client";
-import type { Environment, PrismaClient } from "@prisma/client";
+import { Environment, InAppCampaignStatus, Prisma } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { MeiroAdapter, WbsLookupAdapter, WbsLookupResponse } from "@decisioning/meiro";
 import { WbsMappingConfigSchema, mapWbsLookupToProfile } from "@decisioning/wbs-mapping";
 import { z } from "zod";
+import type { JsonCache } from "../lib/cache";
 import { createCatalogResolver } from "../services/catalogResolver";
 
 const isObject = (value: unknown): value is Record<string, unknown> => {
@@ -67,6 +68,11 @@ const contentUpdateBodySchema = z.object({
 const listQuerySchema = z.object({
   key: z.string().optional(),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
+  q: z.string().optional()
+});
+
+const tagsQuerySchema = z.object({
+  env: z.nativeEnum(Environment).optional(),
   q: z.string().optional()
 });
 
@@ -134,6 +140,7 @@ interface WbsMappingRecord {
 export interface RegisterCatalogRoutesDeps {
   app: FastifyInstance;
   prisma: PrismaClient;
+  cache?: JsonCache;
   meiro: MeiroAdapter;
   wbsAdapter: WbsLookupAdapter;
   now: () => Date;
@@ -336,7 +343,8 @@ const serializeContentBlock = (item: {
 export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => {
   const resolver = createCatalogResolver({
     prisma: deps.prisma,
-    now: deps.now
+    now: deps.now,
+    cache: deps.cache
   });
 
   const recordAudit = async (input: {
@@ -405,6 +413,86 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
 
     return {
       items: items.map(serializeOffer)
+    };
+  });
+
+  deps.app.get("/v1/catalog/tags", async (request, reply) => {
+    const envFromHeader = deps.resolveEnvironment(request, reply);
+    if (!envFromHeader) {
+      return;
+    }
+
+    const query = tagsQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+
+    const environment = query.data.env ?? envFromHeader;
+    const q = (query.data.q ?? "").trim().toLowerCase();
+    const matches = (tag: string) => (q ? tag.toLowerCase().includes(q) : true);
+
+    const [offers, contents, campaigns] = await Promise.all([
+      deps.prisma.offer.findMany({
+        where: {
+          environment,
+          status: "ACTIVE"
+        },
+        select: {
+          tags: true
+        }
+      }),
+      deps.prisma.contentBlock.findMany({
+        where: {
+          environment,
+          status: "ACTIVE"
+        },
+        select: {
+          tags: true
+        }
+      }),
+      deps.prisma.inAppCampaign.findMany({
+        where: {
+          environment,
+          status: InAppCampaignStatus.ACTIVE
+        },
+        select: {
+          variants: {
+            select: {
+              contentJson: true
+            }
+          }
+        }
+      })
+    ]);
+
+    const collect = (raw: unknown): string[] =>
+      Array.isArray(raw)
+        ? raw.flatMap((entry) =>
+            typeof entry === "string" && entry.trim().length > 0 ? [entry.trim()] : []
+          )
+        : [];
+
+    const offerTags = [...new Set(offers.flatMap((item) => collect(item.tags)))].filter(matches).sort((a, b) => a.localeCompare(b));
+    const contentTags = [...new Set(contents.flatMap((item) => collect(item.tags)))].filter(matches).sort((a, b) => a.localeCompare(b));
+    const campaignTags = [
+      ...new Set(
+        campaigns.flatMap((campaign) =>
+          campaign.variants.flatMap((variant) => {
+            if (!isObject(variant.contentJson)) {
+              return [];
+            }
+            return collect(variant.contentJson.tags);
+          })
+        )
+      )
+    ]
+      .filter(matches)
+      .sort((a, b) => a.localeCompare(b));
+
+    return {
+      offerTags,
+      contentTags,
+      campaignTags
     };
   });
 

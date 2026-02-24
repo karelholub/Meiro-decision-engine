@@ -1131,6 +1131,30 @@ export default function InAppCampaignEditPage() {
               </table>
             </div>
           ) : null}
+
+          {activationPreview.policyImpact ? (
+            <div className="rounded-md border border-stone-200 bg-white p-3 text-sm">
+              <p className="font-semibold">Policy Impact</p>
+              <p className="mt-1 text-xs">
+                Action: {activationPreview.policyImpact.actionDescriptor.actionType} [{activationPreview.policyImpact.allowed ? "allowed" : "blocked"}]
+              </p>
+              <p className="text-xs">
+                Tags:{" "}
+                {activationPreview.policyImpact.actionDescriptor.tags.length
+                  ? activationPreview.policyImpact.actionDescriptor.tags.join(", ")
+                  : "none"}
+              </p>
+              {activationPreview.policyImpact.blockedBy ? (
+                <p className="text-xs">
+                  Blocked by {activationPreview.policyImpact.blockedBy.policyKey}/
+                  {activationPreview.policyImpact.blockedBy.ruleId} ({activationPreview.policyImpact.blockedBy.reasonCode})
+                </p>
+              ) : null}
+              {activationPreview.policyImpact.warning ? (
+                <p className="mt-1 text-xs text-amber-700">{activationPreview.policyImpact.warning}</p>
+              ) : null}
+            </div>
+          ) : null}
         </article>
       ) : null}
 

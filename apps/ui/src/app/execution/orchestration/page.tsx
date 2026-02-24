@@ -32,6 +32,80 @@ const toCsv = (value: string[] | undefined): string => (Array.isArray(value) ? v
 
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2);
 
+function TagMultiSelect({
+  id,
+  value,
+  options,
+  placeholder,
+  onChange
+}: {
+  id: string;
+  value: string[] | undefined;
+  options: string[];
+  placeholder: string;
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const selected = Array.isArray(value) ? value : [];
+
+  const addTag = (raw: string) => {
+    const tag = raw.trim();
+    if (!tag) {
+      return;
+    }
+    if (selected.includes(tag)) {
+      setDraft("");
+      return;
+    }
+    onChange([...selected, tag].sort((left, right) => left.localeCompare(right)));
+    setDraft("");
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
+        {selected.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 rounded border border-stone-300 bg-stone-50 px-2 py-0.5 text-xs">
+            {tag}
+            <button
+              type="button"
+              className="text-stone-600 hover:text-red-700"
+              onClick={() => onChange(selected.filter((entry) => entry !== tag))}
+            >
+              x
+            </button>
+          </span>
+        ))}
+      </div>
+      <input
+        className="w-full rounded border border-stone-300 px-2 py-1 text-sm"
+        list={`${id}-catalog-tags`}
+        value={draft}
+        placeholder={placeholder}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === ",") {
+            event.preventDefault();
+            addTag(draft);
+          }
+        }}
+        onBlur={() => {
+          if (draft.trim()) {
+            addTag(draft);
+          }
+        }}
+      />
+      <datalist id={`${id}-catalog-tags`}>
+        {options
+          .filter((tag) => !selected.includes(tag))
+          .map((tag) => (
+            <option key={tag} value={tag} />
+          ))}
+      </datalist>
+    </div>
+  );
+}
+
 export default function OrchestrationPoliciesPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [items, setItems] = useState<OrchestrationPolicy[]>([]);
@@ -51,6 +125,11 @@ export default function OrchestrationPoliciesPage() {
   const [draftStatus, setDraftStatus] = useState<"DRAFT" | "ACTIVE" | "ARCHIVED">("DRAFT");
   const [draftPolicyJson, setDraftPolicyJson] = useState<OrchestrationPolicyJson>(DEFAULT_POLICY);
   const [fallbackPayloadText, setFallbackPayloadText] = useState("{}");
+  const [catalogTags, setCatalogTags] = useState<{ offerTags: string[]; contentTags: string[]; campaignTags: string[] }>({
+    offerTags: [],
+    contentTags: [],
+    campaignTags: []
+  });
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -68,17 +147,31 @@ export default function OrchestrationPoliciesPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await apiClient.execution.orchestration.listPolicies({
-        status: statusFilter || undefined,
-        appKey: appKeyFilter || undefined
-      });
+      const [response, tags] = await Promise.all([
+        apiClient.execution.orchestration.listPolicies({
+          status: statusFilter || undefined,
+          appKey: appKeyFilter || undefined
+        }),
+        apiClient.catalog.tags().catch(() => null)
+      ]);
       setItems(response.items);
+      if (tags) {
+        setCatalogTags(tags);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load policies");
     } finally {
       setLoading(false);
     }
   };
+
+  const allKnownTags = useMemo(
+    () =>
+      [...new Set([...catalogTags.offerTags, ...catalogTags.contentTags, ...catalogTags.campaignTags])].sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [catalogTags.campaignTags, catalogTags.contentTags, catalogTags.offerTags]
+  );
 
   useEffect(() => {
     void load();
@@ -319,6 +412,7 @@ export default function OrchestrationPoliciesPage() {
             </button>
           ))}
         </div>
+        <p className="text-xs text-stone-600">Tag sources: Offer tags, Content tags, Campaign tags.</p>
 
         {tab === "basics" ? (
           <div className="grid gap-3 md:grid-cols-2">
@@ -412,7 +506,7 @@ export default function OrchestrationPoliciesPage() {
               Add cap rule
             </button>
             {frequencyRules.map((rule) => (
-              <div key={rule.id} className="grid gap-2 rounded-md border border-stone-200 p-3 md:grid-cols-6">
+              <div key={rule.id} className="grid gap-2 rounded-md border border-stone-200 p-3 md:grid-cols-7">
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" value={rule.id} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, id: event.target.value } : item)))} />
                 <select className="rounded border border-stone-300 px-2 py-1 text-sm" value={rule.scope} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, scope: event.target.value as "global" | "app" | "placement" } : item)))}>
                   <option value="global">global</option>
@@ -420,6 +514,27 @@ export default function OrchestrationPoliciesPage() {
                   <option value="placement">placement</option>
                 </select>
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="actionTypes csv" value={toCsv(rule.appliesTo?.actionTypes)} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, appliesTo: { ...rule.appliesTo, actionTypes: parseCsv(event.target.value) } } : item)))} />
+                <TagMultiSelect
+                  id={`cap-tags-${rule.id}`}
+                  value={rule.appliesTo?.tagsAny}
+                  options={allKnownTags}
+                  placeholder="tags (offer/content/campaign)"
+                  onChange={(tagsAny) =>
+                    updateRules(
+                      draftPolicyJson.rules.map((item) =>
+                        item === rule
+                          ? {
+                              ...rule,
+                              appliesTo: {
+                                ...rule.appliesTo,
+                                tagsAny
+                              }
+                            }
+                          : item
+                      )
+                    )
+                  }
+                />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="perDay" value={String(rule.limits.perDay ?? "")} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, limits: { ...rule.limits, perDay: event.target.value ? Number(event.target.value) : undefined } } : item)))} />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="perWeek" value={String(rule.limits.perWeek ?? "")} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, limits: { ...rule.limits, perWeek: event.target.value ? Number(event.target.value) : undefined } } : item)))} />
                 <button className="rounded border border-red-300 px-2 py-1 text-sm text-red-700" onClick={() => updateRules(draftPolicyJson.rules.filter((item) => item !== rule))}>
@@ -455,7 +570,27 @@ export default function OrchestrationPoliciesPage() {
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" value={rule.id} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, id: event.target.value } : item)))} />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="groupKey" value={rule.groupKey} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, groupKey: event.target.value } : item)))} />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="actionTypes csv" value={toCsv(rule.appliesTo?.actionTypes)} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, appliesTo: { ...rule.appliesTo, actionTypes: parseCsv(event.target.value) } } : item)))} />
-                <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="tags csv" value={toCsv(rule.appliesTo?.tagsAny)} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, appliesTo: { ...rule.appliesTo, tagsAny: parseCsv(event.target.value) } } : item)))} />
+                <TagMultiSelect
+                  id={`mutex-tags-${rule.id}`}
+                  value={rule.appliesTo?.tagsAny}
+                  options={allKnownTags}
+                  placeholder="tags (offer/content/campaign)"
+                  onChange={(tagsAny) =>
+                    updateRules(
+                      draftPolicyJson.rules.map((item) =>
+                        item === rule
+                          ? {
+                              ...rule,
+                              appliesTo: {
+                                ...rule.appliesTo,
+                                tagsAny
+                              }
+                            }
+                          : item
+                      )
+                    )
+                  }
+                />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="window seconds" value={String(rule.window.seconds)} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, window: { seconds: Number(event.target.value || 0) } } : item)))} />
                 <button className="rounded border border-red-300 px-2 py-1 text-sm text-red-700" onClick={() => updateRules(draftPolicyJson.rules.filter((item) => item !== rule))}>
                   Remove
@@ -489,7 +624,24 @@ export default function OrchestrationPoliciesPage() {
               <div key={rule.id} className="grid gap-2 rounded-md border border-stone-200 p-3 md:grid-cols-5">
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" value={rule.id} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, id: event.target.value } : item)))} />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="trigger eventType" value={rule.trigger.eventType} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, trigger: { eventType: event.target.value } } : item)))} />
-                <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="blocked tags csv" value={toCsv(rule.blocks.tagsAny)} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, blocks: { tagsAny: parseCsv(event.target.value) } } : item)))} />
+                <TagMultiSelect
+                  id={`cooldown-tags-${rule.id}`}
+                  value={rule.blocks.tagsAny}
+                  options={allKnownTags}
+                  placeholder="blocked tags"
+                  onChange={(tagsAny) =>
+                    updateRules(
+                      draftPolicyJson.rules.map((item) =>
+                        item === rule
+                          ? {
+                              ...rule,
+                              blocks: { tagsAny }
+                            }
+                          : item
+                      )
+                    )
+                  }
+                />
                 <input className="rounded border border-stone-300 px-2 py-1 text-sm" placeholder="window seconds" value={String(rule.window.seconds)} onChange={(event) => updateRules(draftPolicyJson.rules.map((item) => (item === rule ? { ...rule, window: { seconds: Number(event.target.value || 0) } } : item)))} />
                 <button className="rounded border border-red-300 px-2 py-1 text-sm text-red-700" onClick={() => updateRules(draftPolicyJson.rules.filter((item) => item !== rule))}>
                   Remove

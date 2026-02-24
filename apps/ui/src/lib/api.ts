@@ -1,6 +1,7 @@
 import { getEnvironment } from "./environment";
 import type {
   ActivationPreviewResponse,
+  CatalogTagsResponse,
   CatalogContentBlock,
   CatalogOffer,
   DecisionDetailsResponse,
@@ -23,6 +24,7 @@ import type {
   InAppTemplate,
   LogDetailsResponse,
   LogsQueryResponse,
+  OrchestrationPolicyPreviewResponse,
   WbsInstanceSettings,
   WbsMappingSettings
 } from "@decisioning/shared";
@@ -104,6 +106,24 @@ export type InAppV2DecideResponse = {
       engine: number;
     };
     policyRules?: unknown[];
+    policy?: {
+      allowed: boolean;
+      blockingRule?: {
+        policyKey: string;
+        ruleId: string;
+        reasonCode: string;
+      };
+      tags: string[];
+    };
+    actionDescriptor?: {
+      actionType: string;
+      appKey?: string;
+      placement?: string;
+      offerKey?: string;
+      contentKey?: string;
+      campaignKey?: string;
+      tags: string[];
+    };
     fallbackReason?: string;
   };
 };
@@ -460,6 +480,8 @@ export const apiClient = {
       body: JSON.stringify(input)
     }),
   catalog: {
+    tags: (params: { env?: "DEV" | "STAGE" | "PROD"; q?: string } = {}) =>
+      apiFetch<CatalogTagsResponse>(`/v1/catalog/tags${toQuery(params)}`),
     offers: {
       list: (params: { key?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; q?: string } = {}) =>
         apiFetch<{ items: CatalogOffer[] }>(`/v1/catalog/offers${toQuery(params)}`),
@@ -846,6 +868,27 @@ export const apiClient = {
             body: JSON.stringify({ policyJson })
           }
         ),
+      previewPolicyAction: (
+        key: string,
+        input: {
+          appKey?: string;
+          placement?: string;
+          candidateAction: {
+            actionType: string;
+            offerKey?: string;
+            contentKey?: string;
+            campaignKey?: string;
+            tags?: string[];
+          };
+          profileId?: string;
+          lookup?: { attribute: string; value: string };
+          context?: Record<string, unknown>;
+        }
+      ) =>
+        apiFetch<OrchestrationPolicyPreviewResponse>(`/v1/orchestration/policies/${encodeURIComponent(key)}/preview`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
       ingestEvent: (input: {
         profileId: string;
         eventType: string;
