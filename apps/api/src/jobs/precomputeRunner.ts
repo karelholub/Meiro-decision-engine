@@ -431,6 +431,9 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
         const final = asRecord(payload.final);
         const actionType = typeof final.actionType === "string" ? final.actionType : "noop";
         const normalizedPayload = asRecord(final.payload);
+        const finalReasonCodes = Array.isArray(final.reasonCodes)
+          ? final.reasonCodes.filter((code): code is string => typeof code === "string")
+          : [];
         const status = deriveStatusFromActionType(actionType);
         const ttlSeconds = normalizeTtlSeconds(normalizedPayload, ttlDefault);
         const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
@@ -457,9 +460,11 @@ export const createPrecomputeRunner = (deps: RunnerDeps): PrecomputeRunner => {
             } as Prisma.InputJsonValue,
             ttlSeconds,
             expiresAt,
-            reasonCode: typeof steps[0]?.reasonCodes?.[0] === "string" ? steps[0].reasonCodes[0] : null,
+            reasonCode:
+              finalReasonCodes[0] ?? (typeof steps[0]?.reasonCodes?.[0] === "string" ? steps[0].reasonCodes[0] : null),
             evidence: {
-              steps
+              steps,
+              finalReasonCodes
             } as Prisma.InputJsonValue,
             debug: payload.debug ? (payload.debug as Prisma.InputJsonValue) : undefined,
             status,

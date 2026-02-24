@@ -150,6 +150,7 @@ export interface DecideStackResponse {
   final: {
     actionType: string;
     payload: Record<string, unknown>;
+    reasonCodes?: string[];
   };
   steps: Array<{
     decisionKey: string;

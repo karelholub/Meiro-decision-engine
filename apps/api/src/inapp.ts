@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { JsonCache } from "./lib/cache";
 import { InAppV2EventsError, createInAppV2EventsService } from "./services/inappV2Events";
 import { createInAppV2RuntimeService } from "./services/inappV2Runtime";
+import type { OrchestrationService } from "./services/orchestrationService";
 import { getInAppGovernanceAllowedStatuses, getInAppGovernanceTransitionError } from "./lib/inappGovernance";
 
 interface WbsInstanceRecord {
@@ -88,6 +89,7 @@ export interface RegisterInAppRoutesDeps {
     lastFlushAt: string | null;
     lastError: string | null;
   } | null;
+  orchestration?: Pick<OrchestrationService, "evaluateAction" | "recordExposure" | "hasActivePolicies">;
 }
 
 const toInputJson = (value: unknown): Prisma.InputJsonValue => {
@@ -988,7 +990,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     now,
     getConfig: getInappV2Config,
     fetchActiveWbsInstance,
-    fetchActiveWbsMapping
+    fetchActiveWbsMapping,
+    orchestration: deps.orchestration
   });
 
   const inAppV2Events = createInAppV2EventsService({

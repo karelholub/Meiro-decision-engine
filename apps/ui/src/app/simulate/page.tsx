@@ -64,6 +64,8 @@ const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const toStringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : []);
+const POLICY_PREFIXES = ["GLOBAL_", "MUTEX_", "COOLDOWN_", "ORCHESTRATION_"];
+const isPolicyCode = (code: string): boolean => POLICY_PREFIXES.some((prefix) => code.startsWith(prefix));
 
 const toSimulationProfile = (value: unknown): SimulationProfile | null => {
   if (!isRecord(value) || typeof value.profileId !== "string" || value.profileId.trim().length === 0) {
@@ -471,6 +473,60 @@ export default function SimulatePage() {
     const removed = [...previousCodes].filter((code) => !currentCodes.has(code));
     return { added, removed };
   }, [previousDecisionResult, decisionResult]);
+
+  const decisionPolicyOutcome = useMemo(() => {
+    if (!isRecord(decisionResult?.trace)) {
+      return null;
+    }
+    const integration = decisionResult.trace.integration;
+    if (!isRecord(integration)) {
+      return null;
+    }
+    const orchestration = integration.orchestration;
+    if (!isRecord(orchestration)) {
+      return null;
+    }
+    const reasonsRaw = Array.isArray(orchestration.reasons) ? orchestration.reasons : [];
+    const reasons = reasonsRaw
+      .map((entry) => (isRecord(entry) && typeof entry.code === "string" ? entry.code : null))
+      .filter((entry): entry is string => Boolean(entry));
+    const allowed = orchestration.allowed !== false;
+    return { allowed, reasons };
+  }, [decisionResult?.trace]);
+
+  const stackPolicyOutcome = useMemo(() => {
+    if (!isRecord(stackResult?.debug)) {
+      return null;
+    }
+    const orchestration = stackResult.debug.orchestration;
+    if (!isRecord(orchestration)) {
+      return null;
+    }
+    const finalRules = Array.isArray(orchestration.finalRules) ? orchestration.finalRules : [];
+    const blockedCodes = finalRules
+      .filter((entry) => isRecord(entry) && entry.blocked === true && typeof entry.reasonCode === "string")
+      .map((entry) => String((entry as Record<string, unknown>).reasonCode));
+    return {
+      allowed: blockedCodes.length === 0,
+      reasons: blockedCodes
+    };
+  }, [stackResult?.debug]);
+
+  const inAppPolicyOutcome = useMemo(() => {
+    if (!inAppResult) {
+      return null;
+    }
+    const fallbackReason = inAppResult.debug.fallbackReason;
+    const policyRules = Array.isArray(inAppResult.debug.policyRules) ? inAppResult.debug.policyRules : [];
+    const blockedCodes = policyRules
+      .filter((entry) => isRecord(entry) && entry.blocked === true && typeof entry.reasonCode === "string")
+      .map((entry) => String((entry as Record<string, unknown>).reasonCode));
+    const reasons = blockedCodes.length > 0 ? blockedCodes : fallbackReason && isPolicyCode(fallbackReason) ? [fallbackReason] : [];
+    return {
+      allowed: reasons.length === 0,
+      reasons
+    };
+  }, [inAppResult]);
 
   const activeDecisionKeys = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
   const activeStackKeys = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
@@ -909,6 +965,16 @@ export default function SimulatePage() {
                 <p>
                   <strong>Reasons:</strong> {decisionResult.reasons.map((reason) => reason.code).join(", ")}
                 </p>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  <p className="font-semibold">Policy outcome</p>
+                  <p>State: {decisionPolicyOutcome ? (decisionPolicyOutcome.allowed ? "Allowed" : "Blocked") : "n/a"}</p>
+                  <p>
+                    Reasons:{" "}
+                    {decisionPolicyOutcome && decisionPolicyOutcome.reasons.length > 0
+                      ? decisionPolicyOutcome.reasons.join(", ")
+                      : "none"}
+                  </p>
+                </div>
                 <details>
                   <summary className="cursor-pointer font-medium">Payload</summary>
                   <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
@@ -992,6 +1058,11 @@ export default function SimulatePage() {
                 <p>
                   <strong>Total:</strong> {stackResult.trace.totalMs}ms
                 </p>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  <p className="font-semibold">Policy outcome</p>
+                  <p>State: {stackPolicyOutcome ? (stackPolicyOutcome.allowed ? "Allowed" : "Blocked") : "n/a"}</p>
+                  <p>Reasons: {stackPolicyOutcome?.reasons.length ? stackPolicyOutcome.reasons.join(", ") : "none"}</p>
+                </div>
                 <div className="flex items-center gap-2">
                   <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(stackResult)}>
                     Copy JSON
@@ -1057,6 +1128,11 @@ export default function SimulatePage() {
                 <p>
                   <strong>Tracking:</strong> {inAppResult.tracking.campaign_id || "none"} / {inAppResult.tracking.variant_id || "none"}
                 </p>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  <p className="font-semibold">Policy outcome</p>
+                  <p>State: {inAppPolicyOutcome ? (inAppPolicyOutcome.allowed ? "Allowed" : "Blocked") : "n/a"}</p>
+                  <p>Reasons: {inAppPolicyOutcome?.reasons.length ? inAppPolicyOutcome.reasons.join(", ") : "none"}</p>
+                </div>
                 <div className="flex items-center gap-2">
                   <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(inAppResult)}>
                     Copy JSON

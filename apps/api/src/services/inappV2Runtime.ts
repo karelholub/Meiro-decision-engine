@@ -12,6 +12,7 @@ import type { JsonCache } from "../lib/cache";
 import { sha256, stableStringify } from "../lib/cacheKey";
 import { withTimeout } from "../lib/timeout";
 import { createCatalogResolver } from "./catalogResolver";
+import type { OrchestrationService } from "./orchestrationService";
 
 export interface InAppV2DecideBody {
   appKey: string;
@@ -50,6 +51,7 @@ export interface InAppV2DecideResponse extends InAppDecideResponse {
       wbs: number;
       engine: number;
     };
+    policyRules?: unknown[];
     fallbackReason?: string;
   };
 }
@@ -101,6 +103,7 @@ interface InAppV2RuntimeDeps {
   };
   fetchActiveWbsInstance: (environment: Environment) => Promise<WbsInstanceRecord | null>;
   fetchActiveWbsMapping: (environment: Environment) => Promise<WbsMappingRecord | null>;
+  orchestration?: Pick<OrchestrationService, "evaluateAction" | "recordExposure" | "hasActivePolicies">;
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> => {
@@ -374,6 +377,17 @@ const buildInappV2CacheKey = (input: {
 
 const buildInappV2StaleKey = (cacheKey: string) => `${cacheKey}:stale`;
 
+const extractVariantTags = (value: unknown): string[] => {
+  if (!isObject(value)) {
+    return [];
+  }
+  const tags = value.tags;
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+  return [...new Set(tags.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0))];
+};
+
 export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
   const catalogResolver = createCatalogResolver({
     prisma: deps.prisma,
@@ -544,6 +558,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     wbsMs: number;
     engineMs: number;
     fallbackReason?: string;
+    policyDebugRules?: unknown[];
   }> => {
     const startedAtMs = Date.now();
     const runtimeConfig = getConfig(input.environment);
@@ -667,6 +682,13 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
 
     const audiences = new Set(profile.audiences);
     let selectedCampaign: ActiveCampaignWithVariants | null = null;
+    let selectedVariant: { variantKey: string; weight: number; contentJson: unknown } | null = null;
+    let selectedPolicyDebugRules: unknown[] | undefined;
+    let selectedOrchestrationEval:
+      | Awaited<ReturnType<NonNullable<InAppV2RuntimeDeps["orchestration"]>["evaluateAction"]>>
+      | undefined;
+    let policyBlockedReason: string | undefined;
+
     for (const campaign of campaignSet.campaigns) {
       if (!campaignPassesSchedule(campaign, contextNow)) {
         continue;
@@ -683,14 +705,76 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           continue;
         }
       }
+
+      const variantSelection = await withEngineMs(() =>
+        selectVariant({
+          profileId: profile.profileId,
+          campaignKey: campaign.key,
+          salt: campaign.holdoutSalt,
+          variants: campaign.variants
+        })
+      );
+      const candidateVariant =
+        variantSelection.variant ??
+        (campaign.contentKey
+          ? ({
+              variantKey: "content",
+              weight: 100,
+              contentJson: {}
+            } as (typeof campaign.variants)[number])
+          : null);
+      if (!candidateVariant) {
+        continue;
+      }
+
+      if (deps.orchestration) {
+        const candidateTags = extractVariantTags(candidateVariant.contentJson);
+        const policyEval = await deps.orchestration.evaluateAction({
+          environment: input.environment,
+          appKey: input.body.appKey,
+          profileId: profile.profileId,
+          action: {
+            actionType: "inapp_message",
+            actionKey: campaign.key,
+            tags: candidateTags,
+            placement: input.body.placement,
+            appKey: input.body.appKey
+          },
+          now: contextNow,
+          debug: true
+        });
+        if (!policyEval.allowed) {
+          policyBlockedReason = policyEval.reasons[0]?.code ?? "ORCHESTRATION_BLOCKED";
+          input.logger.info(
+            {
+              event: "orchestration_inapp_blocked",
+              requestId: input.requestId,
+              campaignKey: campaign.key,
+              reasonCode: policyBlockedReason
+            },
+            "In-app candidate blocked by orchestration policy"
+          );
+          continue;
+        }
+        selectedOrchestrationEval = policyEval;
+        selectedPolicyDebugRules = policyEval.debugRules;
+      }
+
       selectedCampaign = campaign;
+      selectedVariant = candidateVariant;
       break;
     }
 
-    if (!selectedCampaign) {
+    if (!selectedCampaign || !selectedVariant) {
       const response = buildNoShowResponse({ placement: input.body.placement });
       response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
-      return { response, wbsMs, engineMs, fallbackReason: "NO_ACTIVE_CAMPAIGN" };
+      return {
+        response,
+        wbsMs,
+        engineMs,
+        fallbackReason: policyBlockedReason ?? "NO_ACTIVE_CAMPAIGN",
+        policyDebugRules: selectedPolicyDebugRules
+      };
     }
 
     const selectedTemplate = campaignSet.templatesByKey.get(selectedCampaign.templateKey);
@@ -711,29 +795,6 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         tokenValues[token] = tokenValue;
       }
     });
-
-    const variantSelection = await withEngineMs(() =>
-      selectVariant({
-        profileId: profile.profileId,
-        campaignKey: selectedCampaign.key,
-        salt: selectedCampaign.holdoutSalt,
-        variants: selectedCampaign.variants
-      })
-    );
-    const selectedVariant =
-      variantSelection.variant ??
-      (selectedCampaign.contentKey
-        ? ({
-            variantKey: "content",
-            weight: 100,
-            contentJson: {}
-          } as (typeof selectedCampaign.variants)[number])
-        : null);
-    if (!selectedVariant) {
-      const response = buildNoShowResponse({ placement: input.body.placement });
-      response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
-      return { response, wbsMs, engineMs, fallbackReason: "VARIANT_NOT_FOUND" };
-    }
 
     const locale = typeof input.body.context?.locale === "string" ? input.body.context.locale : "en";
     const baseContext = isObject(input.body.context) ? (input.body.context as Record<string, unknown>) : {};
@@ -814,12 +875,38 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       payload
     };
 
+    if (deps.orchestration && selectedOrchestrationEval) {
+      await deps.orchestration.recordExposure({
+        environment: input.environment,
+        profileId: profile.profileId,
+        action: {
+          actionType: "inapp_message",
+          actionKey: selectedCampaign.key,
+          tags: mergedTags,
+          placement: input.body.placement,
+          appKey: input.body.appKey
+        },
+        now: contextNow,
+        evaluation: selectedOrchestrationEval,
+        metadata: {
+          source: "v2_inapp_decide",
+          campaignKey: selectedCampaign.key,
+          variantKey: selectedVariant.variantKey
+        }
+      });
+    }
+
     const totalMs = Date.now() - startedAtMs;
     if (totalMs > 200) {
       input.logger.warn({ requestId: input.requestId, totalMs, placement: input.body.placement }, "v2 in-app decide exceeded 200ms");
     }
 
-    return { response, wbsMs, engineMs };
+    return {
+      response,
+      wbsMs,
+      engineMs,
+      policyDebugRules: selectedPolicyDebugRules
+    };
   };
 
   const decide = async (input: {
@@ -831,6 +918,15 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     const startedAtMs = Date.now();
     const runtimeConfig = getConfig(input.environment);
     let cacheAvailable = deps.cache.enabled;
+    if (deps.orchestration) {
+      const hasOrchestrationPolicies = await deps.orchestration.hasActivePolicies({
+        environment: input.environment,
+        appKey: input.body.appKey
+      });
+      if (hasOrchestrationPolicies) {
+        cacheAvailable = false;
+      }
+    }
     const campaignSet = await loadCampaignSet({
       environment: input.environment,
       appKey: input.body.appKey,
@@ -877,6 +973,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       cacheHit: boolean;
       servedStale: boolean;
       fallbackReason?: string;
+      policyDebugRules?: unknown[];
       wbsMs: number;
       engineMs: number;
     }): InAppV2DecideResponse => {
@@ -893,6 +990,9 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             wbs: result.wbsMs,
             engine: result.engineMs
           },
+          ...(Array.isArray(result.policyDebugRules) && result.policyDebugRules.length > 0
+            ? { policyRules: result.policyDebugRules }
+            : {}),
           ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {})
         }
       };
@@ -1038,6 +1138,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         cacheHit: false,
         servedStale: false,
         fallbackReason: evaluated.fallbackReason,
+        policyDebugRules: evaluated.policyDebugRules,
         wbsMs: evaluated.wbsMs,
         engineMs: evaluated.engineMs
       });

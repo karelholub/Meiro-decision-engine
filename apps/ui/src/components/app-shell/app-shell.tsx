@@ -27,6 +27,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/overview", label: "Overview" },
       { href: "/logs", label: "Logs" },
       { href: "/execution/cache", label: "Realtime Cache" },
+      { href: "/execution/orchestration", label: "Orchestration Policies" },
       { href: "/execution/dlq", label: "DLQ" },
       { href: "/execution/precompute", label: "Precompute Runs" },
       { href: "/execution/results", label: "Decision Results" }

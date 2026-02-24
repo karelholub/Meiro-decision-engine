@@ -16,7 +16,7 @@ import {
   type DecisionStackDefinition,
   type DecisionStatus
 } from "@decisioning/dsl";
-import { evaluateDecision, evaluateStack, type EngineContext, type EngineProfile } from "@decisioning/engine";
+import { evaluateDecision, type EngineContext, type EngineProfile, type StackEvaluationResult } from "@decisioning/engine";
 import {
   WbsMeiroAdapter,
   buildWbsLookupRequest,
@@ -58,12 +58,14 @@ import {
 import { deriveDecisionRequiredAttributes, deriveStackRequiredAttributes } from "./lib/requiredAttributes";
 import { isTimeoutError, withTimeout } from "./lib/timeout";
 import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
+import { createOrchestrationEventsWorker } from "./jobs/orchestrationEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { createRetentionWorker } from "./jobs/retentionWorker";
 import { registerCacheRoutes } from "./routes/cache";
 import { registerCatalogRoutes } from "./routes/catalog";
 import { registerDlqRoutes } from "./routes/dlq";
 import { registerMaintenanceRoutes } from "./routes/maintenance";
+import { registerOrchestrationRoutes } from "./routes/orchestration";
 import { registerPrecomputeRoutes } from "./routes/precompute";
 import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
 import {
@@ -79,6 +81,7 @@ import {
   type RuntimeSettings
 } from "./settings/runtimeSettings";
 import { createCatalogResolver } from "./services/catalogResolver";
+import { createOrchestrationService, type ActionDescriptor } from "./services/orchestrationService";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -599,6 +602,68 @@ const sanitizeDebugTraceForLog = (trace: unknown): unknown => {
   return next;
 };
 
+const toStringTags = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.filter((entry) => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))];
+};
+
+const toActionDescriptor = (input: {
+  actionType: string;
+  payload: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  appKey?: string;
+  placement?: string;
+}): ActionDescriptor => {
+  const payload = input.payload;
+  const actionKeyCandidates = [
+    payload.actionKey,
+    payload.campaignId,
+    payload.campaign_id,
+    payload.offerId,
+    payload.offerKey,
+    payload.contentId,
+    payload.contentKey,
+    payload.templateId,
+    payload.templateKey
+  ];
+  const actionKey = actionKeyCandidates.find((candidate) => typeof candidate === "string" && candidate.trim().length > 0) as
+    | string
+    | undefined;
+  const tags = toStringTags(payload.tags);
+  const placement =
+    typeof payload.placement === "string" && payload.placement.trim().length > 0
+      ? payload.placement
+      : typeof input.context?.placement === "string"
+        ? input.context.placement
+        : input.placement;
+  const appKey =
+    typeof payload.appKey === "string" && payload.appKey.trim().length > 0
+      ? payload.appKey
+      : typeof input.context?.appKey === "string"
+        ? input.context.appKey
+        : input.appKey;
+  return {
+    actionType: input.actionType,
+    actionKey,
+    tags,
+    placement,
+    appKey
+  };
+};
+
+const isExposureAction = (actionType: string): boolean => {
+  return actionType !== "noop" && actionType !== "suppress";
+};
+
+const normalizeEngineActionType = (value: string): DecisionOutput["actionType"] => {
+  if (value === "message" || value === "noop" || value === "personalize" || value === "suppress") {
+    return value;
+  }
+  return "noop";
+};
+
 const getWeekStart = (now: Date): Date => {
   const copy = new Date(now);
   const day = copy.getUTCDay();
@@ -617,6 +682,272 @@ const parseDateOrNow = (value: string | undefined, fallback: () => Date): Date =
     return fallback();
   }
   return parsed;
+};
+
+const getNestedValue = (source: Record<string, unknown>, path: string): unknown => {
+  return path.split(".").reduce<unknown>((acc, key) => {
+    if (acc && typeof acc === "object" && key in (acc as Record<string, unknown>)) {
+      return (acc as Record<string, unknown>)[key];
+    }
+    return undefined;
+  }, source);
+};
+
+const parseStackConditionRight = (value: string | undefined): unknown => {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+const readStackRef = (input: { exports: Record<string, unknown>; context: EngineContext }, left: string): unknown => {
+  if (left.startsWith("exports.")) {
+    return getNestedValue(input.exports, left.slice("exports.".length));
+  }
+  if (left.startsWith("context.")) {
+    return getNestedValue(input.context as unknown as Record<string, unknown>, left.slice("context.".length));
+  }
+  return undefined;
+};
+
+const evaluateStackWhen = (
+  input: { exports: Record<string, unknown>; context: EngineContext },
+  when: NonNullable<DecisionStackDefinition["steps"][number]["when"]>
+): boolean => {
+  const leftValue = readStackRef(input, when.left);
+  if (when.op === "exists") {
+    return leftValue !== undefined && leftValue !== null;
+  }
+
+  const right = parseStackConditionRight(when.right);
+  if (when.op === "eq") {
+    return leftValue === right;
+  }
+  return leftValue !== right;
+};
+
+const evaluateStackWithOrchestration = async (input: {
+  stack: DecisionStackDefinition;
+  profile: EngineProfile;
+  context: EngineContext;
+  decisionsByKey: Record<string, DecisionDefinition>;
+  historyByDecisionKey: Record<string, { perProfilePerDay: number; perProfilePerWeek: number }>;
+  debug: boolean;
+  nowMs?: () => number;
+  environment: Environment;
+  orchestration: ReturnType<typeof createOrchestrationService>;
+}): Promise<StackEvaluationResult & { policyDebugRules: Array<Record<string, unknown>> }> => {
+  const hrNow = () => Number(process.hrtime.bigint() / 1000000n);
+  const readNow = input.nowMs ?? hrNow;
+  const startedMs = readNow();
+  const stepHardCap = 20;
+  const maxSteps = Math.min(input.stack.limits.maxSteps, stepHardCap);
+  const maxTotalMs = input.stack.limits.maxTotalMs;
+  const nowDate = new Date(input.context.now);
+  const policyDebugRules: Array<Record<string, unknown>> = [];
+
+  const exportsState: Record<string, unknown> = { suppressed: false };
+  const traces: StackEvaluationResult["steps"] = [];
+
+  let evaluatedSteps = 0;
+  let timeout = false;
+  let stepLimitHit = false;
+  let firstNonNoop: StackEvaluationResult["final"] | null = null;
+  let lastMatch: StackEvaluationResult["final"] | null = null;
+
+  const elapsedMs = () => Math.max(0, readNow() - startedMs);
+
+  for (const step of input.stack.steps) {
+    if (!step.enabled) {
+      traces.push({
+        stepId: step.id,
+        decisionKey: step.decisionKey,
+        ran: false,
+        skippedReason: "STEP_DISABLED",
+        matched: false,
+        actionType: "noop",
+        reasonCodes: ["STEP_DISABLED"],
+        output: {},
+        ms: 0,
+        stop: false
+      });
+      continue;
+    }
+
+    if (evaluatedSteps >= maxSteps) {
+      stepLimitHit = true;
+      break;
+    }
+
+    if (elapsedMs() >= maxTotalMs) {
+      timeout = true;
+      break;
+    }
+
+    if (step.when) {
+      const conditionOk = evaluateStackWhen({ exports: exportsState, context: input.context }, step.when);
+      if (!conditionOk) {
+        traces.push({
+          stepId: step.id,
+          decisionKey: step.decisionKey,
+          ran: false,
+          skippedReason: "WHEN_CONDITION_FALSE",
+          matched: false,
+          actionType: "noop",
+          reasonCodes: ["WHEN_CONDITION_FALSE"],
+          output: {},
+          ms: 0,
+          stop: false
+        });
+        continue;
+      }
+    }
+
+    const definition = input.decisionsByKey[step.decisionKey];
+    if (!definition) {
+      traces.push({
+        stepId: step.id,
+        decisionKey: step.decisionKey,
+        ran: false,
+        skippedReason: "DECISION_NOT_FOUND",
+        matched: false,
+        actionType: "noop",
+        reasonCodes: ["DECISION_NOT_FOUND"],
+        output: {},
+        ms: 0,
+        stop: false
+      });
+      continue;
+    }
+
+    const stepStartedMs = readNow();
+    const result = evaluateDecision({
+      definition,
+      profile: input.profile,
+      context: input.context,
+      history: input.historyByDecisionKey[step.decisionKey],
+      debug: input.debug
+    });
+    evaluatedSteps += 1;
+
+    const matched = Boolean(result.selectedRuleId);
+    let actionType = result.actionType;
+    let payload = result.payload;
+    let reasonCodes = result.reasons.map((reason) => reason.code);
+
+    if (result.outcome === "ELIGIBLE") {
+      const descriptor = toActionDescriptor({
+        actionType,
+        payload,
+        context: input.context as unknown as Record<string, unknown>
+      });
+      const orchestrationEvaluation = await input.orchestration.evaluateAction({
+        environment: input.environment,
+        appKey: descriptor.appKey,
+        profileId: input.profile.profileId,
+        action: descriptor,
+        now: nowDate,
+        debug: input.debug
+      });
+      if (input.debug && orchestrationEvaluation.debugRules.length > 0) {
+        policyDebugRules.push({
+          stepId: step.id,
+          decisionKey: step.decisionKey,
+          rules: orchestrationEvaluation.debugRules
+        });
+      }
+      if (!orchestrationEvaluation.allowed) {
+        const fallback = orchestrationEvaluation.fallbackAction ?? { actionType: "noop", payload: {} };
+        actionType = normalizeEngineActionType(fallback.actionType);
+        payload = fallback.payload;
+        reasonCodes = [...reasonCodes, ...orchestrationEvaluation.reasons.map((reason) => reason.code)];
+      }
+    }
+
+    const summary = {
+      matched,
+      actionType,
+      payload,
+      reasonCodes
+    };
+    exportsState[step.decisionKey] = summary;
+    exportsState.last = summary;
+    if (actionType === "suppress") {
+      exportsState.suppressed = true;
+    }
+
+    if (input.stack.finalOutputMode === "FIRST_NON_NOOP") {
+      if (!firstNonNoop && actionType !== "noop") {
+        firstNonNoop = {
+          actionType,
+          payload,
+          reasonCodes
+        };
+      }
+    } else if (input.stack.finalOutputMode === "LAST_MATCH") {
+      if (matched) {
+        lastMatch = {
+          actionType,
+          payload,
+          reasonCodes
+        };
+      }
+    }
+
+    const stop =
+      (step.stopOnMatch && matched) ||
+      step.stopOnActionTypes.includes(actionType) ||
+      (!step.continueOnNoMatch && !matched);
+    const stepMs = Math.max(0, readNow() - stepStartedMs);
+
+    traces.push({
+      stepId: step.id,
+      decisionKey: step.decisionKey,
+      ran: true,
+      matched,
+      ruleId: result.selectedRuleId,
+      actionType,
+      reasonCodes,
+      output: payload,
+      ms: stepMs,
+      stop
+    });
+
+    if (stop) {
+      break;
+    }
+  }
+
+  const totalMs = elapsedMs();
+  const defaultFinal: StackEvaluationResult["final"] = {
+    actionType: input.stack.outputs.default.actionType,
+    payload: input.stack.outputs.default.payload,
+    reasonCodes: [timeout ? "STACK_TIMEOUT" : stepLimitHit ? "STACK_STEP_LIMIT" : "STACK_DEFAULT_OUTPUT"]
+  };
+
+  const final =
+    timeout || stepLimitHit || input.stack.finalOutputMode === "EXPLICIT"
+      ? defaultFinal
+      : input.stack.finalOutputMode === "LAST_MATCH"
+        ? (lastMatch ?? defaultFinal)
+        : (firstNonNoop ?? defaultFinal);
+
+  return {
+    final,
+    steps: traces,
+    exports: input.debug ? exportsState : undefined,
+    meta: {
+      stackKey: input.stack.key,
+      version: input.stack.version,
+      totalMs,
+      correlationId: input.context.requestId
+    },
+    policyDebugRules
+  };
 };
 
 const createRequestId = (request: FastifyRequest): string => {
@@ -1204,6 +1535,45 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     Number.isFinite(config.inappEventsWorkerDedupeTtlSeconds)
       ? Math.max(60, Math.min(604800, Math.floor(config.inappEventsWorkerDedupeTtlSeconds)))
       : 86400;
+  const orchestrationPolicyCacheTtlMs =
+    typeof config.orchestrationPolicyCacheTtlMs === "number" && Number.isFinite(config.orchestrationPolicyCacheTtlMs)
+      ? Math.max(1000, Math.floor(config.orchestrationPolicyCacheTtlMs))
+      : 5000;
+  const orchestrationEventsStreamKey = config.orchestrationEventsStreamKey ?? "orchestr_events";
+  const orchestrationEventsStreamGroup = config.orchestrationEventsStreamGroup ?? "orchestr_events_group";
+  const orchestrationEventsConsumerName = config.orchestrationEventsConsumerName ?? "orchestr-1";
+  const orchestrationEventsStreamMaxLen =
+    typeof config.orchestrationEventsStreamMaxLen === "number" && Number.isFinite(config.orchestrationEventsStreamMaxLen)
+      ? Math.max(1000, Math.floor(config.orchestrationEventsStreamMaxLen))
+      : 200000;
+  const orchestrationEventsWorkerEnabled = config.orchestrationEventsWorkerEnabled !== false;
+  const orchestrationEventsWorkerBatchSize =
+    typeof config.orchestrationEventsWorkerBatchSize === "number" && Number.isFinite(config.orchestrationEventsWorkerBatchSize)
+      ? Math.max(1, Math.min(2000, Math.floor(config.orchestrationEventsWorkerBatchSize)))
+      : 500;
+  const orchestrationEventsWorkerBlockMs =
+    typeof config.orchestrationEventsWorkerBlockMs === "number" && Number.isFinite(config.orchestrationEventsWorkerBlockMs)
+      ? Math.max(0, Math.floor(config.orchestrationEventsWorkerBlockMs))
+      : 1000;
+  const orchestrationEventsWorkerPollMs =
+    typeof config.orchestrationEventsWorkerPollMs === "number" && Number.isFinite(config.orchestrationEventsWorkerPollMs)
+      ? Math.max(100, Math.floor(config.orchestrationEventsWorkerPollMs))
+      : 250;
+  const orchestrationEventsWorkerReclaimIdleMs =
+    typeof config.orchestrationEventsWorkerReclaimIdleMs === "number" &&
+    Number.isFinite(config.orchestrationEventsWorkerReclaimIdleMs)
+      ? Math.max(1000, Math.floor(config.orchestrationEventsWorkerReclaimIdleMs))
+      : 15000;
+  const orchestrationEventsWorkerMaxBatchesPerTick =
+    typeof config.orchestrationEventsWorkerMaxBatchesPerTick === "number" &&
+    Number.isFinite(config.orchestrationEventsWorkerMaxBatchesPerTick)
+      ? Math.max(1, Math.min(20, Math.floor(config.orchestrationEventsWorkerMaxBatchesPerTick)))
+      : 3;
+  const orchestrationEventsWorkerDedupeTtlSeconds =
+    typeof config.orchestrationEventsWorkerDedupeTtlSeconds === "number" &&
+    Number.isFinite(config.orchestrationEventsWorkerDedupeTtlSeconds)
+      ? Math.max(60, Math.min(604800, Math.floor(config.orchestrationEventsWorkerDedupeTtlSeconds)))
+      : 86400;
   const retentionWorkerEnabled = config.retentionWorkerEnabled !== false;
   const retentionPollMs =
     typeof config.retentionPollMs === "number" && Number.isFinite(config.retentionPollMs)
@@ -1295,6 +1665,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     (hasDlqStorage ? createDbDlqProvider(prisma as PrismaClient) : createNoopDlqProvider());
   let dlqWorker: ReturnType<typeof createDlqWorker> | null = null;
   let inappEventsWorker: ReturnType<typeof createInAppEventsWorker> | null = null;
+  let orchestrationEventsWorker: ReturnType<typeof createOrchestrationEventsWorker> | null = null;
   let retentionWorker: ReturnType<typeof createRetentionWorker> | null = null;
 
   const now = deps.now ?? (() => new Date());
@@ -1302,6 +1673,14 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   const catalogResolver = createCatalogResolver({
     prisma,
     now
+  });
+  const orchestration = createOrchestrationService({
+    prisma,
+    cache,
+    logger: app.log,
+    streamKey: orchestrationEventsStreamKey,
+    streamMaxLen: orchestrationEventsStreamMaxLen,
+    policyCacheTtlMs: orchestrationPolicyCacheTtlMs
   });
 
   const fetchActiveDecision = async (input: {
@@ -1468,6 +1847,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   app.addHook("onClose", async () => {
     dlqWorker?.stop();
     inappEventsWorker?.stop();
+    orchestrationEventsWorker?.stop();
     retentionWorker?.stop();
   });
 
@@ -1648,6 +2028,49 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     );
   }
 
+  orchestrationEventsWorker = createOrchestrationEventsWorker({
+    cache,
+    prisma,
+    dlq: dlqProvider,
+    logger: app.log,
+    config: {
+      enabled: orchestrationEventsWorkerEnabled,
+      streamKey: orchestrationEventsStreamKey,
+      streamGroup: orchestrationEventsStreamGroup,
+      consumerName: orchestrationEventsConsumerName,
+      batchSize: orchestrationEventsWorkerBatchSize,
+      blockMs: orchestrationEventsWorkerBlockMs,
+      pollMs: orchestrationEventsWorkerPollMs,
+      reclaimIdleMs: orchestrationEventsWorkerReclaimIdleMs,
+      maxBatchesPerTick: orchestrationEventsWorkerMaxBatchesPerTick,
+      dedupeTtlSeconds: orchestrationEventsWorkerDedupeTtlSeconds
+    }
+  });
+  if (runBackgroundWorkers && orchestrationEventsWorkerEnabled && cache.enabled) {
+    orchestrationEventsWorker.start();
+    app.log.info(
+      {
+        runtimeRole: apiRuntimeRole,
+        streamKey: orchestrationEventsStreamKey,
+        group: orchestrationEventsStreamGroup,
+        consumer: orchestrationEventsConsumerName,
+        batchSize: orchestrationEventsWorkerBatchSize,
+        maxBatchesPerTick: orchestrationEventsWorkerMaxBatchesPerTick,
+        dedupeTtlSeconds: orchestrationEventsWorkerDedupeTtlSeconds
+      },
+      "Orchestration events worker started"
+    );
+  } else {
+    app.log.info(
+      {
+        runtimeRole: apiRuntimeRole,
+        configuredEnabled: orchestrationEventsWorkerEnabled,
+        cacheEnabled: cache.enabled
+      },
+      "Orchestration events worker not started"
+    );
+  }
+
   retentionWorker = createRetentionWorker({
     prisma,
     logger: app.log,
@@ -1722,7 +2145,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       streamKey: inappEventsStreamKey,
       streamMaxLen: inappEventsStreamMaxLen
     },
-    getInappEventsWorkerStatus: () => inappEventsWorker?.getStatus() ?? null
+    getInappEventsWorkerStatus: () => inappEventsWorker?.getStatus() ?? null,
+    orchestration
   });
 
   await registerCatalogRoutes({
@@ -1755,6 +2179,15 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     prisma,
     runner: precomputeRunner,
     resolveEnvironment,
+    buildResponseError,
+    requireWriteAuth
+  });
+
+  await registerOrchestrationRoutes({
+    app,
+    prisma,
+    orchestration,
+    resolveEnvironment: (request, reply) => resolveEnvironment(request, reply),
     buildResponseError,
     requireWriteAuth
   });
@@ -1821,6 +2254,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         workers: {
           dlq: runBackgroundWorkers && config.dlqWorkerEnabled !== false && hasDlqStorage,
           inappEvents: runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled,
+          orchestrationEvents: runBackgroundWorkers && orchestrationEventsWorkerEnabled && cache.enabled,
           retention: runBackgroundWorkers && retentionWorkerEnabled
         }
       }
@@ -3324,8 +3758,12 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       ),
       policyKey: parsed.data.context?.policyKey
     });
+    const stackHasOrchestrationPolicies = await orchestration.hasActivePolicies({
+      environment,
+      appKey: parsed.data.context?.appKey
+    });
     let realtimeCacheLock: Awaited<ReturnType<typeof cache.lock>> = null;
-    if (cache.enabled) {
+    if (cache.enabled && !stackHasOrchestrationPolicies) {
       const cachedResponse = await cache.getJson<Record<string, unknown>>(realtimeCacheKey);
       if (cachedResponse) {
         realtimeCacheStats.hits += 1;
@@ -3472,14 +3910,16 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       requestId
     };
 
-    const stackResult = evaluateStack({
+    const stackResult = await evaluateStackWithOrchestration({
       stack: stackDefinition,
       profile,
       context: stackEvaluationContext,
       decisionsByKey,
       historyByDecisionKey,
       debug: Boolean(parsed.data.debug),
-      nowMs: stackNowMs
+      nowMs: stackNowMs,
+      environment,
+      orchestration
     });
 
     const resolvedStackFinal = await catalogResolver.resolvePayloadRef({
@@ -3510,10 +3950,43 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       })
     );
 
+    const finalDescriptor = toActionDescriptor({
+      actionType: stackResult.final.actionType,
+      payload: resolvedStackFinal.payload,
+      context: stackEvaluationContext as unknown as Record<string, unknown>
+    });
+    const finalOrchestrationEvaluation = await orchestration.evaluateAction({
+      environment,
+      appKey: finalDescriptor.appKey,
+      profileId: profile.profileId,
+      action: finalDescriptor,
+      now: contextNow,
+      debug: Boolean(parsed.data.debug)
+    });
+    let finalActionType = stackResult.final.actionType;
+    let finalPayload = resolvedStackFinal.payload;
+    const finalReasonCodes = [...(stackResult.final.reasonCodes ?? [])];
+    if (!finalOrchestrationEvaluation.allowed) {
+      const fallback = finalOrchestrationEvaluation.fallbackAction ?? { actionType: "noop", payload: {} };
+      finalActionType = normalizeEngineActionType(fallback.actionType);
+      finalPayload = fallback.payload;
+      finalReasonCodes.push(...finalOrchestrationEvaluation.reasons.map((reason) => reason.code));
+      request.log.info(
+        {
+          event: "orchestration_stack_final_blocked",
+          requestId,
+          profileId: profile.profileId,
+          reasonCode: finalOrchestrationEvaluation.reasons[0]?.code ?? "ORCHESTRATION_BLOCKED"
+        },
+        "Stack final action blocked by orchestration policy"
+      );
+    }
+
     const response = {
       final: {
-        actionType: stackResult.final.actionType,
-        payload: resolvedStackFinal.payload
+        actionType: finalActionType,
+        payload: finalPayload,
+        reasonCodes: finalReasonCodes
       },
       steps: stackResult.steps.map((step) => ({
         decisionKey: step.decisionKey,
@@ -3543,7 +4016,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
                 audiences: profile.audiences,
                 consents: profile.consents ?? []
               }),
-              ...(lookupSummary ? { lookup: lookupSummary } : {})
+              ...(lookupSummary ? { lookup: lookupSummary } : {}),
+              orchestration: {
+                stepRules: stackResult.policyDebugRules,
+                finalRules: finalOrchestrationEvaluation.debugRules
+              }
             }
           : {})
       }
@@ -3559,10 +4036,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         lookupAttribute,
         lookupValueHash,
         timestamp: contextNow,
-        finalActionType: stackResult.final.actionType,
-        finalReasonsJson: toInputJson(stackResult.final.reasonCodes ?? []),
+        finalActionType: finalActionType,
+        finalReasonsJson: toInputJson(finalReasonCodes),
         stepsJson: toInputJson(redactSensitiveFields(resolvedStepsForLog)),
-        payloadJson: toInputJson(redactSensitiveFields(resolvedStackFinal.payload)),
+        payloadJson: toInputJson(redactSensitiveFields(finalPayload)),
         debugJson: parsed.data.debug ? toInputJson(redactSensitiveFields(response.debug ?? {})) : undefined,
         replayInputJson: toInputJson({
           stackKey: stackDefinition.key,
@@ -3581,8 +4058,23 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         typeof response.final.payload.ttl_seconds === "number" && response.final.payload.ttl_seconds > 0
           ? Math.floor(response.final.payload.ttl_seconds)
           : runtimeSettings.realtimeCache.ttlSeconds;
-      if (cache.enabled) {
+      if (cache.enabled && !stackHasOrchestrationPolicies) {
         await cache.setJson(realtimeCacheKey, responsePayload, ttlFromPayload);
+      }
+
+      if (finalOrchestrationEvaluation.allowed && isExposureAction(finalActionType)) {
+        await orchestration.recordExposure({
+          environment,
+          profileId: profile.profileId,
+          action: finalDescriptor,
+          now: contextNow,
+          evaluation: finalOrchestrationEvaluation,
+          metadata: {
+            source: "v1_decide_stack",
+            stackKey: stackDefinition.key,
+            stackVersion: stackDefinition.version
+          }
+        });
       }
 
       return response;
@@ -3760,7 +4252,12 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       policyKey: parsed.data.context?.policyKey
     });
     const staleRealtimeCacheKey = buildStaleRealtimeCacheKey(realtimeCacheKey);
-    const cacheEnabledForDecision = cache.enabled && reliabilityConfig.cachePolicy.mode !== "disabled";
+    const hasOrchestrationPolicies = await orchestration.hasActivePolicies({
+      environment,
+      appKey: parsed.data.context?.appKey
+    });
+    const cacheEnabledForDecision =
+      cache.enabled && reliabilityConfig.cachePolicy.mode !== "disabled" && !hasOrchestrationPolicies;
     const canUseStaleCache =
       cacheEnabledForDecision &&
       reliabilityConfig.cachePolicy.mode !== "normal" &&
@@ -4457,10 +4954,46 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         context,
         now: nowDate
       });
-      const finalPayload = resolvedPayloadRef.payload;
-
+      const resolvedFinalPayload = resolvedPayloadRef.payload;
+      let runtimeActionType = finalResult.actionType;
+      let runtimePayload = resolvedFinalPayload;
+      let runtimeOutcome = finalResult.outcome;
       const responseReasons = [...finalResult.reasons];
       const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
+
+      const orchestrationDescriptor = toActionDescriptor({
+        actionType: runtimeActionType,
+        payload: runtimePayload,
+        context: parsed.data.context as Record<string, unknown> | undefined
+      });
+      const orchestrationEvaluation =
+        runtimeOutcome === "ELIGIBLE"
+          ? await orchestration.evaluateAction({
+              environment,
+              appKey: orchestrationDescriptor.appKey,
+              profileId: profile.profileId,
+              action: orchestrationDescriptor,
+              now: nowDate,
+              debug: Boolean(parsed.data.debug)
+            })
+          : null;
+      if (orchestrationEvaluation && !orchestrationEvaluation.allowed) {
+        const fallback = orchestrationEvaluation.fallbackAction ?? { actionType: "noop", payload: {} };
+        runtimeActionType = normalizeEngineActionType(fallback.actionType);
+        runtimePayload = fallback.payload;
+        runtimeOutcome = "NOT_ELIGIBLE";
+        responseReasons.push(...orchestrationEvaluation.reasons);
+        request.log.info(
+          {
+            event: "orchestration_policy_blocked",
+            requestId,
+            profileId: profile.profileId,
+            reasonCode: orchestrationEvaluation.reasons[0]?.code ?? "ORCHESTRATION_BLOCKED"
+          },
+          "Decision action blocked by orchestration policy"
+        );
+      }
+
       if (parsed.data.debug) {
         integrationTrace.resolvedProfile = redactSensitiveFields({
           profileId: profile.profileId,
@@ -4471,9 +5004,16 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         if (resolvedPayloadRef.debug.usedPayloadRef) {
           integrationTrace.catalog = resolvedPayloadRef.debug;
         }
+        if (orchestrationEvaluation) {
+          integrationTrace.orchestration = {
+            allowed: orchestrationEvaluation.allowed,
+            reasons: orchestrationEvaluation.reasons,
+            rules: orchestrationEvaluation.debugRules
+          };
+        }
       }
 
-      if (!internalRefresh && finalResult.outcome !== "ERROR" && decisionDefinition.writeback?.enabled) {
+      if (!internalRefresh && runtimeOutcome !== "ERROR" && decisionDefinition.writeback?.enabled) {
         try {
           if (!meiro.writebackOutcome) {
             throw new Error("Meiro adapter does not implement writebackOutcome");
@@ -4483,7 +5023,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             mode: decisionDefinition.writeback.mode,
             key: decisionDefinition.writeback.key,
             ttlDays: decisionDefinition.writeback.ttlDays,
-            value: finalResult.outcome
+            value: runtimeOutcome
           });
 
           if (parsed.data.debug && meiro.getWritebackRecords) {
@@ -4517,7 +5057,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         await deps.policyHook.postDecision({
           result: {
             ...finalResult,
-            payload: finalPayload
+            actionType: runtimeActionType,
+            payload: runtimePayload,
+            outcome: runtimeOutcome
           }
         });
       }
@@ -4542,9 +5084,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             decisionId: activeVersion.decisionId,
             version: activeVersion.version,
             profileId: profile.profileId,
-            actionType: finalResult.actionType,
-            payloadJson: toInputJson(finalPayload),
-            outcome: finalResult.outcome,
+            actionType: runtimeActionType,
+            payloadJson: toInputJson(runtimePayload),
+            outcome: runtimeOutcome,
             reasonsJson: toInputJson(responseReasons),
             debugTraceJson: parsed.data.debug
               ? traceEnvelope
@@ -4567,9 +5109,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         requestId,
         decisionId: finalResult.decisionId,
         version: finalResult.version,
-        actionType: finalResult.actionType,
-        payload: finalPayload,
-        outcome: finalResult.outcome,
+        actionType: runtimeActionType,
+        payload: runtimePayload,
+        outcome: runtimeOutcome,
         reasons: responseReasons,
         latencyMs,
         trace: parsed.data.debug ? traceEnvelope : undefined,
@@ -4583,14 +5125,34 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         }
       };
 
-      if (finalResult.outcome !== "ERROR") {
+      if (runtimeOutcome !== "ERROR") {
         const ttlFromPayload =
-          typeof finalPayload.ttl_seconds === "number" && finalPayload.ttl_seconds > 0
-            ? Math.floor(finalPayload.ttl_seconds)
+          typeof runtimePayload.ttl_seconds === "number" && runtimePayload.ttl_seconds > 0
+            ? Math.floor(runtimePayload.ttl_seconds)
             : reliabilityConfig.cachePolicy.ttlSeconds;
         await persistRealtimeCache({
           response: response as Record<string, unknown>,
           ttlSeconds: ttlFromPayload
+        });
+      }
+
+      if (!internalRefresh && orchestrationEvaluation?.allowed && runtimeOutcome === "ELIGIBLE" && isExposureAction(runtimeActionType)) {
+        const descriptor = toActionDescriptor({
+          actionType: runtimeActionType,
+          payload: runtimePayload,
+          context: parsed.data.context as Record<string, unknown> | undefined
+        });
+        await orchestration.recordExposure({
+          environment,
+          profileId: profile.profileId,
+          action: descriptor,
+          now: nowDate,
+          evaluation: orchestrationEvaluation,
+          metadata: {
+            source: "v1_decide",
+            decisionKey: decisionDefinition.key,
+            decisionVersion: decisionDefinition.version
+          }
         });
       }
 

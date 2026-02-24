@@ -580,6 +580,41 @@ model DecisionResult {
   @@map("decision_results")
 }
 
+model OrchestrationPolicy {
+  id          String   @id @default(uuid())
+  environment String
+  appKey      String?
+  key         String
+  name        String
+  description String?
+  status      String
+  version     Int
+  policyJson  Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  activatedAt DateTime?
+
+  @@unique([environment, appKey, key, version])
+  @@index([environment, appKey, key, status])
+  @@map("orchestration_policies")
+}
+
+model OrchestrationEvent {
+  id          String   @id @default(uuid())
+  environment String
+  appKey      String?
+  profileId   String
+  ts          DateTime @default(now())
+  actionType  String
+  actionKey   String?
+  groupKey    String?
+  metadata    Json?
+
+  @@index([environment, profileId, ts])
+  @@index([environment, groupKey, ts])
+  @@map("orchestration_events")
+}
+
 model AppSetting {
   id          String      @id @default(uuid())
   environment Environment @default(DEV)

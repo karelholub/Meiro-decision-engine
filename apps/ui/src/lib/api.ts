@@ -103,6 +103,7 @@ export type InAppV2DecideResponse = {
       wbs: number;
       engine: number;
     };
+    policyRules?: unknown[];
     fallbackReason?: string;
   };
 };
@@ -174,6 +175,68 @@ export type RuntimeSettingsResponse = {
   override: RuntimeSettingsPayload | null;
   effective: RuntimeSettingsPayload;
   updatedAt: string | null;
+};
+
+export type OrchestrationPolicyRule =
+  | {
+      id: string;
+      type: "frequency_cap";
+      scope: "global" | "app" | "placement";
+      appliesTo?: {
+        actionTypes?: string[];
+        tagsAny?: string[];
+      };
+      limits: {
+        perDay?: number;
+        perWeek?: number;
+      };
+      reasonCode?: string;
+    }
+  | {
+      id: string;
+      type: "mutex_group";
+      groupKey: string;
+      appliesTo?: {
+        actionTypes?: string[];
+        tagsAny?: string[];
+      };
+      window: { seconds: number };
+      reasonCode?: string;
+    }
+  | {
+      id: string;
+      type: "cooldown";
+      trigger: { eventType: string };
+      blocks: { tagsAny: string[] };
+      window: { seconds: number };
+      reasonCode?: string;
+    };
+
+export type OrchestrationPolicyJson = {
+  schemaVersion: "orchestration_policy.v1";
+  defaults?: {
+    mode?: "fail_open" | "fail_closed";
+    fallbackAction?: {
+      actionType: string;
+      payload: Record<string, unknown>;
+    };
+  };
+  rules: OrchestrationPolicyRule[];
+};
+
+export type OrchestrationPolicy = {
+  id: string;
+  environment: "DEV" | "STAGE" | "PROD";
+  appKey: string | null;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  version: number;
+  policyJson: OrchestrationPolicyJson;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt: string | null;
 };
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -735,6 +798,66 @@ export const apiClient = {
         apiFetch<{ status: string; deleted: number; olderThanDays: number }>(`/v1/results/cleanup`, {
           method: "POST",
           body: JSON.stringify(olderThanDays ? { olderThanDays } : {})
+        })
+    },
+    orchestration: {
+      listPolicies: (params: { appKey?: string; key?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED" } = {}) =>
+        apiFetch<{ items: OrchestrationPolicy[] }>(`/v1/orchestration/policies${toQuery(params)}`),
+      getPolicy: (id: string) => apiFetch<{ item: OrchestrationPolicy }>(`/v1/orchestration/policies/${id}`),
+      createPolicy: (input: {
+        appKey?: string | null;
+        key: string;
+        name: string;
+        description?: string | null;
+        status?: "DRAFT" | "ACTIVE" | "ARCHIVED";
+        policyJson: OrchestrationPolicyJson;
+      }) =>
+        apiFetch<{ item: OrchestrationPolicy }>(`/v1/orchestration/policies`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      updatePolicy: (
+        id: string,
+        input: {
+          name?: string;
+          description?: string | null;
+          policyJson?: OrchestrationPolicyJson;
+        }
+      ) =>
+        apiFetch<{ item: OrchestrationPolicy }>(`/v1/orchestration/policies/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(input)
+        }),
+      activatePolicy: (id: string) =>
+        apiFetch<{ item: OrchestrationPolicy }>(`/v1/orchestration/policies/${id}/activate`, {
+          method: "POST",
+          body: JSON.stringify({})
+        }),
+      archivePolicy: (id: string) =>
+        apiFetch<{ item: OrchestrationPolicy }>(`/v1/orchestration/policies/${id}/archive`, {
+          method: "POST",
+          body: JSON.stringify({})
+        }),
+      validatePolicy: (policyJson: OrchestrationPolicyJson) =>
+        apiFetch<{ valid: boolean; errors: string[]; normalized: OrchestrationPolicyJson | null }>(
+          `/v1/orchestration/policies/validate`,
+          {
+            method: "POST",
+            body: JSON.stringify({ policyJson })
+          }
+        ),
+      ingestEvent: (input: {
+        profileId: string;
+        eventType: string;
+        appKey?: string;
+        actionKey?: string;
+        groupKey?: string;
+        ts?: string;
+        metadata?: Record<string, unknown>;
+      }) =>
+        apiFetch<{ status: "accepted"; profileId: string; eventType: string; ts: string }>(`/v1/orchestration/events`, {
+          method: "POST",
+          body: JSON.stringify(input)
         })
     },
     webhooks: {

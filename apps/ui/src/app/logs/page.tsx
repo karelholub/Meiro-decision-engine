@@ -12,6 +12,9 @@ import type {
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
+const POLICY_PREFIXES = ["GLOBAL_", "MUTEX_", "COOLDOWN_", "ORCHESTRATION_"];
+const isPolicyCode = (code: string): boolean => POLICY_PREFIXES.some((prefix) => code.startsWith(prefix));
+
 export default function LogsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [logType, setLogType] = useState<"decision" | "stack" | "inapp">("decision");
@@ -281,6 +284,7 @@ export default function LogsPage() {
               <th className="border-b border-stone-200 px-3 py-2">Outcome</th>
               <th className="border-b border-stone-200 px-3 py-2">Action</th>
               <th className="border-b border-stone-200 px-3 py-2">Reasons</th>
+              <th className="border-b border-stone-200 px-3 py-2">Policy reasons</th>
               <th className="border-b border-stone-200 px-3 py-2">Latency</th>
               <th className="border-b border-stone-200 px-3 py-2">Actions</th>
             </tr>
@@ -295,6 +299,12 @@ export default function LogsPage() {
                   <td className="border-b border-stone-100 px-3 py-2">{item.outcome}</td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.actionType}</td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.reasons.map((reason) => reason.code).join(", ")}</td>
+                  <td className="border-b border-stone-100 px-3 py-2">
+                    {item.reasons
+                      .map((reason) => reason.code)
+                      .filter((code) => isPolicyCode(code))
+                      .join(", ") || "none"}
+                  </td>
                   <td className="border-b border-stone-100 px-3 py-2">{item.latencyMs}ms</td>
                   <td className="border-b border-stone-100 px-3 py-2">
                     <div className="flex gap-2">
@@ -311,7 +321,7 @@ export default function LogsPage() {
                 </tr>
                 {expanded[item.id] ? (
                   <tr key={`${item.id}-expanded`}>
-                    <td colSpan={8} className="border-b border-stone-100 bg-stone-50 px-3 py-2">
+                    <td colSpan={9} className="border-b border-stone-100 bg-stone-50 px-3 py-2">
                       <div className="grid gap-3 md:grid-cols-2">
                         <div>
                           <p className="mb-1 text-xs font-semibold">Payload</p>

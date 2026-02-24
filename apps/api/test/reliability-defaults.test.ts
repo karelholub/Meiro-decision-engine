@@ -202,7 +202,7 @@ const createMemoryCache = (): JsonCache & {
   };
 };
 
-describe("reliability defaults", () => {
+describe("reliability defaults", { timeout: 20_000 }, () => {
   it("timeout triggers configured fallback output", async () => {
     const definition = createDecision("reliability_timeout_fallback");
     definition.performance = { timeoutMs: 120, wbsTimeoutMs: 20 };

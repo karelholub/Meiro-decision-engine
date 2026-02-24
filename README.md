@@ -1009,6 +1009,7 @@ Smoke gate configuration:
 Operational docs:
 - DevOps deploy/run/monitor guide: `docs/devops-deployment-operations.md`
 - Golden signals: `docs/observability-golden-signals.md`
+- Orchestration policies guide: `docs/orchestration-policies.md`
 - Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
 - Drill report (latest): `docs/runbooks/drill-report-2026-02-22.md`
 - Monitoring wiring assets: `ops/monitoring/README.md`
@@ -1047,6 +1048,7 @@ Current structure intentionally leaves extension points for:
 - UI in-app campaigns: `apps/ui/src/app/engagement/inapp/campaigns/page.tsx`
 - UI in-app campaign editor: `apps/ui/src/app/engagement/inapp/campaigns/[id]/page.tsx`
 - API in-app routes: `apps/api/src/inapp.ts`
+- API orchestration routes: `apps/api/src/routes/orchestration.ts`
 - Engine: `packages/engine/src/index.ts`
 - DSL: `packages/dsl/src/index.ts`
 - Meiro adapter: `packages/meiro/src/index.ts`
@@ -1056,6 +1058,7 @@ Current structure intentionally leaves extension points for:
 - In-app v2 smoke gate script: `apps/api/scripts/load-smoke-inapp-v2.ts`
 - DevOps deploy/run/monitor guide: `docs/devops-deployment-operations.md`
 - Observability golden signals: `docs/observability-golden-signals.md`
+- Orchestration policies guide: `docs/orchestration-policies.md`
 - Dependency degradation runbook: `docs/runbooks/dependency-degradation.md`
 
 ## Release Notes

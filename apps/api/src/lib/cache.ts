@@ -3,6 +3,9 @@ import net from "node:net";
 
 export interface JsonCache {
   enabled: boolean;
+  getString?(key: string): Promise<string | null>;
+  incrBy?(key: string, amount: number): Promise<number | null>;
+  expire?(key: string, ttlSeconds: number): Promise<boolean>;
   getJson<T>(key: string): Promise<T | null>;
   setJson(key: string, value: unknown, ttlSeconds: number): Promise<void>;
   del(key: string | string[]): Promise<number>;
@@ -142,6 +145,18 @@ const parseRedisResponse = (buffer: Buffer, offset = 0): { value: RedisResponse;
 
 class NoopCache implements JsonCache {
   enabled = false;
+
+  async getString(_key: string): Promise<string | null> {
+    return null;
+  }
+
+  async incrBy(_key: string, _amount: number): Promise<number | null> {
+    return null;
+  }
+
+  async expire(_key: string, _ttlSeconds: number): Promise<boolean> {
+    return false;
+  }
 
   async getJson<T>(_key: string): Promise<T | null> {
     return null;
@@ -336,6 +351,21 @@ class SocketRedisCache implements JsonCache {
       entries.push({ id: idRaw, fields });
     }
     return entries;
+  }
+
+  async getString(key: string): Promise<string | null> {
+    const response = await this.command(["GET", key]);
+    return typeof response === "string" ? response : null;
+  }
+
+  async incrBy(key: string, amount: number): Promise<number | null> {
+    const response = await this.command(["INCRBY", key, String(Math.trunc(amount))]);
+    return typeof response === "number" ? response : null;
+  }
+
+  async expire(key: string, ttlSeconds: number): Promise<boolean> {
+    const response = await this.command(["EXPIRE", key, String(Math.max(1, Math.floor(ttlSeconds)))]);
+    return response === 1;
   }
 
   async getJson<T>(key: string): Promise<T | null> {

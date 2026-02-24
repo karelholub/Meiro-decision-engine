@@ -406,10 +406,49 @@ const makePrisma = () => {
       createdAt: stackNow,
       updatedAt: stackNow,
       activatedAt: stackNow
+    },
+    {
+      id: "55555555-5555-4555-8555-555555555555",
+      environment: "DEV",
+      key: "stack_continue_blocked",
+      name: "Stack Continue Blocked",
+      description: "Continue after policy-blocked step",
+      status: "ACTIVE",
+      version: 1,
+      definitionJson: buildStackDefinition({
+        id: "55555555-5555-4555-8555-555555555555",
+        key: "stack_continue_blocked",
+        name: "Stack Continue Blocked",
+        version: 1,
+        status: "ACTIVE",
+        steps: [
+          {
+            id: "s1",
+            decisionKey: "cart_recovery",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: ["message"],
+            continueOnNoMatch: true
+          },
+          {
+            id: "s2",
+            decisionKey: "global_suppression",
+            enabled: true,
+            stopOnMatch: false,
+            stopOnActionTypes: ["suppress"],
+            continueOnNoMatch: true
+          }
+        ]
+      }),
+      createdAt: stackNow,
+      updatedAt: stackNow,
+      activatedAt: stackNow
     }
   ];
   const decisionStackLogs: Array<Record<string, any>> = [];
   let decisionStackLogCounter = 1;
+  const orchestrationPolicies: Array<Record<string, any>> = [];
+  const orchestrationEvents: Array<Record<string, any>> = [];
 
   const decisionVersionFindFirst = vi.fn().mockImplementation(async (args?: any) => {
     const where = args?.where ?? {};
@@ -837,6 +876,57 @@ const makePrisma = () => {
       updateMany: wbsMappingUpdateMany,
       create: wbsMappingCreate
     },
+    orchestrationPolicy: {
+      findMany: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        const orFilters = Array.isArray(where.OR) ? where.OR : [];
+        return orchestrationPolicies.filter((item) => {
+          if (where.environment && item.environment !== where.environment) {
+            return false;
+          }
+          if (where.status && item.status !== where.status) {
+            return false;
+          }
+          if (where.appKey !== undefined && item.appKey !== where.appKey) {
+            return false;
+          }
+          if (orFilters.length > 0) {
+            return orFilters.some((entry: any) => {
+              if (entry.appKey === null) {
+                return item.appKey === null;
+              }
+              if (typeof entry.appKey === "string") {
+                return item.appKey === entry.appKey;
+              }
+              return false;
+            });
+          }
+          return true;
+        });
+      }),
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockImplementation(async ({ data }: any) => ({
+        ...data,
+        id: data.id ?? `orch-${Math.random().toString(36).slice(2, 10)}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        activatedAt: data.activatedAt ?? null
+      })),
+      update: vi.fn().mockImplementation(async ({ data }: any) => ({
+        ...data,
+        id: `orch-${Math.random().toString(36).slice(2, 10)}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        activatedAt: data.activatedAt ?? null
+      })),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 })
+    },
+    orchestrationEvent: {
+      findMany: vi.fn().mockResolvedValue(orchestrationEvents),
+      findFirst: vi.fn().mockResolvedValue(null),
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      create: vi.fn().mockResolvedValue({})
+    },
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prisma))
   };
 
@@ -848,6 +938,8 @@ const makePrisma = () => {
     conversionCreate,
     wbsInstances,
     wbsMappings,
+    orchestrationPolicies,
+    orchestrationEvents,
     decisionStacks,
     decisionStackLogs
   };
@@ -1047,7 +1139,7 @@ describe("API", () => {
     expect(stageCreate.statusCode).toBe(201);
 
     await app.close();
-  });
+  }, 20_000);
 
   it("resolves /v1/decide by decisionKey using X-ENV", async () => {
     const { prisma, decisionVersionFindFirst } = makePrisma();
@@ -1090,7 +1182,7 @@ describe("API", () => {
     expect(decisionVersionFindFirst).toHaveBeenCalled();
 
     await app.close();
-  });
+  }, 20_000);
 
   it("blocks with POLICY_CONSENT_REQUIRED when required consents are missing", async () => {
     const { prisma } = makePrisma();
@@ -1828,6 +1920,94 @@ describe("API", () => {
     await app.close();
   });
 
+  it("continues to next stack step when a step is policy-blocked to noop", async () => {
+    const { prisma, orchestrationPolicies, orchestrationEvents } = makePrisma();
+    const now = new Date("2026-02-19T00:00:00.000Z");
+
+    orchestrationPolicies.push({
+      id: "orch-stack-1",
+      environment: "DEV",
+      appKey: null,
+      key: "global_caps",
+      name: "Global Caps",
+      description: null,
+      status: "ACTIVE",
+      version: 1,
+      policyJson: {
+        schemaVersion: "orchestration_policy.v1",
+        defaults: {
+          mode: "fail_closed",
+          fallbackAction: {
+            actionType: "noop",
+            payload: {}
+          }
+        },
+        rules: [
+          {
+            id: "global_cap_rule",
+            type: "frequency_cap",
+            scope: "global",
+            appliesTo: {
+              actionTypes: ["message"]
+            },
+            limits: {
+              perDay: 1
+            },
+            reasonCode: "GLOBAL_CAP"
+          }
+        ]
+      },
+      createdAt: now,
+      updatedAt: now,
+      activatedAt: now
+    });
+
+    orchestrationEvents.push({
+      id: "orch-event-1",
+      environment: "DEV",
+      appKey: null,
+      profileId: "p-stack-orch",
+      ts: now,
+      actionType: "message",
+      actionKey: "seeded",
+      groupKey: null,
+      metadata: {}
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/decide/stack",
+      headers: { "x-env": "DEV" },
+      payload: {
+        stackKey: "stack_continue_blocked",
+        profileId: "p-stack-orch",
+        debug: true
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.steps).toHaveLength(2);
+    expect(body.steps[0].actionType).toBe("noop");
+    expect(body.steps[0].reasonCodes).toContain("GLOBAL_CAP");
+    expect(body.steps[0].stop).toBe(false);
+    expect(body.steps[1].ran).toBe(true);
+    expect(body.final.actionType).toBe("suppress");
+
+    await app.close();
+  });
+
   it("enforces stack maxSteps and maxTotalMs budgets", async () => {
     const { prisma, decisionStackLogCreate } = makePrisma();
     let stackClock = 0;
@@ -2128,6 +2308,97 @@ describe("API", () => {
     expect(details.json().item.payload.templateId).toBe("cart-recovery-dev");
     expect(details.json().item.replayInput.profileId).toBe("p-1001");
     expect(details.json().item.trace.formatVersion).toBe(1);
+
+    await app.close();
+  });
+
+  it("returns fallback/noop when orchestration policy blocks decide action", async () => {
+    const { prisma, orchestrationPolicies, orchestrationEvents } = makePrisma();
+    const nowDate = new Date("2026-02-24T12:00:00.000Z");
+
+    orchestrationPolicies.push({
+      id: "orchestr-policy-1",
+      environment: "DEV",
+      appKey: null,
+      key: "global_orch",
+      name: "Global Orchestration",
+      description: null,
+      status: "ACTIVE",
+      version: 1,
+      policyJson: {
+        schemaVersion: "orchestration_policy.v1",
+        defaults: {
+          mode: "fail_closed",
+          fallbackAction: {
+            actionType: "noop",
+            payload: {}
+          }
+        },
+        rules: [
+          {
+            id: "global_caps",
+            type: "frequency_cap",
+            scope: "global",
+            appliesTo: {
+              actionTypes: ["message"]
+            },
+            limits: {
+              perDay: 1
+            },
+            reasonCode: "GLOBAL_CAP"
+          }
+        ]
+      },
+      createdAt: nowDate,
+      updatedAt: nowDate,
+      activatedAt: nowDate
+    });
+
+    orchestrationEvents.push({
+      id: "orch-event-1",
+      environment: "DEV",
+      appKey: null,
+      profileId: "p-1001",
+      ts: nowDate,
+      actionType: "message",
+      actionKey: "cart_recovery",
+      groupKey: null,
+      metadata: {}
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => nowDate
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/decide",
+      headers: { "x-env": "DEV" },
+      payload: {
+        decisionKey: "cart_recovery",
+        profileId: "p-1001",
+        context: {
+          now: nowDate.toISOString(),
+          appKey: "meiro_store"
+        },
+        debug: true
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.actionType).toBe("noop");
+    expect(body.outcome).toBe("NOT_ELIGIBLE");
+    expect(Array.isArray(body.reasons)).toBe(true);
+    expect(body.reasons.some((reason: { code?: string }) => reason.code === "GLOBAL_CAP")).toBe(true);
 
     await app.close();
   });

@@ -42,6 +42,18 @@ export interface AppConfig {
   inappEventsWorkerReclaimIdleMs?: number;
   inappEventsWorkerMaxBatchesPerTick?: number;
   inappEventsWorkerDedupeTtlSeconds?: number;
+  orchestrationPolicyCacheTtlMs?: number;
+  orchestrationEventsStreamKey?: string;
+  orchestrationEventsStreamGroup?: string;
+  orchestrationEventsConsumerName?: string;
+  orchestrationEventsStreamMaxLen?: number;
+  orchestrationEventsWorkerEnabled?: boolean;
+  orchestrationEventsWorkerBatchSize?: number;
+  orchestrationEventsWorkerBlockMs?: number;
+  orchestrationEventsWorkerPollMs?: number;
+  orchestrationEventsWorkerReclaimIdleMs?: number;
+  orchestrationEventsWorkerMaxBatchesPerTick?: number;
+  orchestrationEventsWorkerDedupeTtlSeconds?: number;
   retentionWorkerEnabled?: boolean;
   retentionPollMs?: number;
   retentionDecisionLogsDays?: number;
@@ -138,6 +150,21 @@ export const readConfig = (): AppConfig => ({
   inappEventsWorkerReclaimIdleMs: toNumber(process.env.INAPP_EVENTS_WORKER_RECLAIM_IDLE_MS, 15000),
   inappEventsWorkerMaxBatchesPerTick: toNumber(process.env.INAPP_EVENTS_WORKER_MAX_BATCHES_PER_TICK, 3),
   inappEventsWorkerDedupeTtlSeconds: toNumber(process.env.INAPP_EVENTS_WORKER_DEDUPE_TTL_SECONDS, 86400),
+  orchestrationPolicyCacheTtlMs: toNumber(process.env.ORCHESTRATION_POLICY_CACHE_TTL_MS, 5000),
+  orchestrationEventsStreamKey: process.env.ORCHESTRATION_EVENTS_STREAM_KEY ?? "orchestr_events",
+  orchestrationEventsStreamGroup: process.env.ORCHESTRATION_EVENTS_STREAM_GROUP ?? "orchestr_events_group",
+  orchestrationEventsConsumerName: process.env.ORCHESTRATION_EVENTS_CONSUMER_NAME ?? "orchestr-1",
+  orchestrationEventsStreamMaxLen: toNumber(process.env.ORCHESTRATION_EVENTS_STREAM_MAXLEN, 200000),
+  orchestrationEventsWorkerEnabled: toBool(process.env.ORCHESTRATION_EVENTS_WORKER_ENABLED, true),
+  orchestrationEventsWorkerBatchSize: toNumber(process.env.ORCHESTRATION_EVENTS_WORKER_BATCH_SIZE, 500),
+  orchestrationEventsWorkerBlockMs: toNumber(process.env.ORCHESTRATION_EVENTS_WORKER_BLOCK_MS, 1000),
+  orchestrationEventsWorkerPollMs: toNumber(process.env.ORCHESTRATION_EVENTS_WORKER_POLL_MS, 250),
+  orchestrationEventsWorkerReclaimIdleMs: toNumber(process.env.ORCHESTRATION_EVENTS_WORKER_RECLAIM_IDLE_MS, 15000),
+  orchestrationEventsWorkerMaxBatchesPerTick: toNumber(process.env.ORCHESTRATION_EVENTS_WORKER_MAX_BATCHES_PER_TICK, 3),
+  orchestrationEventsWorkerDedupeTtlSeconds: toNumber(
+    process.env.ORCHESTRATION_EVENTS_WORKER_DEDUPE_TTL_SECONDS,
+    86400
+  ),
   retentionWorkerEnabled: toBool(process.env.RETENTION_WORKER_ENABLED, true),
   retentionPollMs: toNumber(process.env.RETENTION_POLL_MS, 6 * 60 * 60 * 1000),
   retentionDecisionLogsDays: toNumber(process.env.RETENTION_DECISION_LOGS_DAYS, 30),
