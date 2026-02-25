@@ -7,6 +7,7 @@ export interface DlqWorkerHandlers {
   processPrecomputeTask(payload: unknown): Promise<void>;
   ingestTrackingEvent(payload: unknown): Promise<void>;
   processExportTask(payload: unknown): Promise<void>;
+  processPipesCallbackDelivery(payload: unknown): Promise<void>;
 }
 
 export interface DlqWorkerConfig extends RetryBackoffConfig {
@@ -34,7 +35,11 @@ const dispatchByTopic = async (handlers: DlqWorkerHandlers, env: DlqEnvelope) =>
     await handlers.ingestTrackingEvent(env.payload);
     return;
   }
-  await handlers.processExportTask(env.payload);
+  if (topic === "EXPORT_TASK") {
+    await handlers.processExportTask(env.payload);
+    return;
+  }
+  await handlers.processPipesCallbackDelivery(env.payload);
 };
 
 export const createDlqWorker = (input: {

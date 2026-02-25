@@ -5,7 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 import { apiClient, type DlqMessage, type DlqStatus, type DlqTopic } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 
-const TOPICS: Array<DlqTopic | ""> = ["", "PIPES_WEBHOOK", "PRECOMPUTE_TASK", "TRACKING_EVENT", "EXPORT_TASK"];
+const TOPICS: Array<DlqTopic | ""> = [
+  "",
+  "PIPES_WEBHOOK",
+  "PRECOMPUTE_TASK",
+  "TRACKING_EVENT",
+  "EXPORT_TASK",
+  "PIPES_CALLBACK_DELIVERY"
+];
 const STATUSES: Array<DlqStatus | ""> = ["", "PENDING", "RETRYING", "QUARANTINED", "RESOLVED"];
 
 export default function DlqPage() {
@@ -59,7 +66,8 @@ export default function DlqPage() {
       PIPES_WEBHOOK: 0,
       PRECOMPUTE_TASK: 0,
       TRACKING_EVENT: 0,
-      EXPORT_TASK: 0
+      EXPORT_TASK: 0,
+      PIPES_CALLBACK_DELIVERY: 0
     };
     for (const row of metrics) {
       grouped[row.topic] += row.count;
@@ -74,7 +82,7 @@ export default function DlqPage() {
         <p className="text-sm text-stone-700">DLQ stores failed async events and retries them automatically. Environment: {environment}</p>
       </header>
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-5">
+      <div className="panel grid gap-3 p-4 md:grid-cols-6">
         <div>
           <p className="text-xs uppercase text-stone-500">Due Now</p>
           <p className="text-lg font-semibold">{dueNow}</p>
@@ -94,6 +102,10 @@ export default function DlqPage() {
         <div>
           <p className="text-xs uppercase text-stone-500">Exports</p>
           <p className="text-lg font-semibold">{groupedMetrics.EXPORT_TASK}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase text-stone-500">Callbacks</p>
+          <p className="text-lg font-semibold">{groupedMetrics.PIPES_CALLBACK_DELIVERY}</p>
         </div>
       </div>
 

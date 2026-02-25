@@ -55,7 +55,12 @@ const SUPPORTED_TOP_LEVEL_KEYS = new Set([
 
 const SUPPORTED_HOLDOUT_KEYS = new Set(["enabled", "percentage", "salt"]);
 const SUPPORTED_CAP_KEYS = new Set(["perProfilePerDay", "perProfilePerWeek"]);
-const SUPPORTED_PERFORMANCE_KEYS = new Set(["timeoutMs", "wbsTimeoutMs"]);
+const SUPPORTED_PERFORMANCE_KEYS = new Set([
+  "timeoutMs",
+  "wbsTimeoutMs",
+  "requiredAttributesOverride",
+  "requiredContextKeysOverride"
+]);
 const SUPPORTED_CACHE_POLICY_KEYS = new Set(["mode", "ttlSeconds", "staleTtlSeconds", "keyContextAllowlist"]);
 const SUPPORTED_FALLBACK_KEYS = new Set(["preferStaleCache", "onTimeout", "onError", "defaultOutput"]);
 const SUPPORTED_ELIGIBILITY_KEYS = new Set(["audiencesAny", "attributes"]);
@@ -391,7 +396,9 @@ export const ensureDecisionDefinitionDefaults = (definition: DecisionDefinition)
     },
     performance: {
       timeoutMs: definition.performance?.timeoutMs ?? 120,
-      wbsTimeoutMs: definition.performance?.wbsTimeoutMs ?? 80
+      wbsTimeoutMs: definition.performance?.wbsTimeoutMs ?? 80,
+      requiredAttributesOverride: definition.performance?.requiredAttributesOverride ?? [],
+      requiredContextKeysOverride: definition.performance?.requiredContextKeysOverride ?? []
     },
     cachePolicy: {
       mode: definition.cachePolicy?.mode ?? "normal",
@@ -771,4 +778,44 @@ export const getDecisionSummaryText = (definition: DecisionDefinition): string =
   const cacheMode = definition.cachePolicy?.mode ?? "normal";
 
   return `This decision evaluates ${conditionCount} eligibility condition${conditionCount === 1 ? "" : "s"} ${audienceSummary}, applies ${rulesCount} rule${rulesCount === 1 ? "" : "s"}, runs with ${holdout}, timeout ${timeout}ms, and cache mode ${cacheMode}.`;
+};
+
+const collectConditionFields = (condition: ConditionNode, fields: Set<string>) => {
+  if (condition.type === "predicate") {
+    if (condition.predicate.field.trim()) {
+      fields.add(condition.predicate.field.trim());
+    }
+    return;
+  }
+
+  for (const child of condition.conditions) {
+    collectConditionFields(child, fields);
+  }
+};
+
+export const deriveWizardRequiredAttributes = (definition: DecisionDefinition): string[] => {
+  const fields = new Set<string>();
+
+  for (const field of definition.requiredAttributes ?? []) {
+    if (field.trim()) {
+      fields.add(field.trim());
+    }
+  }
+  for (const field of definition.performance?.requiredAttributesOverride ?? []) {
+    if (field.trim()) {
+      fields.add(field.trim());
+    }
+  }
+  for (const predicate of definition.eligibility.attributes ?? []) {
+    if (predicate.field.trim()) {
+      fields.add(predicate.field.trim());
+    }
+  }
+  for (const rule of definition.flow.rules) {
+    if (rule.when) {
+      collectConditionFields(rule.when, fields);
+    }
+  }
+
+  return [...fields].sort((left, right) => left.localeCompare(right));
 };

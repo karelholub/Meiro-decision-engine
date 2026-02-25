@@ -11,6 +11,7 @@ import {
   formatDecisionStackDefinition,
   validateDecisionDefinition,
   validateDecisionStackDefinition,
+  type ConditionNode,
   type DecisionDefinition,
   type DecisionOutput,
   type DecisionStackDefinition,
@@ -49,24 +50,44 @@ import { redactPayload } from "./dlq/redaction";
 import { createDlqWorker } from "./dlq/worker";
 import { createCache, type JsonCache } from "./lib/cache";
 import {
+  PIPES_CALLBACK_TOPIC,
+  buildDeliveryTaskPayload,
+  computeDeliveryId,
+  deliverCallbackTask,
+  hasPipesCallbackStorage as hasPipesCallbackConfigStorage,
+  isAsyncEvaluateHeader,
+  isFromDecisionEngineHeader,
+  loadEffectivePipesCallbackConfig,
+  pipesCallbackDeliveryTaskSchema,
+  shouldQueuePipesCallback
+} from "./lib/pipesCallback";
+import {
   buildProfileCacheKey,
   buildRealtimeCacheKey,
   buildRealtimeLockKey,
   sha256,
   stableStringify
 } from "./lib/cacheKey";
-import { deriveDecisionRequiredAttributes, deriveStackRequiredAttributes } from "./lib/requiredAttributes";
+import {
+  collectDecisionReferencedContentKeys,
+  deriveDecisionRequiredAttributes,
+  deriveDecisionRequirements,
+  deriveStackRequiredAttributes,
+  deriveStackRequirements,
+  type ContentBlockRequirementsSource
+} from "./lib/requirements";
 import { isTimeoutError, withTimeout } from "./lib/timeout";
 import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
 import { createOrchestrationEventsWorker } from "./jobs/orchestrationEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { createRetentionWorker } from "./jobs/retentionWorker";
-import { registerCacheRoutes } from "./routes/cache";
+import { invalidateRealtimeCache, registerCacheRoutes } from "./routes/cache";
 import { registerCatalogRoutes } from "./routes/catalog";
 import { registerDlqRoutes } from "./routes/dlq";
 import { registerMaintenanceRoutes } from "./routes/maintenance";
 import { registerOrchestrationRoutes } from "./routes/orchestration";
 import { registerPrecomputeRoutes } from "./routes/precompute";
+import { registerPipesCallbackRoutes } from "./routes/pipesCallback";
 import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
 import {
   processPipesWebhook,
@@ -287,6 +308,45 @@ const decideStackBodySchema = z
   .refine((value) => Boolean(value.profileId || value.lookup), {
     message: "profileId or lookup is required"
   });
+
+const requirementsParamsSchema = z.object({
+  key: z.string().regex(/^[a-zA-Z0-9_-]+$/)
+});
+
+const evaluateModeSchema = z.enum(["eligibility_only", "full"]);
+
+const evaluateBodySchema = z
+  .object({
+    mode: evaluateModeSchema.default("full"),
+    decisionKey: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    stackKey: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    profile: z.object({
+      profileId: z.string().min(1),
+      attributes: z.record(z.unknown()),
+      audiences: z.array(z.string()).optional(),
+      consents: z.array(z.string()).optional()
+    }),
+    context: z.record(z.unknown()).optional(),
+    debug: z.boolean().optional()
+  })
+  .superRefine((value, ctx) => {
+    const keyCount = Number(Boolean(value.decisionKey)) + Number(Boolean(value.stackKey));
+    if (keyCount !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["decisionKey"],
+        message: "Exactly one of decisionKey or stackKey is required"
+      });
+    }
+  });
+
+const profileUpsertBodySchema = z.object({
+  profileId: z.string().min(1),
+  appKey: z.string().min(1).optional(),
+  segments: z.array(z.string().min(1)).optional(),
+  attributes: z.record(z.unknown()).optional(),
+  sourceTs: z.string().datetime().optional()
+});
 
 const reportQuerySchema = z.object({
   from: z.string().datetime().optional(),
@@ -519,6 +579,141 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 };
 
+const INLINE_EVALUATE_BODY_LIMIT_BYTES = 64 * 1024;
+const SENSITIVE_INLINE_KEY_PATTERN = /email|phone|token|secret/i;
+const REQUIREMENTS_OPERATORS = ["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "exists"] as const;
+
+type PredicateTypeIssue = {
+  field: string;
+  expected: string;
+  got: string;
+};
+
+const readNestedValue = (source: Record<string, unknown>, path: string): unknown => {
+  return path.split(".").reduce<unknown>((current, key) => {
+    if (current && typeof current === "object" && key in (current as Record<string, unknown>)) {
+      return (current as Record<string, unknown>)[key];
+    }
+    return undefined;
+  }, source);
+};
+
+const detectTypeIssues = (input: {
+  profileAttributes: Record<string, unknown>;
+  fields: string[];
+  expectedByField: Record<string, string>;
+}): PredicateTypeIssue[] => {
+  const issues: PredicateTypeIssue[] = [];
+  for (const field of input.fields) {
+    const expected = input.expectedByField[field];
+    if (!expected) {
+      continue;
+    }
+    const value = readNestedValue(input.profileAttributes, field);
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (expected === "number" && (typeof value !== "number" || Number.isNaN(value))) {
+      issues.push({ field, expected, got: Array.isArray(value) ? "array" : typeof value });
+      continue;
+    }
+    if (expected === "string" && typeof value !== "string") {
+      issues.push({ field, expected, got: Array.isArray(value) ? "array" : typeof value });
+      continue;
+    }
+    if (expected === "boolean" && typeof value !== "boolean") {
+      issues.push({ field, expected, got: Array.isArray(value) ? "array" : typeof value });
+      continue;
+    }
+    if (expected === "string|array" && typeof value !== "string" && !Array.isArray(value)) {
+      issues.push({ field, expected, got: typeof value });
+    }
+  }
+  return issues;
+};
+
+const buildExpectedTypesByField = (input: {
+  decisionDefinitions: DecisionDefinition[];
+}): Record<string, string> => {
+  const expectedByField: Record<string, string> = {};
+
+  const visitPredicate = (predicate: { field: string; op: string; value?: unknown }) => {
+    if (predicate.op === "gt" || predicate.op === "gte" || predicate.op === "lt" || predicate.op === "lte") {
+      expectedByField[predicate.field] = "number";
+      return;
+    }
+    if (predicate.op === "contains") {
+      expectedByField[predicate.field] = "string|array";
+      return;
+    }
+    if ((predicate.op === "eq" || predicate.op === "neq") && predicate.value !== undefined && predicate.value !== null) {
+      const valueType = Array.isArray(predicate.value) ? "array" : typeof predicate.value;
+      if (valueType === "string" || valueType === "number" || valueType === "boolean") {
+        expectedByField[predicate.field] = valueType;
+      }
+    }
+  };
+
+  const visitCondition = (condition: ConditionNode) => {
+    if (condition.type === "predicate") {
+      visitPredicate(condition.predicate);
+      return;
+    }
+    for (const child of condition.conditions) {
+      visitCondition(child);
+    }
+  };
+
+  for (const definition of input.decisionDefinitions) {
+    for (const predicate of definition.eligibility.attributes ?? []) {
+      visitPredicate(predicate);
+    }
+    for (const rule of definition.flow.rules) {
+      if (rule.when) {
+        visitCondition(rule.when);
+      }
+    }
+  }
+
+  return expectedByField;
+};
+
+const buildMissingFields = (input: {
+  profileAttributes: Record<string, unknown>;
+  requiredFields: string[];
+}): string[] => {
+  const missing: string[] = [];
+  for (const field of input.requiredFields) {
+    const value = readNestedValue(input.profileAttributes, field);
+    if (value === undefined || value === null) {
+      missing.push(field);
+    }
+  }
+  return [...new Set(missing)].sort((left, right) => left.localeCompare(right));
+};
+
+const summarizeInlineProfileForDebug = (profile: EngineProfile) => {
+  const attributeKeys = Object.keys(profile.attributes).sort((left, right) => left.localeCompare(right));
+  const safeSamples: Record<string, unknown> = {};
+  for (const key of attributeKeys) {
+    if (SENSITIVE_INLINE_KEY_PATTERN.test(key)) {
+      continue;
+    }
+    safeSamples[key] = redactSensitiveFields(profile.attributes[key], key);
+    if (Object.keys(safeSamples).length >= 5) {
+      break;
+    }
+  }
+
+  return {
+    profileId: profile.profileId,
+    attributeKeys,
+    audiences: [...new Set(profile.audiences)].sort((left, right) => left.localeCompare(right)),
+    consents: [...new Set(profile.consents ?? [])].sort((left, right) => left.localeCompare(right)),
+    safeSamples
+  };
+};
+
 const serializeWbsInstance = (instance: {
   id: string;
   environment: Environment;
@@ -578,8 +773,7 @@ const redactSensitiveFields = (value: unknown, keyHint?: string): unknown => {
   if (value && typeof value === "object") {
     const next: Record<string, unknown> = {};
     for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
-      const normalized = key.toLowerCase();
-      if (normalized.includes("email") || normalized.includes("phone")) {
+      if (SENSITIVE_INLINE_KEY_PATTERN.test(key)) {
         next[key] = "[REDACTED]";
       } else {
         next[key] = redactSensitiveFields(nestedValue, key);
@@ -589,8 +783,7 @@ const redactSensitiveFields = (value: unknown, keyHint?: string): unknown => {
   }
 
   if (keyHint) {
-    const normalized = keyHint.toLowerCase();
-    if (normalized.includes("email") || normalized.includes("phone")) {
+    if (SENSITIVE_INLINE_KEY_PATTERN.test(keyHint)) {
       return "[REDACTED]";
     }
   }
@@ -1194,6 +1387,26 @@ const createDecideAuth = (config: AppConfig) => {
   };
 };
 
+const createPipesAuth = (config: AppConfig) => {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const writeKeyConfigured = typeof config.apiWriteKey === "string" && config.apiWriteKey.length > 0;
+    const pipesSecretConfigured = typeof config.pipesSharedSecret === "string" && config.pipesSharedSecret.length > 0;
+
+    if (!writeKeyConfigured && !pipesSecretConfigured) {
+      return;
+    }
+
+    const suppliedWriteKey = request.headers["x-api-key"];
+    const suppliedPipesKey = request.headers["x-pipes-key"];
+    const writeKeyMatch = writeKeyConfigured && suppliedWriteKey === config.apiWriteKey;
+    const pipesKeyMatch = pipesSecretConfigured && suppliedPipesKey === config.pipesSharedSecret;
+
+    if (!writeKeyMatch && !pipesKeyMatch) {
+      return buildResponseError(reply, 401, "Unauthorized");
+    }
+  };
+};
+
 const patchDefinition = (
   base: DecisionDefinition,
   updates: DecisionDefinition,
@@ -1717,6 +1930,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
   const activeStackCache = new TtlCache<CachedStackVersion>(10_000);
   const wbsInstanceCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsInstance.findFirst>>>(10_000);
   const wbsMappingCache = new TtlCache<Awaited<ReturnType<typeof prisma.wbsMapping.findFirst>>>(10_000);
+  const hasPipesCallbackStorage = hasPipesCallbackConfigStorage(prisma as PrismaClient);
   const hasDlqStorage = typeof (prisma as unknown as { deadLetterMessage?: unknown }).deadLetterMessage === "object";
   const dlqProvider =
     deps.dlqProvider ??
@@ -1821,6 +2035,103 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     return found;
   };
 
+  const fetchActiveDecisionDefinitionsByKeys = async (input: {
+    environment: Environment;
+    keys: string[];
+  }): Promise<{
+    definitionsByKey: Record<string, DecisionDefinition>;
+    decisionIdsByKey: Record<string, string>;
+    versionsByKey: Record<string, number>;
+  }> => {
+    const uniqueKeys = [...new Set(input.keys.map((key) => key.trim()).filter(Boolean))];
+    if (uniqueKeys.length === 0) {
+      return {
+        definitionsByKey: {},
+        decisionIdsByKey: {},
+        versionsByKey: {}
+      };
+    }
+
+    const activeDecisions = await prisma.decisionVersion.findMany({
+      where: {
+        status: "ACTIVE",
+        decision: {
+          environment: input.environment,
+          key: {
+            in: uniqueKeys
+          }
+        }
+      },
+      include: {
+        decision: true
+      },
+      orderBy: [{ decisionId: "asc" }, { version: "desc" }]
+    });
+
+    const definitionsByKey: Record<string, DecisionDefinition> = {};
+    const decisionIdsByKey: Record<string, string> = {};
+    const versionsByKey: Record<string, number> = {};
+    for (const row of activeDecisions) {
+      if (!definitionsByKey[row.decision.key]) {
+        definitionsByKey[row.decision.key] = parseDefinition(row.definitionJson);
+        decisionIdsByKey[row.decision.key] = row.decisionId;
+        versionsByKey[row.decision.key] = row.version;
+      }
+    }
+
+    return {
+      definitionsByKey,
+      decisionIdsByKey,
+      versionsByKey
+    };
+  };
+
+  const fetchActiveContentBlocksByKeys = async (input: {
+    environment: Environment;
+    keys: string[];
+  }): Promise<Record<string, ContentBlockRequirementsSource>> => {
+    const uniqueKeys = [...new Set(input.keys.map((key) => key.trim()).filter(Boolean))];
+    if (uniqueKeys.length === 0) {
+      return {};
+    }
+
+    const rows = await prisma.contentBlock.findMany({
+      where: {
+        environment: input.environment,
+        status: "ACTIVE",
+        key: {
+          in: uniqueKeys
+        }
+      },
+      orderBy: [{ key: "asc" }, { version: "desc" }]
+    });
+
+    const byKey: Record<string, ContentBlockRequirementsSource> = {};
+    for (const row of rows) {
+      if (byKey[row.key]) {
+        continue;
+      }
+      byKey[row.key] = {
+        key: row.key,
+        tokenBindings: row.tokenBindings,
+        localesJson: row.localesJson
+      };
+    }
+    return byKey;
+  };
+
+  const buildDecisionRequirementsWithCatalog = async (input: {
+    environment: Environment;
+    definition: DecisionDefinition;
+  }) => {
+    const contentKeys = collectDecisionReferencedContentKeys(input.definition);
+    const contentBlocksByKey = await fetchActiveContentBlocksByKeys({
+      environment: input.environment,
+      keys: contentKeys
+    });
+    return deriveDecisionRequirements(input.definition, contentBlocksByKey);
+  };
+
   const clearStackCaches = (environment?: Environment) => {
     if (!environment) {
       activeStackCache.clear();
@@ -1920,6 +2231,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   const requireWriteAuth = createWriteAuth(config);
   const requireDecideAuth = createDecideAuth(config);
+  const requirePipesAuth = createPipesAuth(config);
   const precomputeRunner = createPrecomputeRunner({
     app,
     prisma,
@@ -2025,7 +2337,19 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           redactSensitiveFields
         });
       },
-      processExportTask
+      processExportTask,
+      processPipesCallbackDelivery: async (payload: unknown) => {
+        const parsed = pipesCallbackDeliveryTaskSchema.safeParse(payload);
+        if (!parsed.success) {
+          throw new Error(
+            `Invalid PIPES_CALLBACK_DELIVERY payload: ${parsed.error.issues[0]?.message ?? "unknown error"}`
+          );
+        }
+        await deliverCallbackTask({
+          prisma,
+          task: parsed.data
+        });
+      }
     }
   });
 
@@ -2302,6 +2626,16 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         clearRuntimeSettingsOverride(environment);
       }
     });
+    if (hasPipesCallbackStorage) {
+      await registerPipesCallbackRoutes({
+        app,
+        prisma,
+        dlq: dlqProvider,
+        requireWriteAuth,
+        resolveEnvironment,
+        buildResponseError
+      });
+    }
   } else {
     app.log.info({ runtimeRole: apiRuntimeRole }, "Runtime settings routes not started (app settings storage unavailable)");
   }
@@ -4265,6 +4599,846 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     });
     return reply.code(proxied.statusCode).send(proxied.json());
   });
+
+  app.get("/v1/requirements/decision/:key", { preHandler: requirePipesAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = requirementsParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid params", params.error.flatten());
+    }
+
+    const activeVersion = await fetchActiveDecision({
+      environment,
+      decisionKey: params.data.key
+    });
+    if (!activeVersion) {
+      return buildResponseError(reply, 404, "Active decision not found");
+    }
+
+    let definition: DecisionDefinition;
+    try {
+      definition = parseDefinition(activeVersion.definitionJson);
+    } catch (error) {
+      return buildResponseError(reply, 500, "Active decision definition is invalid", String(error));
+    }
+
+    const requirements = await buildDecisionRequirementsWithCatalog({
+      environment,
+      definition
+    });
+
+    return {
+      key: definition.key,
+      type: "decision" as const,
+      version: activeVersion.version,
+      required: requirements.required,
+      optional: requirements.optional,
+      notes: requirements.notes,
+      schema: {
+        operators: [...REQUIREMENTS_OPERATORS]
+      }
+    };
+  });
+
+  app.get("/v1/requirements/stack/:key", { preHandler: requirePipesAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = requirementsParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid params", params.error.flatten());
+    }
+
+    const activeStack = await fetchActiveStack({
+      environment,
+      stackKey: params.data.key
+    });
+    if (!activeStack) {
+      return buildResponseError(reply, 404, "Active stack not found");
+    }
+
+    let stackDefinition: DecisionStackDefinition;
+    try {
+      stackDefinition = parseStackDefinition(activeStack.definitionJson);
+    } catch (error) {
+      return buildResponseError(reply, 500, "Active stack definition is invalid", String(error));
+    }
+
+    const decisionKeys = stackDefinition.steps.map((step) => step.decisionKey);
+    const activeDefinitions = await fetchActiveDecisionDefinitionsByKeys({
+      environment,
+      keys: decisionKeys
+    });
+
+    const allContentKeys = new Set<string>();
+    for (const definition of Object.values(activeDefinitions.definitionsByKey)) {
+      for (const key of collectDecisionReferencedContentKeys(definition)) {
+        allContentKeys.add(key);
+      }
+    }
+    const contentBlocksByKey = await fetchActiveContentBlocksByKeys({
+      environment,
+      keys: [...allContentKeys]
+    });
+
+    const decisionRequirementsByKey: Record<string, ReturnType<typeof deriveDecisionRequirements>> = {};
+    for (const [decisionKey, definition] of Object.entries(activeDefinitions.definitionsByKey)) {
+      decisionRequirementsByKey[decisionKey] = deriveDecisionRequirements(definition, contentBlocksByKey);
+    }
+
+    const requirements = deriveStackRequirements({
+      stack: stackDefinition,
+      decisionsByKey: activeDefinitions.definitionsByKey,
+      decisionRequirementsByKey
+    });
+
+    return {
+      key: stackDefinition.key,
+      type: "stack" as const,
+      version: stackDefinition.version,
+      required: requirements.required,
+      optional: requirements.optional,
+      notes: requirements.notes,
+      schema: {
+        operators: [...REQUIREMENTS_OPERATORS]
+      }
+    };
+  });
+
+  app.post(
+    "/v1/evaluate",
+    { preHandler: requirePipesAuth, bodyLimit: INLINE_EVALUATE_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const environment = resolveEnvironment(request, reply);
+      if (!environment) {
+        return;
+      }
+
+      const parsed = evaluateBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+      }
+
+      const headerBag = request.headers as Record<string, unknown>;
+      const isAsyncRequest = isAsyncEvaluateHeader(headerBag);
+      const fromDecisionEngine = isFromDecisionEngineHeader(headerBag);
+      const startedAt = process.hrtime.bigint();
+      const requestId = createRequestId(request);
+      const correlationId =
+        typeof request.headers["x-correlation-id"] === "string" && request.headers["x-correlation-id"].trim().length > 0
+          ? request.headers["x-correlation-id"]
+          : requestId;
+      const rawContext = (parsed.data.context ?? {}) as Record<string, unknown>;
+      const contextNow = parseDateOrNow(typeof rawContext.now === "string" ? rawContext.now : undefined, now);
+      const appKey = typeof rawContext.appKey === "string" && rawContext.appKey.trim().length > 0 ? rawContext.appKey : null;
+      const placement = typeof rawContext.placement === "string" && rawContext.placement.trim().length > 0 ? rawContext.placement : null;
+      const context: EngineContext = {
+        ...(rawContext as Record<string, unknown>),
+        now: contextNow.toISOString(),
+        requestId
+      } as EngineContext;
+      const inlineProfile: EngineProfile = {
+        profileId: parsed.data.profile.profileId,
+        attributes: parsed.data.profile.attributes,
+        audiences: parsed.data.profile.audiences ?? [],
+        consents: parsed.data.profile.consents ?? []
+      };
+
+      let engineLatencyMs = 0;
+      let eligible = false;
+      let result: { actionType: string; payload: Record<string, unknown> } | null = null;
+      let reasonCodes: string[] = [];
+      let missingFields: string[] = [];
+      let typeIssues: PredicateTypeIssue[] = [];
+      let trace: Record<string, unknown> | undefined;
+      let callbackExports: Record<string, unknown> | undefined;
+      let requirementsHash: string | undefined;
+      let decisionVersion: number | undefined;
+      let stackVersion: number | undefined;
+      let decisionIdForLog: string | undefined;
+      let decisionOutcomeForLog: "ELIGIBLE" | "IN_HOLDOUT" | "CAPPED" | "NOT_ELIGIBLE" | "ERROR" = "NOT_ELIGIBLE";
+      let decisionActionTypeForLog: string = "noop";
+      let decisionPayloadForLog: Record<string, unknown> = {};
+      let stackKeyForLog: string | undefined;
+      let stackActionTypeForLog: string = "noop";
+      let stackPayloadForLog: Record<string, unknown> = {};
+      let stackStepsForLog: Array<Record<string, unknown>> = [];
+
+      if (parsed.data.decisionKey) {
+        const activeVersion = await fetchActiveDecision({
+          environment,
+          decisionKey: parsed.data.decisionKey
+        });
+        if (!activeVersion) {
+          return buildResponseError(reply, 404, "Active decision not found");
+        }
+        decisionIdForLog = activeVersion.decisionId;
+
+        let definition: DecisionDefinition;
+        try {
+          definition = parseDefinition(activeVersion.definitionJson);
+        } catch (error) {
+          return buildResponseError(reply, 500, "Active decision definition is invalid", String(error));
+        }
+
+        const requirements = await buildDecisionRequirementsWithCatalog({
+          environment,
+          definition
+        });
+        decisionVersion = definition.version;
+        requirementsHash = computeVersionChecksum(requirements.required);
+        missingFields = buildMissingFields({
+          profileAttributes: inlineProfile.attributes,
+          requiredFields: requirements.required.attributes
+        });
+        typeIssues = detectTypeIssues({
+          profileAttributes: inlineProfile.attributes,
+          fields: requirements.required.attributes,
+          expectedByField: buildExpectedTypesByField({
+            decisionDefinitions: [definition]
+          })
+        });
+
+        const dayStart = new Date(contextNow);
+        dayStart.setUTCHours(0, 0, 0, 0);
+        const weekStart = getWeekStart(contextNow);
+        const [perDay, perWeek] = await Promise.all([
+          prisma.decisionLog.count({
+            where: {
+              decisionId: activeVersion.decisionId,
+              profileId: inlineProfile.profileId,
+              outcome: "ELIGIBLE",
+              timestamp: {
+                gte: dayStart
+              }
+            }
+          }),
+          prisma.decisionLog.count({
+            where: {
+              decisionId: activeVersion.decisionId,
+              profileId: inlineProfile.profileId,
+              outcome: "ELIGIBLE",
+              timestamp: {
+                gte: weekStart
+              }
+            }
+          })
+        ]);
+
+        const engineStartedAt = process.hrtime.bigint();
+        const engineResult = evaluateDecision({
+          definition,
+          profile: inlineProfile,
+          context,
+          history: {
+            perProfilePerDay: perDay,
+            perProfilePerWeek: perWeek
+          },
+          debug: Boolean(parsed.data.debug)
+        });
+        engineLatencyMs = Number((process.hrtime.bigint() - engineStartedAt) / 1000000n);
+
+        const policyOutcome =
+          engineResult.outcome === "ELIGIBLE"
+            ? applyPolicies({
+                policies: createDefaultPolicies(),
+                context: {
+                  decisionVersion: definition,
+                  profile: inlineProfile,
+                  context,
+                  evaluationDraft: {
+                    actionType: engineResult.actionType,
+                    payload: engineResult.payload,
+                    outcome: engineResult.outcome,
+                    reasons: engineResult.reasons
+                  }
+                }
+              })
+            : null;
+
+        const decisionAfterPolicy =
+          policyOutcome && !policyOutcome.allow
+            ? {
+                ...engineResult,
+                actionType: "noop" as const,
+                payload: {},
+                outcome: "NOT_ELIGIBLE" as const,
+                reasons: [...engineResult.reasons, ...policyOutcome.reasons]
+              }
+            : policyOutcome
+              ? {
+                  ...engineResult,
+                  payload: policyOutcome.payload,
+                  reasons: [...engineResult.reasons, ...policyOutcome.reasons]
+                }
+              : engineResult;
+
+        const resolvedPayload = await catalogResolver.resolvePayloadRef({
+          environment,
+          actionType: decisionAfterPolicy.actionType,
+          payload: decisionAfterPolicy.payload,
+          locale: typeof context.locale === "string" ? context.locale : undefined,
+          profile: inlineProfile,
+          context,
+          now: contextNow
+        });
+
+        let runtimeActionType = decisionAfterPolicy.actionType;
+        let runtimePayload = resolvedPayload.payload;
+        let runtimeOutcome = decisionAfterPolicy.outcome;
+        const runtimeReasons = [...decisionAfterPolicy.reasons];
+
+        const descriptor = await buildActionDescriptor(
+          {
+            actionType: decisionAfterPolicy.actionType,
+            payload: decisionAfterPolicy.payload,
+            tags: resolvedPayload.tags
+          },
+          {
+            environment,
+            appKey: typeof rawContext.appKey === "string" ? rawContext.appKey : undefined,
+            placement: typeof rawContext.placement === "string" ? rawContext.placement : undefined,
+            catalogResolver,
+            metadata: {
+              source: "v1_evaluate",
+              decisionKey: definition.key,
+              decisionVersion: definition.version
+            }
+          }
+        );
+        const orchestrationEvaluation =
+          runtimeOutcome === "ELIGIBLE"
+            ? await orchestration.evaluateAction({
+                environment,
+                appKey: descriptor.appKey,
+                profileId: inlineProfile.profileId,
+                action: descriptor,
+                now: contextNow,
+                debug: Boolean(parsed.data.debug)
+              })
+            : null;
+        if (orchestrationEvaluation && !orchestrationEvaluation.allowed) {
+          const fallback = orchestrationEvaluation.fallbackAction ?? { actionType: "noop", payload: {} };
+          runtimeActionType = normalizeEngineActionType(fallback.actionType);
+          runtimePayload = fallback.payload;
+          runtimeOutcome = "NOT_ELIGIBLE";
+          runtimeReasons.push(...orchestrationEvaluation.reasons);
+        }
+
+        eligible = runtimeOutcome === "ELIGIBLE" && missingFields.length === 0 && typeIssues.length === 0;
+        reasonCodes = runtimeReasons.map((reason) => reason.code);
+        if (missingFields.length > 0) {
+          reasonCodes.push("MISSING_FIELDS");
+        }
+        if (typeIssues.length > 0) {
+          reasonCodes.push("TYPE_ISSUES");
+        }
+        reasonCodes = [...new Set(reasonCodes)];
+
+        if (parsed.data.mode === "full" && eligible) {
+          result = {
+            actionType: runtimeActionType,
+            payload: runtimePayload
+          };
+        }
+
+        if (parsed.data.debug) {
+          trace = {
+            mode: parsed.data.mode,
+            target: {
+              type: "decision",
+              key: definition.key,
+              version: definition.version
+            },
+            outcome: runtimeOutcome,
+            reasons: reasonCodes,
+            engine: engineResult.trace ?? null,
+            profileSummary: summarizeInlineProfileForDebug(inlineProfile),
+            requiredFields: requirements.required,
+            optionalFields: requirements.optional
+          };
+        }
+
+        decisionActionTypeForLog = runtimeActionType;
+        decisionPayloadForLog = runtimePayload;
+        if (runtimeOutcome === "IN_HOLDOUT" || runtimeOutcome === "CAPPED" || runtimeOutcome === "ERROR") {
+          decisionOutcomeForLog = runtimeOutcome;
+        } else {
+          decisionOutcomeForLog = eligible ? "ELIGIBLE" : "NOT_ELIGIBLE";
+        }
+      } else if (parsed.data.stackKey) {
+        const activeStack = await fetchActiveStack({
+          environment,
+          stackKey: parsed.data.stackKey
+        });
+        if (!activeStack) {
+          return buildResponseError(reply, 404, "Active stack not found");
+        }
+        stackKeyForLog = parsed.data.stackKey;
+
+        let stackDefinition: DecisionStackDefinition;
+        try {
+          stackDefinition = parseStackDefinition(activeStack.definitionJson);
+        } catch (error) {
+          return buildResponseError(reply, 500, "Active stack definition is invalid", String(error));
+        }
+
+        const activeDefinitions = await fetchActiveDecisionDefinitionsByKeys({
+          environment,
+          keys: stackDefinition.steps.map((step) => step.decisionKey)
+        });
+
+        const allContentKeys = new Set<string>();
+        for (const definition of Object.values(activeDefinitions.definitionsByKey)) {
+          for (const key of collectDecisionReferencedContentKeys(definition)) {
+            allContentKeys.add(key);
+          }
+        }
+        const contentBlocksByKey = await fetchActiveContentBlocksByKeys({
+          environment,
+          keys: [...allContentKeys]
+        });
+
+        const decisionRequirementsByKey: Record<string, ReturnType<typeof deriveDecisionRequirements>> = {};
+        for (const [decisionKey, definition] of Object.entries(activeDefinitions.definitionsByKey)) {
+          decisionRequirementsByKey[decisionKey] = deriveDecisionRequirements(definition, contentBlocksByKey);
+        }
+
+        const stackRequirements = deriveStackRequirements({
+          stack: stackDefinition,
+          decisionsByKey: activeDefinitions.definitionsByKey,
+          decisionRequirementsByKey
+        });
+        stackVersion = stackDefinition.version;
+        requirementsHash = computeVersionChecksum(stackRequirements.required);
+        missingFields = buildMissingFields({
+          profileAttributes: inlineProfile.attributes,
+          requiredFields: stackRequirements.required.attributes
+        });
+        typeIssues = detectTypeIssues({
+          profileAttributes: inlineProfile.attributes,
+          fields: stackRequirements.required.attributes,
+          expectedByField: buildExpectedTypesByField({
+            decisionDefinitions: Object.values(activeDefinitions.definitionsByKey)
+          })
+        });
+
+        const dayStart = new Date(contextNow);
+        dayStart.setUTCHours(0, 0, 0, 0);
+        const weekStart = getWeekStart(contextNow);
+        const historyByDecisionKey: Record<string, { perProfilePerDay: number; perProfilePerWeek: number }> = {};
+        await Promise.all(
+          Object.entries(activeDefinitions.decisionIdsByKey).map(async ([decisionKey, decisionId]) => {
+            const [perDay, perWeek] = await Promise.all([
+              prisma.decisionLog.count({
+                where: {
+                  decisionId,
+                  profileId: inlineProfile.profileId,
+                  outcome: "ELIGIBLE",
+                  timestamp: {
+                    gte: dayStart
+                  }
+                }
+              }),
+              prisma.decisionLog.count({
+                where: {
+                  decisionId,
+                  profileId: inlineProfile.profileId,
+                  outcome: "ELIGIBLE",
+                  timestamp: {
+                    gte: weekStart
+                  }
+                }
+              })
+            ]);
+            historyByDecisionKey[decisionKey] = {
+              perProfilePerDay: perDay,
+              perProfilePerWeek: perWeek
+            };
+          })
+        );
+
+        const engineStartedAt = process.hrtime.bigint();
+        const stackResult = await evaluateStackWithOrchestration({
+          stack: stackDefinition,
+          profile: inlineProfile,
+          context,
+          decisionsByKey: activeDefinitions.definitionsByKey,
+          historyByDecisionKey,
+          debug: Boolean(parsed.data.debug),
+          nowMs: stackNowMs,
+          environment,
+          orchestration,
+          catalogResolver
+        });
+        callbackExports = stackResult.exports ? ({ ...stackResult.exports } as Record<string, unknown>) : undefined;
+        engineLatencyMs = Number((process.hrtime.bigint() - engineStartedAt) / 1000000n);
+
+        const resolvedFinal = await catalogResolver.resolvePayloadRef({
+          environment,
+          actionType: stackResult.final.actionType,
+          payload: stackResult.final.payload,
+          locale: typeof context.locale === "string" ? context.locale : undefined,
+          profile: inlineProfile,
+          context,
+          now: contextNow
+        });
+        const finalDescriptor = await buildActionDescriptor(
+          {
+            actionType: stackResult.final.actionType,
+            payload: stackResult.final.payload,
+            tags: resolvedFinal.tags
+          },
+          {
+            environment,
+            appKey: typeof rawContext.appKey === "string" ? rawContext.appKey : undefined,
+            placement: typeof rawContext.placement === "string" ? rawContext.placement : undefined,
+            catalogResolver,
+            metadata: {
+              source: "v1_evaluate_stack_final",
+              stackKey: stackDefinition.key
+            }
+          }
+        );
+        const finalOrchestrationEvaluation = await orchestration.evaluateAction({
+          environment,
+          appKey: finalDescriptor.appKey,
+          profileId: inlineProfile.profileId,
+          action: finalDescriptor,
+          now: contextNow,
+          debug: Boolean(parsed.data.debug)
+        });
+
+        let finalActionType = stackResult.final.actionType;
+        let finalPayload = resolvedFinal.payload;
+        const finalReasonCodes = [...(stackResult.final.reasonCodes ?? [])];
+        if (!finalOrchestrationEvaluation.allowed) {
+          const fallback = finalOrchestrationEvaluation.fallbackAction ?? { actionType: "noop", payload: {} };
+          finalActionType = normalizeEngineActionType(fallback.actionType);
+          finalPayload = fallback.payload;
+          finalReasonCodes.push(...finalOrchestrationEvaluation.reasons.map((reason) => reason.code));
+        }
+
+        eligible = finalActionType !== "noop" && missingFields.length === 0 && typeIssues.length === 0;
+        reasonCodes = [...new Set(finalReasonCodes)];
+        if (missingFields.length > 0) {
+          reasonCodes.push("MISSING_FIELDS");
+        }
+        if (typeIssues.length > 0) {
+          reasonCodes.push("TYPE_ISSUES");
+        }
+
+        if (parsed.data.mode === "full" && eligible) {
+          result = {
+            actionType: finalActionType,
+            payload: finalPayload
+          };
+        }
+
+        if (parsed.data.debug) {
+          trace = {
+            mode: parsed.data.mode,
+            target: {
+              type: "stack",
+              key: stackDefinition.key,
+              version: stackDefinition.version
+            },
+            reasons: reasonCodes,
+            profileSummary: summarizeInlineProfileForDebug(inlineProfile),
+            requiredFields: stackRequirements.required,
+            optionalFields: stackRequirements.optional
+          };
+        }
+
+        stackActionTypeForLog = finalActionType;
+        stackPayloadForLog = finalPayload;
+        stackStepsForLog = stackResult.steps.map((step) => ({
+          decisionKey: step.decisionKey,
+          matched: step.matched,
+          actionType: step.actionType,
+          reasonCodes: step.reasonCodes,
+          stop: step.stop,
+          ms: step.ms,
+          ruleId: step.ruleId,
+          ran: step.ran,
+          skippedReason: step.skippedReason
+        }));
+      }
+
+      const latencyTotalMs = Number((process.hrtime.bigint() - startedAt) / 1000000n);
+      const evaluateResponse = {
+        status: "ok",
+        eligible,
+        result: parsed.data.mode === "full" ? result : null,
+        reasons: reasonCodes,
+        missingFields,
+        typeIssues,
+        ...(parsed.data.debug ? { trace } : {}),
+        meta: {
+          correlationId,
+          latencyMs: {
+            total: latencyTotalMs,
+            engine: engineLatencyMs
+          }
+        }
+      };
+
+      request.log.info(
+        {
+          event: "decision_runtime",
+          source: "v1_evaluate",
+          targetType: parsed.data.decisionKey ? "decision" : "stack",
+          targetKey: parsed.data.decisionKey ?? parsed.data.stackKey,
+          profileId: inlineProfile.profileId,
+          eligible,
+          totalLatencyMs: latencyTotalMs,
+          engineLatencyMs,
+          correlationId
+        },
+        "inline evaluation completed"
+      );
+
+      const inlineInputSummary = {
+        mode: parsed.data.mode,
+        ...(parsed.data.decisionKey ? { decisionKey: parsed.data.decisionKey } : {}),
+        ...(parsed.data.stackKey ? { stackKey: parsed.data.stackKey } : {}),
+        profile: {
+          profileId: inlineProfile.profileId,
+          attributeKeys: Object.keys(inlineProfile.attributes).sort((left, right) => left.localeCompare(right)),
+          audiences: [...new Set(inlineProfile.audiences)].sort((left, right) => left.localeCompare(right)),
+          consents: [...new Set(inlineProfile.consents ?? [])].sort((left, right) => left.localeCompare(right))
+        },
+        context: redactSensitiveFields(rawContext)
+      };
+
+      if (decisionIdForLog && typeof decisionVersion === "number") {
+        await prisma.decisionLog.create({
+          data: {
+            requestId,
+            decisionId: decisionIdForLog,
+            version: decisionVersion,
+            profileId: inlineProfile.profileId,
+            timestamp: contextNow,
+            actionType: decisionActionTypeForLog,
+            payloadJson: toInputJson(redactSensitiveFields(decisionPayloadForLog)),
+            outcome: decisionOutcomeForLog,
+            reasonsJson: toInputJson(reasonCodes.map((code) => ({ code }))),
+            debugTraceJson: parsed.data.debug ? toInputJson(redactSensitiveFields(trace ?? {})) : undefined,
+            inputJson: toInputJson(inlineInputSummary),
+            latencyMs: latencyTotalMs
+          }
+        });
+      }
+
+      if (stackKeyForLog && typeof stackVersion === "number") {
+        await prisma.decisionStackLog.create({
+          data: {
+            environment,
+            requestId,
+            stackKey: stackKeyForLog,
+            version: stackVersion,
+            profileId: inlineProfile.profileId,
+            timestamp: contextNow,
+            finalActionType: stackActionTypeForLog,
+            finalReasonsJson: toInputJson(reasonCodes),
+            stepsJson: toInputJson(redactSensitiveFields(stackStepsForLog)),
+            payloadJson: toInputJson(redactSensitiveFields(stackPayloadForLog)),
+            debugJson: parsed.data.debug ? toInputJson(redactSensitiveFields(trace ?? {})) : undefined,
+            replayInputJson: toInputJson(inlineInputSummary),
+            correlationId,
+            totalMs: latencyTotalMs
+          }
+        });
+      }
+
+      let queuedDeliveryId: string | null = null;
+      if (hasDlqStorage && hasPipesCallbackStorage) {
+        const effectiveConfig = await loadEffectivePipesCallbackConfig({
+          prisma,
+          environment,
+          appKey
+        });
+        const shouldQueue = shouldQueuePipesCallback({
+          config: effectiveConfig.config,
+          isAsyncRequest,
+          fromDecisionEngine
+        });
+
+        if (shouldQueue) {
+          const candidateTtlSeconds = result?.payload?.ttl_seconds;
+          const ttlSeconds =
+            typeof candidateTtlSeconds === "number" &&
+            Number.isFinite(candidateTtlSeconds) &&
+            candidateTtlSeconds > 0
+              ? Math.floor(candidateTtlSeconds)
+              : null;
+          const deliveryId = computeDeliveryId({
+            environment,
+            appKey,
+            decisionKey: parsed.data.decisionKey,
+            stackKey: parsed.data.stackKey,
+            profileId: inlineProfile.profileId,
+            lookupHash: null,
+            contextPlacement: placement,
+            actionType: result?.actionType ?? "noop",
+            ttlSeconds,
+            now: contextNow
+          });
+          queuedDeliveryId = deliveryId;
+
+          const callbackPayload = buildDeliveryTaskPayload({
+            config: effectiveConfig.config,
+            deliveryId,
+            correlationId,
+            environment,
+            appKey,
+            mode: parsed.data.mode,
+            decisionKey: parsed.data.decisionKey,
+            stackKey: parsed.data.stackKey,
+            requirementsHash,
+            profile: inlineProfile,
+            context: rawContext,
+            eligible,
+            result: parsed.data.mode === "full" ? result : null,
+            reasons: reasonCodes,
+            missingFields,
+            typeIssues,
+            trace,
+            exports: callbackExports,
+            meta: {
+              latencyMs: {
+                total: latencyTotalMs,
+                engine: engineLatencyMs
+              },
+              version: {
+                ...(typeof decisionVersion === "number" ? { decisionVersion } : {}),
+                ...(typeof stackVersion === "number" ? { stackVersion } : {})
+              }
+            },
+            now: contextNow
+          });
+
+          await dlqProvider.enqueueFailure(
+            {
+              topic: PIPES_CALLBACK_TOPIC,
+              correlationId,
+              dedupeKey: deliveryId,
+              payload: {
+                configId: effectiveConfig.config.id,
+                deliveryId,
+                payload: callbackPayload
+              },
+              meta: {
+                source: "v1_evaluate"
+              }
+            },
+            new Error("Pipes callback delivery queued"),
+            { maxAttempts: effectiveConfig.config.maxAttempts }
+          );
+        }
+      }
+
+      if (isAsyncRequest) {
+        if (!queuedDeliveryId) {
+          return buildResponseError(reply, 409, "Async mode requires an enabled callback configuration");
+        }
+        return reply.code(202).send({
+          status: "queued",
+          correlationId,
+          deliveryId: queuedDeliveryId
+        });
+      }
+
+      return evaluateResponse;
+    }
+  );
+
+  app.post(
+    "/v1/profiles/upsert",
+    { preHandler: requirePipesAuth, bodyLimit: INLINE_EVALUATE_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const environment = resolveEnvironment(request, reply);
+      if (!environment) {
+        return;
+      }
+
+      const parsed = profileUpsertBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+      }
+
+      const profile: EngineProfile = {
+        profileId: parsed.data.profileId,
+        attributes: parsed.data.attributes ?? {},
+        audiences: parsed.data.segments ?? [],
+        consents: []
+      };
+      const attributeKeys = Object.keys(profile.attributes)
+        .map((key) => key.trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right));
+
+      const warmedCacheKeys: string[] = [];
+      const candidateRequiredSets = [[], attributeKeys];
+      for (const requiredAttributes of candidateRequiredSets) {
+        const profileCacheKey = buildProfileCacheKey({
+          environment,
+          profileId: profile.profileId,
+          requiredAttributes
+        });
+        profileCache.set(profileCacheKey, profile);
+        warmedCacheKeys.push(profileCacheKey);
+        if (cache.enabled) {
+          await cache.setJson(profileCacheKey, profile, profileCacheTtlSeconds);
+        }
+      }
+
+      if (cache.enabled) {
+        const hashedProfileId = hashSha256(profile.profileId);
+        await cache.setJson(
+          `deci:pipes:segments:v1:${environment}:${hashedProfileId}`,
+          {
+            profileIdHash: hashedProfileId,
+            segments: profile.audiences,
+            appKey: parsed.data.appKey ?? null,
+            sourceTs: parsed.data.sourceTs ?? null,
+            updatedAt: now().toISOString()
+          },
+          profileCacheTtlSeconds
+        );
+      }
+
+      const invalidation = await invalidateRealtimeCache({
+        environment,
+        payload: {
+          scope: "profile",
+          profileId: profile.profileId,
+          reasons: ["pipes_profile_upsert"]
+        },
+        cache
+      });
+
+      return {
+        status: "ok",
+        profileId: profile.profileId,
+        environment,
+        segments: profile.audiences,
+        updatedAttributes: attributeKeys,
+        sourceTs: parsed.data.sourceTs ?? null,
+        cache: {
+          warmedEntries: warmedCacheKeys.length,
+          invalidatedRealtimeKeys: invalidation.deletedKeys
+        },
+        recomputeEnqueued: false
+      };
+    }
+  );
 
   app.post("/v1/simulate", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);

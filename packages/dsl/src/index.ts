@@ -119,7 +119,9 @@ export type Reason = z.infer<typeof ReasonSchema>;
 
 export const DecisionPerformanceSchema = z.object({
   timeoutMs: z.number().int().min(20).max(5000).optional(),
-  wbsTimeoutMs: z.number().int().min(10).max(4000).optional()
+  wbsTimeoutMs: z.number().int().min(10).max(4000).optional(),
+  requiredAttributesOverride: z.array(z.string().min(1)).optional(),
+  requiredContextKeysOverride: z.array(z.string().min(1)).optional()
 });
 export type DecisionPerformance = z.infer<typeof DecisionPerformanceSchema>;
 

@@ -342,7 +342,8 @@ const upsertDlqConfig = async () => {
     PIPES_WEBHOOK: true,
     PRECOMPUTE_TASK: true,
     TRACKING_EVENT: true,
-    EXPORT_TASK: true
+    EXPORT_TASK: true,
+    PIPES_CALLBACK_DELIVERY: true
   };
 
   await prisma.dlqConfig.upsert({
@@ -361,6 +362,36 @@ const upsertDlqConfig = async () => {
       backoffMaxMs: 600000,
       jitterPct: 30,
       quarantineAfter: 8
+    }
+  });
+};
+
+const upsertPipesCallbackConfig = async () => {
+  const existingDefault = await prisma.pipesCallbackConfig.findFirst({
+    where: {
+      environment: Environment.DEV,
+      appKey: null
+    }
+  });
+
+  if (existingDefault) {
+    return;
+  }
+
+  await prisma.pipesCallbackConfig.create({
+    data: {
+      environment: Environment.DEV,
+      appKey: null,
+      isEnabled: false,
+      callbackUrl: "",
+      authType: "bearer",
+      authSecret: null,
+      mode: "async_only",
+      timeoutMs: 1500,
+      maxAttempts: 8,
+      includeDebug: false,
+      includeProfileSummary: false,
+      allowPiiKeys: toInputJson([])
     }
   });
 };
@@ -730,6 +761,7 @@ const main = async () => {
   await upsertWbsInstance();
   await upsertWbsMapping();
   await upsertDlqConfig();
+  await upsertPipesCallbackConfig();
   await upsertCatalogSeed();
   await upsertInAppMvpSeed();
   await upsertDecisionStack({

@@ -56,7 +56,12 @@ export type RealtimeCacheStatsResponse = {
   staleServedCount?: number;
 };
 
-export type DlqTopic = "PIPES_WEBHOOK" | "PRECOMPUTE_TASK" | "TRACKING_EVENT" | "EXPORT_TASK";
+export type DlqTopic =
+  | "PIPES_WEBHOOK"
+  | "PRECOMPUTE_TASK"
+  | "TRACKING_EVENT"
+  | "EXPORT_TASK"
+  | "PIPES_CALLBACK_DELIVERY";
 export type DlqStatus = "PENDING" | "RETRYING" | "QUARANTINED" | "RESOLVED";
 
 export type DlqMessage = {
@@ -197,6 +202,73 @@ export type RuntimeSettingsResponse = {
   updatedAt: string | null;
 };
 
+export type PipesRequirementsResponse = {
+  key: string;
+  type: "decision" | "stack";
+  version: number;
+  required: {
+    attributes: string[];
+    audiences: string[];
+    contextKeys: string[];
+  };
+  optional: {
+    attributes: string[];
+    contextKeys: string[];
+  };
+  notes: string[];
+  schema: {
+    operators: string[];
+  };
+};
+
+export type PipesInlineEvaluateResponse = {
+  status: "ok";
+  eligible: boolean;
+  result: { actionType: string; payload: Record<string, unknown> } | null;
+  reasons: string[];
+  missingFields: string[];
+  typeIssues: Array<{ field: string; expected: string; got: string }>;
+  trace?: unknown;
+  meta: {
+    correlationId: string;
+    latencyMs: {
+      total: number;
+      engine: number;
+    };
+  };
+};
+
+export type PipesCallbackConfigResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  source: "app" | "environment_default" | "fallback_default";
+  config: {
+    appKey: string | null;
+    isEnabled: boolean;
+    callbackUrl: string;
+    authType: "bearer" | "shared_secret" | "none";
+    authSecret: string | null;
+    mode: "disabled" | "async_only" | "always";
+    timeoutMs: number;
+    maxAttempts: number;
+    includeDebug: boolean;
+    includeProfileSummary: boolean;
+    allowPiiKeys: string[];
+    updatedAt: string;
+  };
+  recentDeliveries: Array<{
+    id: string;
+    status: DlqStatus;
+    attempts: number;
+    maxAttempts: number;
+    errorType: string;
+    errorMessage: string;
+    nextRetryAt: string;
+    lastSeenAt: string;
+    resolvedAt: string | null;
+    correlationId: string | null;
+  }>;
+};
+
 export type OrchestrationPolicyRule =
   | {
       id: string;
@@ -266,7 +338,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   const method = init?.method?.toUpperCase() ?? "GET";
-  const shouldAttachWriteKey = method !== "GET";
+  const shouldAttachWriteKey =
+    method !== "GET" || path.startsWith("/v1/requirements/") || path.startsWith("/v1/settings/pipes-callback");
   if (shouldAttachWriteKey && API_KEY) {
     headers.set("X-API-KEY", API_KEY);
   }
@@ -479,6 +552,17 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(input)
     }),
+  pipes: {
+    getDecisionRequirements: (key: string) =>
+      apiFetch<PipesRequirementsResponse>(`/v1/requirements/decision/${encodeURIComponent(key)}`),
+    getStackRequirements: (key: string) =>
+      apiFetch<PipesRequirementsResponse>(`/v1/requirements/stack/${encodeURIComponent(key)}`),
+    evaluateInline: (input: Record<string, unknown>) =>
+      apiFetch<PipesInlineEvaluateResponse>(`/v1/evaluate`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      })
+  },
   catalog: {
     tags: (params: { env?: "DEV" | "STAGE" | "PROD"; q?: string } = {}) =>
       apiFetch<CatalogTagsResponse>(`/v1/catalog/tags${toQuery(params)}`),
@@ -1028,6 +1112,33 @@ export const apiClient = {
         method: "PUT",
         body: JSON.stringify(input)
       }),
+    getPipesCallback: (appKey?: string) =>
+      apiFetch<PipesCallbackConfigResponse>(`/v1/settings/pipes-callback${toQuery({ appKey })}`),
+    savePipesCallback: (input: {
+      appKey?: string;
+      isEnabled: boolean;
+      callbackUrl: string;
+      authType: "bearer" | "shared_secret" | "none";
+      authSecret?: string;
+      mode: "disabled" | "async_only" | "always";
+      timeoutMs?: number;
+      maxAttempts?: number;
+      includeDebug?: boolean;
+      includeProfileSummary?: boolean;
+      allowPiiKeys?: string[];
+    }) =>
+      apiFetch<PipesCallbackConfigResponse>(`/v1/settings/pipes-callback`, {
+        method: "PUT",
+        body: JSON.stringify(input)
+      }),
+    testPipesCallback: (appKey?: string) =>
+      apiFetch<{ status: "queued"; deliveryId: string; correlationId: string; dlqMessageId: string | null; dlqStatus: string | null }>(
+        `/v1/settings/pipes-callback/test`,
+        {
+          method: "POST",
+          body: JSON.stringify(appKey ? { appKey } : {})
+        }
+      ),
     validateWbsMapping: (mappingJson: unknown) =>
       apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; formatted?: string | null }>(
         `/v1/settings/wbs-mapping/validate`,

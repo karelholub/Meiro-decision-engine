@@ -73,6 +73,7 @@ enum DlqTopic {
   PRECOMPUTE_TASK
   TRACKING_EVENT
   EXPORT_TASK
+  PIPES_CALLBACK_DELIVERY
 }
 
 enum DlqStatus {
@@ -626,6 +627,28 @@ model AppSetting {
   @@unique([environment, key])
   @@index([environment, updatedAt])
   @@map("app_settings")
+}
+
+model PipesCallbackConfig {
+  id                    String      @id @default(uuid())
+  environment           Environment @default(DEV)
+  appKey                String?
+  isEnabled             Boolean     @default(false)
+  callbackUrl           String
+  authType              String      @default("bearer")
+  authSecret            String?
+  mode                  String      @default("async_only")
+  timeoutMs             Int         @default(1500)
+  maxAttempts           Int         @default(8)
+  includeDebug          Boolean     @default(false)
+  includeProfileSummary Boolean     @default(false)
+  allowPiiKeys          Json?
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@unique([environment, appKey])
+  @@index([environment, isEnabled])
+  @@map("pipes_callback_configs")
 }
 
 model DeadLetterMessage {

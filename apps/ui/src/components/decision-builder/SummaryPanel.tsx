@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { DecisionValidationResponse } from "@decisioning/shared";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import type { ValidationByStep } from "./types";
-import { getDecisionSummaryText } from "./wizard-utils";
+import { deriveWizardRequiredAttributes, getDecisionSummaryText } from "./wizard-utils";
 import { apiClient } from "../../lib/api";
 
 interface SummaryPanelProps {
@@ -20,6 +20,7 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
   const [catalogPreview, setCatalogPreview] = useState<unknown | null>(null);
 
   const summaryText = useMemo(() => getDecisionSummaryText(definition), [definition]);
+  const requiredAttributes = useMemo(() => deriveWizardRequiredAttributes(definition), [definition]);
   const jsonPreview = useMemo(() => (previewOpen ? pretty(definition) : ""), [definition, previewOpen]);
   const referencedContentKey = useMemo(() => {
     for (const rule of definition.flow.rules) {
@@ -93,6 +94,18 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
           <li>Cache mode: {definition.cachePolicy?.mode ?? "normal"}</li>
           <li>Default action: {definition.outputs.default?.actionType ?? "noop"}</li>
         </ul>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Required attributes</p>
+          {requiredAttributes.length === 0 ? (
+            <p className="mt-1 text-xs text-stone-600">No explicit attribute requirements detected.</p>
+          ) : (
+            <ul className="mt-1 space-y-1 text-xs text-stone-700">
+              {requiredAttributes.map((field) => (
+                <li key={field}>{field}</li>
+              ))}
+            </ul>
+          )}
+        </div>
         <p className="text-xs text-stone-600">
           Tip: resolve errors from top to bottom for the fastest validation pass.
         </p>

@@ -3,7 +3,7 @@ import { createDbDlqProvider } from "../src/dlq/dbProvider";
 
 type Row = {
   id: string;
-  topic: "PIPES_WEBHOOK" | "PRECOMPUTE_TASK" | "TRACKING_EVENT" | "EXPORT_TASK";
+  topic: "PIPES_WEBHOOK" | "PRECOMPUTE_TASK" | "TRACKING_EVENT" | "EXPORT_TASK" | "PIPES_CALLBACK_DELIVERY";
   status: "PENDING" | "RETRYING" | "QUARANTINED" | "RESOLVED";
   payload: Record<string, unknown>;
   payloadHash: string;

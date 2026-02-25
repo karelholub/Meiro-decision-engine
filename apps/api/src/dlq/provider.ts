@@ -1,4 +1,9 @@
-export type DlqTopic = "PIPES_WEBHOOK" | "PRECOMPUTE_TASK" | "TRACKING_EVENT" | "EXPORT_TASK";
+export type DlqTopic =
+  | "PIPES_WEBHOOK"
+  | "PRECOMPUTE_TASK"
+  | "TRACKING_EVENT"
+  | "EXPORT_TASK"
+  | "PIPES_CALLBACK_DELIVERY";
 
 export type DlqEnvelope = {
   topic: DlqTopic;

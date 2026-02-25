@@ -73,6 +73,8 @@ const NAV_GROUPS: NavGroup[] = [
     hint: "Integration settings and governance",
     items: [
       { href: "/execution/webhooks", label: "Webhook Rules" },
+      { href: "/settings/integrations/pipes", label: "Pipes Integration" },
+      { href: "/settings/integrations/pipes-callback", label: "Pipes Callback" },
       { href: "/settings/wbs", label: "WBS Settings" },
       { href: "/settings/wbs-mapping", label: "WBS Mapping" },
       { href: "/settings/app", label: "App Settings" },

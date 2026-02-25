@@ -449,6 +449,8 @@ const makePrisma = () => {
   let decisionStackLogCounter = 1;
   const orchestrationPolicies: Array<Record<string, any>> = [];
   const orchestrationEvents: Array<Record<string, any>> = [];
+  const pipesCallbackConfigs: Array<Record<string, any>> = [];
+  const deadLetterMessages: Array<Record<string, any>> = [];
 
   const decisionVersionFindFirst = vi.fn().mockImplementation(async (args?: any) => {
     const where = args?.where ?? {};
@@ -803,6 +805,154 @@ const makePrisma = () => {
     return created;
   });
 
+  const appSettingRows: Array<Record<string, any>> = [];
+
+  const appSettingFindMany = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    return appSettingRows.filter(
+      (row) =>
+        (where.environment ? row.environment === where.environment : true) && (where.key ? row.key === where.key : true)
+    );
+  });
+
+  const appSettingFindFirst = vi.fn().mockImplementation(async (args?: any) => {
+    const rows = await appSettingFindMany(args);
+    return rows[0] ?? null;
+  });
+
+  const appSettingCreate = vi.fn().mockImplementation(async ({ data }: any) => {
+    const created = {
+      id: data.id ?? `app-setting-${Math.random().toString(36).slice(2, 10)}`,
+      environment: data.environment,
+      key: data.key,
+      valueJson: data.valueJson,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    appSettingRows.push(created);
+    return created;
+  });
+
+  const appSettingUpdate = vi.fn().mockImplementation(async ({ where, data }: any) => {
+    const target = appSettingRows.find((row) => row.id === where.id);
+    if (!target) {
+      throw new Error("appSetting not found");
+    }
+    Object.assign(target, data, { updatedAt: new Date() });
+    return target;
+  });
+
+  const pipesCallbackFindFirst = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    const filtered = pipesCallbackConfigs.filter(
+      (row) =>
+        (where.environment ? row.environment === where.environment : true) &&
+        (Object.prototype.hasOwnProperty.call(where, "appKey") ? row.appKey === where.appKey : true)
+    );
+    return filtered.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null;
+  });
+
+  const pipesCallbackFindUnique = vi.fn().mockImplementation(async ({ where }: any) => {
+    return pipesCallbackConfigs.find((row) => row.id === where.id) ?? null;
+  });
+
+  const pipesCallbackCreate = vi.fn().mockImplementation(async ({ data }: any) => {
+    const created = {
+      id: data.id ?? `pipes-callback-${Math.random().toString(36).slice(2, 10)}`,
+      environment: data.environment,
+      appKey: data.appKey ?? null,
+      isEnabled: data.isEnabled ?? false,
+      callbackUrl: data.callbackUrl ?? "",
+      authType: data.authType ?? "bearer",
+      authSecret: data.authSecret ?? null,
+      mode: data.mode ?? "async_only",
+      timeoutMs: data.timeoutMs ?? 1500,
+      maxAttempts: data.maxAttempts ?? 8,
+      includeDebug: data.includeDebug ?? false,
+      includeProfileSummary: data.includeProfileSummary ?? false,
+      allowPiiKeys: data.allowPiiKeys ?? [],
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    pipesCallbackConfigs.push(created);
+    return created;
+  });
+
+  const pipesCallbackUpdate = vi.fn().mockImplementation(async ({ where, data }: any) => {
+    const target = pipesCallbackConfigs.find((row) => row.id === where.id);
+    if (!target) {
+      throw new Error("pipesCallbackConfig not found");
+    }
+    Object.assign(target, data, { updatedAt: new Date() });
+    return target;
+  });
+
+  const deadLetterFindMany = vi.fn().mockImplementation(async (args?: any) => {
+    const where = args?.where ?? {};
+    const sorted = deadLetterMessages
+      .filter((row) => (where.topic ? row.topic === where.topic : true))
+      .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+    const take = args?.take ?? sorted.length;
+    return sorted.slice(0, take);
+  });
+
+  const deadLetterFindFirst = vi.fn().mockImplementation(async (args?: any) => {
+    const rows = await deadLetterFindMany(args);
+    return rows[0] ?? null;
+  });
+
+  const deadLetterFindUnique = vi.fn().mockImplementation(async ({ where }: any) => {
+    return deadLetterMessages.find((row) => row.id === where.id) ?? null;
+  });
+
+  const deadLetterCreate = vi.fn().mockImplementation(async ({ data }: any) => {
+    const created = {
+      id: data.id ?? `dlq-${Math.random().toString(36).slice(2, 10)}`,
+      topic: data.topic,
+      status: data.status ?? "PENDING",
+      payload: data.payload ?? {},
+      payloadHash: data.payloadHash ?? Math.random().toString(36).slice(2, 10),
+      dedupeKey: data.dedupeKey ?? null,
+      errorType: data.errorType ?? "Error",
+      errorMessage: data.errorMessage ?? "queued",
+      errorMeta: data.errorMeta ?? null,
+      attempts: data.attempts ?? 0,
+      maxAttempts: data.maxAttempts ?? 8,
+      nextRetryAt: data.nextRetryAt ?? new Date(),
+      firstSeenAt: data.firstSeenAt ?? new Date(),
+      lastSeenAt: new Date(),
+      tenantKey: data.tenantKey ?? null,
+      correlationId: data.correlationId ?? null,
+      source: data.source ?? null,
+      createdBy: data.createdBy ?? null,
+      resolvedAt: data.resolvedAt ?? null,
+      resolvedBy: data.resolvedBy ?? null,
+      resolutionNote: data.resolutionNote ?? null
+    };
+    deadLetterMessages.push(created);
+    return created;
+  });
+
+  const deadLetterUpdate = vi.fn().mockImplementation(async ({ where, data }: any) => {
+    const target = deadLetterMessages.find((row) => row.id === where.id);
+    if (!target) {
+      throw new Error("deadLetterMessage not found");
+    }
+    for (const [key, value] of Object.entries(data)) {
+      if (key === "attempts" && value && typeof value === "object" && "increment" in value) {
+        target.attempts += Number((value as { increment: number }).increment);
+      } else if (value !== undefined) {
+        (target as Record<string, unknown>)[key] = value;
+      }
+    }
+    target.lastSeenAt = new Date();
+    return target;
+  });
+
+  const deadLetterCount = vi.fn().mockResolvedValue(0);
+
+  const deadLetterGroupBy = vi.fn().mockResolvedValue([]);
+
   const prisma = {
     decisionVersion: {
       findFirst: decisionVersionFindFirst,
@@ -876,6 +1026,28 @@ const makePrisma = () => {
       updateMany: wbsMappingUpdateMany,
       create: wbsMappingCreate
     },
+    appSetting: {
+      findMany: appSettingFindMany,
+      findFirst: appSettingFindFirst,
+      create: appSettingCreate,
+      update: appSettingUpdate,
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 })
+    },
+    pipesCallbackConfig: {
+      findFirst: pipesCallbackFindFirst,
+      findUnique: pipesCallbackFindUnique,
+      create: pipesCallbackCreate,
+      update: pipesCallbackUpdate
+    },
+    deadLetterMessage: {
+      create: deadLetterCreate,
+      findMany: deadLetterFindMany,
+      findFirst: deadLetterFindFirst,
+      findUnique: deadLetterFindUnique,
+      update: deadLetterUpdate,
+      count: deadLetterCount,
+      groupBy: deadLetterGroupBy
+    },
     orchestrationPolicy: {
       findMany: vi.fn().mockImplementation(async (args?: any) => {
         const where = args?.where ?? {};
@@ -938,6 +1110,8 @@ const makePrisma = () => {
     conversionCreate,
     wbsInstances,
     wbsMappings,
+    pipesCallbackConfigs,
+    deadLetterMessages,
     orchestrationPolicies,
     orchestrationEvents,
     decisionStacks,
@@ -2655,6 +2829,680 @@ describe("API", () => {
     expect((createdDebugTrace?.policy as { blockingRule?: { ruleId?: string } } | undefined)?.blockingRule?.ruleId).toBe(
       "promo_mutex"
     );
+
+    await app.close();
+  });
+
+  it("extracts requirements for decision and stack endpoints", async () => {
+    const { prisma } = makePrisma();
+    const nowDate = new Date("2026-02-24T12:00:00.000Z");
+
+    const decisionDefinition = createDefaultDecisionDefinition({
+      id: "9e17f2f8-c947-4bc3-95db-16f5f7565f10",
+      key: "pipes_req_decision",
+      name: "Pipes Requirements Decision",
+      version: 3,
+      status: "ACTIVE"
+    });
+    decisionDefinition.eligibility = {
+      audiencesAll: ["known_customer"],
+      attributes: [
+        {
+          field: "churnScore",
+          op: "gte",
+          value: 0.7
+        }
+      ]
+    };
+    decisionDefinition.performance = {
+      timeoutMs: 120,
+      wbsTimeoutMs: 80,
+      requiredAttributesOverride: ["loyaltyScore"],
+      requiredContextKeysOverride: ["placement"]
+    };
+    decisionDefinition.flow.rules = [
+      {
+        id: "r1",
+        priority: 1,
+        when: {
+          type: "group",
+          operator: "all",
+          conditions: [
+            {
+              type: "predicate",
+              predicate: {
+                field: "daysSinceLastOrder",
+                op: "gte",
+                value: 14
+              }
+            }
+          ]
+        },
+        then: {
+          actionType: "message",
+          payload: {
+            title: "Hello {{ profile.first_name }}",
+            subtitle: "Locale: {{ context.locale }}",
+            payloadRef: {
+              contentKey: "pipes_req_content"
+            }
+          }
+        }
+      }
+    ];
+
+    const stackDefinition = createDefaultDecisionStackDefinition({
+      id: "d37f2e38-f9e1-4a96-a557-29956398d5fd",
+      key: "pipes_req_stack",
+      name: "Pipes Requirements Stack",
+      version: 2,
+      status: "ACTIVE"
+    });
+    stackDefinition.steps = [
+      {
+        id: "s1",
+        decisionKey: "pipes_req_decision",
+        enabled: true,
+        stopOnMatch: false,
+        stopOnActionTypes: ["suppress"],
+        continueOnNoMatch: true,
+        when: {
+          op: "exists",
+          left: "context.appKey"
+        }
+      }
+    ];
+
+    prisma.decisionVersion.findFirst.mockImplementation(async (args?: any) => {
+      const where = args?.where ?? {};
+      if (where?.decision?.key === "pipes_req_decision") {
+        return {
+          id: "version-pipes-req-decision",
+          decisionId: decisionDefinition.id,
+          version: 3,
+          status: "ACTIVE",
+          definitionJson: decisionDefinition,
+          decision: {
+            id: decisionDefinition.id,
+            key: decisionDefinition.key,
+            environment: "DEV",
+            name: decisionDefinition.name,
+            description: decisionDefinition.description
+          }
+        };
+      }
+      return null;
+    });
+    prisma.decisionVersion.findMany.mockImplementation(async (args?: any) => {
+      const keys: string[] = args?.where?.decision?.key?.in ?? [];
+      if (keys.includes("pipes_req_decision")) {
+        return [
+          {
+            id: "version-pipes-req-decision",
+            decisionId: decisionDefinition.id,
+            version: 3,
+            status: "ACTIVE",
+            definitionJson: decisionDefinition,
+            decision: {
+              id: decisionDefinition.id,
+              key: decisionDefinition.key,
+              environment: "DEV",
+              name: decisionDefinition.name,
+              description: decisionDefinition.description
+            }
+          }
+        ];
+      }
+      return [];
+    });
+    prisma.decisionStack.findFirst.mockImplementation(async (args?: any) => {
+      const where = args?.where ?? {};
+      if (where?.key === "pipes_req_stack" && where?.status === "ACTIVE") {
+        return {
+          id: stackDefinition.id,
+          environment: "DEV",
+          key: stackDefinition.key,
+          name: stackDefinition.name,
+          description: stackDefinition.description,
+          status: "ACTIVE",
+          version: 2,
+          definitionJson: stackDefinition,
+          createdAt: nowDate,
+          updatedAt: nowDate,
+          activatedAt: nowDate
+        };
+      }
+      return null;
+    });
+
+    (prisma as any).contentBlock = {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          key: "pipes_req_content",
+          version: 1,
+          tokenBindings: {
+            firstName: "profile.first_name",
+            slot: "context.placement"
+          },
+          localesJson: {
+            en: {
+              headline: "Hi {{ profile.first_name }}",
+              footer: "{{ context.locale }}"
+            }
+          }
+        }
+      ]),
+      findFirst: vi.fn().mockResolvedValue(null)
+    };
+    (prisma as any).offer = {
+      findFirst: vi.fn().mockResolvedValue(null)
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => nowDate
+    });
+
+    const decisionRequirementsResponse = await app.inject({
+      method: "GET",
+      url: "/v1/requirements/decision/pipes_req_decision",
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      }
+    });
+    expect(decisionRequirementsResponse.statusCode).toBe(200);
+    const decisionRequirements = decisionRequirementsResponse.json();
+    expect(decisionRequirements.required.attributes).toEqual(
+      expect.arrayContaining(["churnScore", "daysSinceLastOrder", "loyaltyScore"])
+    );
+    expect(decisionRequirements.required.audiences).toEqual(expect.arrayContaining(["known_customer"]));
+    expect(decisionRequirements.required.contextKeys).toEqual(expect.arrayContaining(["placement"]));
+    expect(decisionRequirements.optional.attributes).toEqual(expect.arrayContaining(["first_name"]));
+    expect(decisionRequirements.optional.contextKeys).toEqual(expect.arrayContaining(["locale"]));
+
+    const stackRequirementsResponse = await app.inject({
+      method: "GET",
+      url: "/v1/requirements/stack/pipes_req_stack",
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      }
+    });
+    expect(stackRequirementsResponse.statusCode).toBe(200);
+    const stackRequirements = stackRequirementsResponse.json();
+    expect(stackRequirements.required.attributes).toEqual(
+      expect.arrayContaining(["churnScore", "daysSinceLastOrder", "loyaltyScore"])
+    );
+    expect(stackRequirements.required.contextKeys).toEqual(expect.arrayContaining(["appKey", "placement"]));
+
+    await app.close();
+  });
+
+  it("returns eligible=false for eligibility_only inline evaluate when required fields are missing", async () => {
+    const { prisma } = makePrisma();
+
+    const decisionDefinition = createDefaultDecisionDefinition({
+      id: "445e9021-a69f-4f76-b93f-5f39de366f7c",
+      key: "pipes_missing_fields",
+      name: "Pipes Missing Fields",
+      version: 1,
+      status: "ACTIVE"
+    });
+    decisionDefinition.eligibility = {
+      attributes: [
+        {
+          field: "age",
+          op: "gte",
+          value: 21
+        }
+      ]
+    };
+    decisionDefinition.flow.rules = [
+      {
+        id: "allow",
+        priority: 1,
+        then: {
+          actionType: "message",
+          payload: {
+            templateId: "adult_offer"
+          }
+        }
+      }
+    ];
+
+    prisma.decisionVersion.findFirst.mockImplementation(async (args?: any) => {
+      const where = args?.where ?? {};
+      if (where?.decision?.key === "pipes_missing_fields") {
+        return {
+          id: "version-pipes-missing-fields",
+          decisionId: decisionDefinition.id,
+          version: 1,
+          status: "ACTIVE",
+          definitionJson: decisionDefinition,
+          decision: {
+            id: decisionDefinition.id,
+            key: decisionDefinition.key,
+            environment: "DEV",
+            name: decisionDefinition.name,
+            description: decisionDefinition.description
+          }
+        };
+      }
+      return null;
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV" },
+      payload: {
+        mode: "eligibility_only",
+        decisionKey: "pipes_missing_fields",
+        profile: {
+          profileId: "inline-1",
+          attributes: {}
+        },
+        context: {
+          now: "2026-02-24T10:00:00.000Z"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.eligible).toBe(false);
+    expect(body.missingFields).toEqual(expect.arrayContaining(["age"]));
+    expect(body.reasons).toEqual(expect.arrayContaining(["MISSING_FIELDS"]));
+
+    await app.close();
+  });
+
+  it("returns equivalent full output to /v1/decide when inline profile matches fetched profile", async () => {
+    const { prisma, decisionLogCreate } = makePrisma();
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const decideResponse = await app.inject({
+      method: "POST",
+      url: "/v1/decide",
+      headers: { "x-env": "DEV" },
+      payload: {
+        decisionKey: "cart_recovery",
+        profileId: "p-1001",
+        context: {
+          now: "2026-02-24T10:00:00.000Z",
+          appKey: "store",
+          placement: "home_top"
+        }
+      }
+    });
+    expect(decideResponse.statusCode).toBe(200);
+    const decideBody = decideResponse.json();
+
+    const inlineResponse = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV" },
+      payload: {
+        mode: "full",
+        decisionKey: "cart_recovery",
+        profile: {
+          profileId: "p-1001",
+          attributes: {
+            email: "alex@example.com",
+            cartValue: 120,
+            country: "US",
+            churnRisk: "high"
+          },
+          audiences: ["cart_abandoners", "email_optin"],
+          consents: ["email_marketing"]
+        },
+        context: {
+          now: "2026-02-24T10:00:00.000Z",
+          appKey: "store",
+          placement: "home_top"
+        }
+      }
+    });
+    expect(inlineResponse.statusCode).toBe(200);
+    const inlineBody = inlineResponse.json();
+
+    expect(inlineBody.eligible).toBe(decideBody.outcome === "ELIGIBLE");
+    expect(inlineBody.result?.actionType).toBe(decideBody.actionType);
+    expect(inlineBody.result?.payload).toEqual(decideBody.payload);
+    expect(decisionLogCreate).toHaveBeenCalledTimes(2);
+
+    await app.close();
+  });
+
+  it("redacts sensitive inline profile keys in debug trace and writes inline evaluation logs without raw attributes", async () => {
+    const { prisma, decisionLogCreate, decisionStackLogCreate, conversionCreate } = makePrisma();
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV" },
+      payload: {
+        mode: "full",
+        decisionKey: "cart_recovery",
+        debug: true,
+        profile: {
+          profileId: "inline-redaction",
+          attributes: {
+            email: "sensitive@example.com",
+            phone: "+14155551234",
+            access_token: "token-value",
+            apiSecret: "secret-value",
+            loyaltyTier: "gold"
+          },
+          audiences: ["newsletter"]
+        },
+        context: {
+          now: "2026-02-24T10:00:00.000Z"
+        }
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+
+    expect(body.trace.profileSummary.safeSamples.loyaltyTier).toBe("gold");
+    expect(body.trace.profileSummary.safeSamples.email).toBeUndefined();
+    expect(body.trace.profileSummary.safeSamples.phone).toBeUndefined();
+    expect(body.trace.profileSummary.safeSamples.access_token).toBeUndefined();
+    expect(body.trace.profileSummary.safeSamples.apiSecret).toBeUndefined();
+
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("sensitive@example.com");
+    expect(serialized).not.toContain("+14155551234");
+    expect(serialized).not.toContain("token-value");
+    expect(serialized).not.toContain("secret-value");
+
+    expect(decisionLogCreate).toHaveBeenCalledTimes(1);
+    const loggedInput = decisionLogCreate.mock.calls[0]?.[0]?.data?.inputJson as Record<string, unknown>;
+    const loggedProfile = loggedInput.profile as Record<string, unknown>;
+    expect(Array.isArray(loggedProfile.attributeKeys)).toBe(true);
+    expect((loggedProfile as Record<string, unknown>).attributes).toBeUndefined();
+    expect(decisionStackLogCreate).not.toHaveBeenCalled();
+    expect(conversionCreate).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("writes stack evaluation logs for /v1/evaluate stack requests", async () => {
+    const { prisma, decisionStackLogCreate } = makePrisma();
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV" },
+      payload: {
+        mode: "full",
+        stackKey: "stack_suppress_first",
+        profile: {
+          profileId: "stack-inline-1",
+          attributes: {},
+          audiences: ["cart_abandoners"],
+          consents: ["email_marketing"]
+        },
+        context: {
+          now: "2026-02-24T10:00:00.000Z",
+          appKey: "store",
+          placement: "home_top"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(decisionStackLogCreate).toHaveBeenCalledTimes(1);
+    const replayInput = decisionStackLogCreate.mock.calls[0]?.[0]?.data?.replayInputJson as Record<string, unknown>;
+    const profile = replayInput.profile as Record<string, unknown>;
+    expect(Array.isArray(profile.attributeKeys)).toBe(true);
+    expect((profile as Record<string, unknown>).attributes).toBeUndefined();
+
+    await app.close();
+  });
+
+  it("keeps /v1/evaluate sync behavior and enqueues callback delivery when mode=always", async () => {
+    const { prisma, pipesCallbackConfigs } = makePrisma();
+    const enqueueFailure = vi.fn().mockResolvedValue(undefined);
+    pipesCallbackConfigs.push({
+      id: "pcb-1",
+      environment: "DEV",
+      appKey: null,
+      isEnabled: true,
+      callbackUrl: "https://pipes.example.com/callback",
+      authType: "bearer",
+      authSecret: "top-secret",
+      mode: "always",
+      timeoutMs: 1500,
+      maxAttempts: 8,
+      includeDebug: false,
+      includeProfileSummary: false,
+      allowPiiKeys: [],
+      createdAt: new Date("2026-02-25T10:00:00.000Z"),
+      updatedAt: new Date("2026-02-25T10:00:00.000Z")
+    });
+
+    const app = await buildApp({
+      prisma,
+      dlqProvider: {
+        enqueueFailure,
+        fetchDue: vi.fn().mockResolvedValue([]),
+        markRetrying: vi.fn().mockResolvedValue(undefined),
+        markSucceeded: vi.fn().mockResolvedValue(undefined),
+        markQuarantined: vi.fn().mockResolvedValue(undefined),
+        reschedule: vi.fn().mockResolvedValue(undefined)
+      },
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV" },
+      payload: {
+        mode: "full",
+        decisionKey: "cart_recovery",
+        profile: {
+          profileId: "p-1001",
+          attributes: { cartValue: 120 },
+          audiences: ["cart_abandoners"],
+          consents: ["email_marketing"]
+        },
+        context: {
+          appKey: "storefront",
+          placement: "home_top",
+          now: "2026-02-25T10:00:00.000Z"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().status).toBe("ok");
+    expect(enqueueFailure).toHaveBeenCalledTimes(1);
+    expect(enqueueFailure.mock.calls[0]?.[0]?.topic).toBe("PIPES_CALLBACK_DELIVERY");
+
+    await app.close();
+  });
+
+  it("supports async callback mode on /v1/evaluate with X-ASYNC:true", async () => {
+    const { prisma, pipesCallbackConfigs } = makePrisma();
+    const enqueueFailure = vi.fn().mockResolvedValue(undefined);
+    pipesCallbackConfigs.push({
+      id: "pcb-2",
+      environment: "DEV",
+      appKey: null,
+      isEnabled: true,
+      callbackUrl: "https://pipes.example.com/callback",
+      authType: "bearer",
+      authSecret: "top-secret",
+      mode: "async_only",
+      timeoutMs: 1500,
+      maxAttempts: 8,
+      includeDebug: false,
+      includeProfileSummary: false,
+      allowPiiKeys: [],
+      createdAt: new Date("2026-02-25T10:00:00.000Z"),
+      updatedAt: new Date("2026-02-25T10:00:00.000Z")
+    });
+
+    const app = await buildApp({
+      prisma,
+      dlqProvider: {
+        enqueueFailure,
+        fetchDue: vi.fn().mockResolvedValue([]),
+        markRetrying: vi.fn().mockResolvedValue(undefined),
+        markSucceeded: vi.fn().mockResolvedValue(undefined),
+        markQuarantined: vi.fn().mockResolvedValue(undefined),
+        reschedule: vi.fn().mockResolvedValue(undefined)
+      },
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV", "x-async": "true" },
+      payload: {
+        mode: "full",
+        decisionKey: "cart_recovery",
+        profile: {
+          profileId: "p-1001",
+          attributes: { cartValue: 120 },
+          audiences: ["cart_abandoners"],
+          consents: ["email_marketing"]
+        },
+        context: {
+          appKey: "storefront",
+          placement: "home_top",
+          now: "2026-02-25T10:00:00.000Z"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json().status).toBe("queued");
+    expect(typeof response.json().deliveryId).toBe("string");
+    expect(enqueueFailure).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it("does not enqueue callback delivery when request originated from decision engine header", async () => {
+    const { prisma, pipesCallbackConfigs } = makePrisma();
+    const enqueueFailure = vi.fn().mockResolvedValue(undefined);
+    pipesCallbackConfigs.push({
+      id: "pcb-3",
+      environment: "DEV",
+      appKey: null,
+      isEnabled: true,
+      callbackUrl: "https://pipes.example.com/callback",
+      authType: "bearer",
+      authSecret: "top-secret",
+      mode: "always",
+      timeoutMs: 1500,
+      maxAttempts: 8,
+      includeDebug: false,
+      includeProfileSummary: false,
+      allowPiiKeys: [],
+      createdAt: new Date("2026-02-25T10:00:00.000Z"),
+      updatedAt: new Date("2026-02-25T10:00:00.000Z")
+    });
+
+    const app = await buildApp({
+      prisma,
+      dlqProvider: {
+        enqueueFailure,
+        fetchDue: vi.fn().mockResolvedValue([]),
+        markRetrying: vi.fn().mockResolvedValue(undefined),
+        markSucceeded: vi.fn().mockResolvedValue(undefined),
+        markQuarantined: vi.fn().mockResolvedValue(undefined),
+        reschedule: vi.fn().mockResolvedValue(undefined)
+      },
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/evaluate",
+      headers: { "x-env": "DEV", "x-from-decision-engine": "1" },
+      payload: {
+        mode: "full",
+        decisionKey: "cart_recovery",
+        profile: {
+          profileId: "p-1001",
+          attributes: { cartValue: 120 },
+          audiences: ["cart_abandoners"],
+          consents: ["email_marketing"]
+        },
+        context: {
+          appKey: "storefront",
+          placement: "home_top",
+          now: "2026-02-25T10:00:00.000Z"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(enqueueFailure).not.toHaveBeenCalled();
 
     await app.close();
   });

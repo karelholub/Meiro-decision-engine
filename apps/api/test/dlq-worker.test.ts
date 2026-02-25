@@ -36,7 +36,8 @@ describe("DLQ worker", () => {
         processPipesWebhook: vi.fn().mockResolvedValue(undefined),
         processPrecomputeTask: vi.fn().mockResolvedValue(undefined),
         ingestTrackingEvent: vi.fn().mockResolvedValue(undefined),
-        processExportTask: vi.fn().mockResolvedValue(undefined)
+        processExportTask: vi.fn().mockResolvedValue(undefined),
+        processPipesCallbackDelivery: vi.fn().mockResolvedValue(undefined)
       }
     });
 
@@ -81,7 +82,8 @@ describe("DLQ worker", () => {
         processPipesWebhook: vi.fn().mockResolvedValue(undefined),
         processPrecomputeTask: vi.fn().mockResolvedValue(undefined),
         ingestTrackingEvent: vi.fn().mockRejectedValue(Object.assign(new Error("validation"), { statusCode: 400 })),
-        processExportTask: vi.fn().mockResolvedValue(undefined)
+        processExportTask: vi.fn().mockResolvedValue(undefined),
+        processPipesCallbackDelivery: vi.fn().mockResolvedValue(undefined)
       }
     });
 
@@ -125,7 +127,8 @@ describe("DLQ worker", () => {
         processPipesWebhook: vi.fn().mockResolvedValue(undefined),
         processPrecomputeTask: vi.fn().mockResolvedValue(undefined),
         ingestTrackingEvent: vi.fn().mockResolvedValue(undefined),
-        processExportTask: vi.fn().mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
+        processExportTask: vi.fn().mockRejectedValue(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
+        processPipesCallbackDelivery: vi.fn().mockResolvedValue(undefined)
       }
     });
 
@@ -133,5 +136,84 @@ describe("DLQ worker", () => {
 
     expect(provider.reschedule).toHaveBeenCalled();
     expect(provider.markQuarantined).not.toHaveBeenCalled();
+  });
+
+  it("handles callback delivery topic success, retry, and quarantine paths", async () => {
+    const provider = {
+      fetchDue: vi
+        .fn()
+        .mockResolvedValueOnce([
+          {
+            id: "cb-ok",
+            env: {
+              topic: "PIPES_CALLBACK_DELIVERY",
+              payload: { id: "ok" }
+            },
+            attempts: 0,
+            maxAttempts: 8
+          }
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: "cb-retry",
+            env: {
+              topic: "PIPES_CALLBACK_DELIVERY",
+              payload: { id: "retry" }
+            },
+            attempts: 0,
+            maxAttempts: 8
+          }
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: "cb-bad",
+            env: {
+              topic: "PIPES_CALLBACK_DELIVERY",
+              payload: { id: "bad" }
+            },
+            attempts: 0,
+            maxAttempts: 8
+          }
+        ]),
+      markRetrying: vi.fn().mockResolvedValue(undefined),
+      markSucceeded: vi.fn().mockResolvedValue(undefined),
+      markQuarantined: vi.fn().mockResolvedValue(undefined),
+      reschedule: vi.fn().mockResolvedValue(undefined),
+      enqueueFailure: vi.fn().mockResolvedValue(undefined)
+    };
+
+    const processPipesCallbackDelivery = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error("server"), { statusCode: 503 }))
+      .mockRejectedValueOnce(Object.assign(new Error("bad request"), { statusCode: 400 }));
+
+    const worker = createDlqWorker({
+      provider: provider as any,
+      logger: { error: vi.fn() } as any,
+      config: {
+        pollMs: 5000,
+        dueLimit: 50,
+        backoffBaseMs: 2000,
+        backoffMaxMs: 600000,
+        jitterPct: 30
+      },
+      handlers: {
+        processPipesWebhook: vi.fn().mockResolvedValue(undefined),
+        processPrecomputeTask: vi.fn().mockResolvedValue(undefined),
+        ingestTrackingEvent: vi.fn().mockResolvedValue(undefined),
+        processExportTask: vi.fn().mockResolvedValue(undefined),
+        processPipesCallbackDelivery
+      }
+    });
+
+    await worker.runTick();
+    await worker.runTick();
+    await worker.runTick();
+
+    expect(processPipesCallbackDelivery).toHaveBeenCalledTimes(3);
+    expect(provider.markSucceeded).toHaveBeenCalledWith("cb-ok", "Replay succeeded");
+    expect(provider.reschedule).toHaveBeenCalled();
+    expect(provider.markQuarantined).toHaveBeenCalled();
   });
 });

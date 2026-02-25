@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 const listQuerySchema = z.object({
-  topic: z.enum(["PIPES_WEBHOOK", "PRECOMPUTE_TASK", "TRACKING_EVENT", "EXPORT_TASK"]).optional(),
+  topic: z.enum(["PIPES_WEBHOOK", "PRECOMPUTE_TASK", "TRACKING_EVENT", "EXPORT_TASK", "PIPES_CALLBACK_DELIVERY"]).optional(),
   status: z.enum(["PENDING", "RETRYING", "QUARANTINED", "RESOLVED"]).optional(),
   q: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(200).optional(),

@@ -38,7 +38,7 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - precompute pipeline writing `DecisionResult` records for bulk activations
   - event/webhook-driven invalidation with optional targeted recompute
 - DB-backed DLQ with retry worker:
-  - topics: `PIPES_WEBHOOK`, `PRECOMPUTE_TASK`, `TRACKING_EVENT`, `EXPORT_TASK`
+  - topics: `PIPES_WEBHOOK`, `PRECOMPUTE_TASK`, `TRACKING_EVENT`, `EXPORT_TASK`, `PIPES_CALLBACK_DELIVERY`
   - retry policy for transient failures with exponential backoff + jitter
   - quarantine for permanent failures or max-attempt exhaustion
   - admin APIs + UI for retry now, quarantine, and resolve
@@ -116,6 +116,8 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `POST /v1/maintenance/retention/run`
   - `GET/PUT /v1/settings/webhook-rules`
   - `POST /v1/webhooks/pipes`
+  - `GET/PUT /v1/settings/pipes-callback`
+  - `POST /v1/settings/pipes-callback/test`
   - `GET /v1/dlq/messages`
   - `GET /v1/dlq/messages/:id`
   - `POST /v1/dlq/messages/:id/retry`
@@ -161,6 +163,7 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `PrecomputeRun` (`precompute_runs`)
 - `DecisionResult` (`decision_results`)
 - `AppSetting` (`app_settings`)
+- `PipesCallbackConfig` (`pipes_callback_configs`)
 - `DeadLetterMessage` (`dead_letter_messages`)
 - `DlqConfig` (`dlq_config`)
 
@@ -176,6 +179,7 @@ Migration is included at:
 - `apps/api/prisma/migrations/202602221530_dlq_v1/migration.sql`
 - `apps/api/prisma/migrations/202602221700_inapp_event_idempotency/migration.sql`
 - `apps/api/prisma/migrations/202602221745_chunk5_retention_indexes/migration.sql`
+- `apps/api/prisma/migrations/202602251200_pipes_callback_delivery/migration.sql`
 
 ## Environment Variables
 
@@ -190,6 +194,7 @@ Important values:
 - `DATABASE_URL`
 - `API_PORT` (default `3001`)
 - `API_WRITE_KEY` (used for write endpoints via `X-API-KEY`)
+- `PIPES_SHARED_SECRET` (optional dedicated secret for `X-PIPES-KEY` on `/v1/requirements/*`, `/v1/evaluate`, `/v1/profiles/upsert`)
 - `API_RUNTIME_ROLE` (`all`, `serve`, `worker`; default `all`)
 - `X-ENV` request header (`DEV`, `STAGE`, `PROD`; defaults to `DEV` when missing)
 - CRUD endpoints also accept `?environment=DEV|STAGE|PROD` (header still supported)
@@ -543,6 +548,180 @@ curl -X POST "http://localhost:3001/v1/maintenance/retention/run" \
 
 ## API Examples (curl)
 
+### Pipes Inline Decisioning
+
+Use this path when Pipes already has profile/event context and wants inline decisioning without WBS lookup.
+
+Call sequence:
+
+1. `GET /v1/requirements/decision/:key` (or `/v1/requirements/stack/:key`) to discover required attributes/audiences/context keys.
+2. Pipes enriches the event with the minimum profile subset.
+3. `POST /v1/evaluate` with inline `profile` and `context`.
+
+Auth:
+
+- Use `X-API-KEY` (write key), or configure `PIPES_SHARED_SECRET` and send `X-PIPES-KEY`.
+- Optional v2 hardening pattern: include an HMAC SHA256 signature of request body in a custom header (for example, `X-PIPES-SIGNATURE`) and verify server-side.
+
+#### Example: In-app banner decision
+
+```bash
+curl -X POST "http://localhost:3001/v1/evaluate" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "mode": "full",
+    "decisionKey": "cart_recovery",
+    "profile": {
+      "profileId": "u-1042",
+      "attributes": {
+        "cartValue": 120,
+        "country": "US"
+      },
+      "audiences": ["cart_abandoners"]
+    },
+    "context": {
+      "appKey": "storefront",
+      "placement": "home_top",
+      "locale": "en"
+    },
+    "debug": true
+  }'
+```
+
+#### Example: Winback email eligibility only
+
+```bash
+curl -X POST "http://localhost:3001/v1/evaluate" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "mode": "eligibility_only",
+    "decisionKey": "winback_email_v1",
+    "profile": {
+      "profileId": "u-2009",
+      "attributes": {
+        "daysSinceLastOrder": 37,
+        "email_opt_in": true
+      },
+      "audiences": ["known_customer"]
+    },
+    "context": {
+      "placement": "email_daily"
+    }
+  }'
+```
+
+#### Optional async profile upsert (cache/precompute warming)
+
+```bash
+curl -X POST "http://localhost:3001/v1/profiles/upsert" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "profileId": "u-1042",
+    "segments": ["cart_abandoners", "known_customer"],
+    "attributes": {
+      "cartValue": 120,
+      "daysSinceLastOrder": 18
+    },
+    "sourceTs": "2026-02-24T12:00:00.000Z"
+  }'
+```
+
+#### Operational guidance
+
+- Keep inline payloads small (target < 10KB, hard limit 64KB on `/v1/evaluate`).
+- Recommended timeout budget: ~80ms engine budget and ~120ms total request budget.
+- Cache by `{decisionKey|stackKey, profileId/lookup-hash, important context keys}` and invalidate on profile updates.
+- Do not log raw inline profile payloads; redact sensitive keys (`email`, `phone`, `token`, `secret`).
+
+### Pipes Callback Delivery (Model B)
+
+Decision Engine can evaluate synchronously and then post the result to a Pipes callback URL via DLQ-backed delivery.
+
+Flow:
+
+1. Configure callback per environment (optionally per `appKey`) using `GET/PUT /v1/settings/pipes-callback`.
+2. Call `POST /v1/evaluate` normally for sync response (existing behavior unchanged).
+3. If callback mode is `always`, Decision Engine enqueues `PIPES_CALLBACK_DELIVERY` and worker delivers asynchronously.
+4. Optional fire-and-forget: send `X-ASYNC: true` to `/v1/evaluate`; API returns `202 { status: \"queued\", correlationId, deliveryId }`.
+
+Loop guard:
+
+- Outbound callback requests include `X-From-Decision-Engine: 1` and `X-Delivery-Id: <deliveryId>`.
+- Inbound `/v1/evaluate` requests with `X-From-Decision-Engine: 1` skip callback enqueue.
+
+Idempotency and dedupe:
+
+- `deliveryId = sha256(stableJson({ environment, appKey, decisionKey|stackKey, profileId, lookupHash, contextPlacement, actionType, timeBucket }))`
+- `timeBucket = floor(now/ttl_seconds)` when `ttl_seconds` exists; otherwise hourly UTC bucket (`YYYYMMDDHH`).
+- Pipes should dedupe by `deliveryId` (and/or `X-Delivery-Id` header).
+
+Security and PII rules:
+
+- Callback auth modes: `bearer`, `shared_secret`, `none`.
+- `authSecret` is write-only in settings responses (masked as `****`).
+- Callback payload redacts sensitive keys matching `/email|phone|token|secret|password/i` unless key is explicitly listed in `allowPiiKeys`.
+- Raw lookup values are never sent; only hashes are allowed (when lookup identity is present).
+
+Callback payload shape:
+
+```json
+{
+  "deliveryId": "string",
+  "correlationId": "string",
+  "environment": "DEV",
+  "appKey": "storefront",
+  "sentAt": "2026-02-25T12:00:00.000Z",
+  "source": "decision-engine",
+  "type": "decision_result",
+  "request": {
+    "mode": "full",
+    "decisionKey": "cart_recovery",
+    "requirementsHash": "sha256",
+    "identity": { "profileId": "p-1001", "lookup": null },
+    "context": { "appKey": "storefront", "placement": "home_top" }
+  },
+  "response": {
+    "eligible": true,
+    "result": { "actionType": "message", "payload": { "templateId": "cart-recovery-dev" } },
+    "reasons": ["RULE_MATCH"],
+    "missingFields": [],
+    "typeIssues": []
+  },
+  "meta": {
+    "latencyMs": { "total": 12, "engine": 1 },
+    "cache": {},
+    "version": { "decisionVersion": 1 }
+  }
+}
+```
+
+Example: enable callback config
+
+```bash
+curl -X PUT "http://localhost:3001/v1/settings/pipes-callback" \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: local-write-key" \
+  -H "X-ENV: DEV" \
+  -d '{
+    "isEnabled": true,
+    "callbackUrl": "https://pipes.client.tld/webhooks/decision-result",
+    "authType": "bearer",
+    "authSecret": "replace-me",
+    "mode": "always",
+    "timeoutMs": 1500,
+    "maxAttempts": 8,
+    "includeDebug": false,
+    "includeProfileSummary": false,
+    "allowPiiKeys": []
+  }'
+```
+
 ### List decisions
 
 ```bash
@@ -723,6 +902,7 @@ curl -X POST "http://localhost:3001/v1/dlq/messages/<MESSAGE_ID>/retry" \
   - precompute identity tasks and run-level failures
   - in-app tracking event persistence failures
   - export task failures
+  - pipes callback delivery retries
 - Worker retries due messages automatically (`DLQ_POLL_MS`, `DLQ_DUE_LIMIT`).
 - Permanent failures (validation/schema/4xx) and max-attempt messages move to `QUARANTINED`.
 - Operators can inspect payload/error, retry immediately, quarantine with note, or mark resolved from UI/API.

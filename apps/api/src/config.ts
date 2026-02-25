@@ -3,6 +3,7 @@ export type ApiRuntimeRole = "all" | "serve" | "worker";
 export interface AppConfig {
   apiPort: number;
   apiWriteKey?: string;
+  pipesSharedSecret?: string;
   protectDecide: boolean;
   apiRuntimeRole?: ApiRuntimeRole;
   meiroMode: "mock" | "real";
@@ -106,6 +107,7 @@ const toRuntimeRole = (value: string | undefined, fallback: ApiRuntimeRole): Api
 export const readConfig = (): AppConfig => ({
   apiPort: Number.parseInt(process.env.API_PORT ?? "3001", 10),
   apiWriteKey: process.env.API_WRITE_KEY,
+  pipesSharedSecret: process.env.PIPES_SHARED_SECRET,
   protectDecide: toBool(process.env.PROTECT_DECIDE, false),
   apiRuntimeRole: toRuntimeRole(process.env.API_RUNTIME_ROLE, "all"),
   meiroMode: process.env.MEIRO_MODE === "real" ? "real" : "mock",
