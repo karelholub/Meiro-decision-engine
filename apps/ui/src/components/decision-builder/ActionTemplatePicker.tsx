@@ -3,6 +3,19 @@ import type { ActionType, DecisionOutput } from "@decisioning/dsl";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
+interface CatalogContentOption {
+  key: string;
+  version: number;
+  status: string;
+  templateId: string;
+}
+
+interface CatalogOfferOption {
+  key: string;
+  version: number;
+  status: string;
+}
+
 interface ActionTemplatePickerProps {
   title?: string;
   value: DecisionOutput;
@@ -60,8 +73,10 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
   const selectedOfferKey = typeof payloadRef.offerKey === "string" ? payloadRef.offerKey : "";
 
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
-  const [contentOptions, setContentOptions] = useState<Array<{ key: string; version: number; status: string }>>([]);
-  const [offerOptions, setOfferOptions] = useState<Array<{ key: string; version: number; status: string }>>([]);
+  const [activeContentOptions, setActiveContentOptions] = useState<CatalogContentOption[]>([]);
+  const [activeOfferOptions, setActiveOfferOptions] = useState<CatalogOfferOption[]>([]);
+  const [latestContentOptionsByKey, setLatestContentOptionsByKey] = useState<Record<string, CatalogContentOption>>({});
+  const [latestOfferOptionsByKey, setLatestOfferOptionsByKey] = useState<Record<string, CatalogOfferOption>>({});
 
   const [trackingJson, setTrackingJson] = useState(JSON.stringify(isRecord(payload.tracking) ? payload.tracking : {}, null, 2));
   const [nestedPayloadJson, setNestedPayloadJson] = useState(JSON.stringify(isRecord(payload.payload) ? payload.payload : {}, null, 2));
@@ -93,19 +108,33 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
           return;
         }
 
-        const latestContentByKey = new Map<string, { key: string; version: number; status: string }>();
+        const latestContentByKey = new Map<string, CatalogContentOption>();
+        const latestActiveContentByKey = new Map<string, CatalogContentOption>();
         for (const item of contentResponse.items) {
           const current = latestContentByKey.get(item.key);
           if (!current || item.version > current.version) {
             latestContentByKey.set(item.key, {
               key: item.key,
               version: item.version,
-              status: item.status
+              status: item.status,
+              templateId: item.templateId
             });
+          }
+          if (item.status === "ACTIVE") {
+            const activeCurrent = latestActiveContentByKey.get(item.key);
+            if (!activeCurrent || item.version > activeCurrent.version) {
+              latestActiveContentByKey.set(item.key, {
+                key: item.key,
+                version: item.version,
+                status: item.status,
+                templateId: item.templateId
+              });
+            }
           }
         }
 
-        const latestOffersByKey = new Map<string, { key: string; version: number; status: string }>();
+        const latestOffersByKey = new Map<string, CatalogOfferOption>();
+        const latestActiveOffersByKey = new Map<string, CatalogOfferOption>();
         for (const item of offerResponse.items) {
           const current = latestOffersByKey.get(item.key);
           if (!current || item.version > current.version) {
@@ -115,14 +144,29 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
               status: item.status
             });
           }
+          if (item.status === "ACTIVE") {
+            const activeCurrent = latestActiveOffersByKey.get(item.key);
+            if (!activeCurrent || item.version > activeCurrent.version) {
+              latestActiveOffersByKey.set(item.key, {
+                key: item.key,
+                version: item.version,
+                status: item.status
+              });
+            }
+          }
         }
 
-        setContentOptions([...latestContentByKey.values()].sort((a, b) => a.key.localeCompare(b.key)));
-        setOfferOptions([...latestOffersByKey.values()].sort((a, b) => a.key.localeCompare(b.key)));
+        const sortByKey = <T extends { key: string }>(items: T[]) => items.sort((a, b) => a.key.localeCompare(b.key));
+        setActiveContentOptions(sortByKey([...latestActiveContentByKey.values()]));
+        setActiveOfferOptions(sortByKey([...latestActiveOffersByKey.values()]));
+        setLatestContentOptionsByKey(Object.fromEntries(latestContentByKey.entries()));
+        setLatestOfferOptionsByKey(Object.fromEntries(latestOffersByKey.entries()));
       } catch {
         if (!cancelled) {
-          setContentOptions([]);
-          setOfferOptions([]);
+          setActiveContentOptions([]);
+          setActiveOfferOptions([]);
+          setLatestContentOptionsByKey({});
+          setLatestOfferOptionsByKey({});
         }
       }
     };
@@ -143,7 +187,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
     });
   };
 
-  const updatePayloadRef = (patch: { contentKey?: string; offerKey?: string }) => {
+  const updatePayloadRef = (patch: { contentKey?: string; offerKey?: string }, payloadPatch: Record<string, unknown> = {}) => {
     const nextRef: Record<string, unknown> = {
       ...(isRecord(payload.payloadRef) ? payload.payloadRef : {}),
       ...patch
@@ -157,7 +201,8 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
     }
 
     const nextPayload: Record<string, unknown> = {
-      ...payload
+      ...payload,
+      ...payloadPatch
     };
     if (Object.keys(nextRef).length > 0) {
       nextPayload.payloadRef = nextRef;
@@ -183,6 +228,28 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
 
   const actionTypeError = errorByPath?.[`${pathPrefix}.actionType`];
   const payloadPathError = errorByPath?.[`${pathPrefix}.payload`];
+
+  const effectiveContentOptions = useMemo(() => {
+    const options = [...activeContentOptions];
+    if (selectedContentKey && !options.some((item) => item.key === selectedContentKey)) {
+      const selectedFallback = latestContentOptionsByKey[selectedContentKey];
+      if (selectedFallback) {
+        options.push(selectedFallback);
+      }
+    }
+    return options.sort((a, b) => a.key.localeCompare(b.key));
+  }, [activeContentOptions, latestContentOptionsByKey, selectedContentKey]);
+
+  const effectiveOfferOptions = useMemo(() => {
+    const options = [...activeOfferOptions];
+    if (selectedOfferKey && !options.some((item) => item.key === selectedOfferKey)) {
+      const selectedFallback = latestOfferOptionsByKey[selectedOfferKey];
+      if (selectedFallback) {
+        options.push(selectedFallback);
+      }
+    }
+    return options.sort((a, b) => a.key.localeCompare(b.key));
+  }, [activeOfferOptions, latestOfferOptionsByKey, selectedOfferKey]);
 
   const actionLabel = useMemo(() => {
     if (safeValue.actionType === "message") {
@@ -257,19 +324,30 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
 
       {safeValue.actionType === "message" ? (
         <div className="space-y-3 rounded-md border border-stone-200 p-3">
+          <p className="text-[11px] text-stone-500">
+            Catalog references default to ACTIVE items. If this decision already references an inactive key, it remains selectable.
+          </p>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs">
               Content Block Reference
               <select
                 value={selectedContentKey}
-                onChange={(event) => updatePayloadRef({ contentKey: event.target.value || undefined })}
+                onChange={(event) => {
+                  const nextKey = event.target.value || undefined;
+                  const selectedOption = nextKey ? effectiveContentOptions.find((item) => item.key === nextKey) : null;
+                  updatePayloadRef(
+                    { contentKey: nextKey },
+                    selectedOption?.templateId ? { templateId: selectedOption.templateId } : {}
+                  );
+                }}
                 disabled={readOnly}
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
                 <option value="">None (raw payload)</option>
-                {contentOptions.map((option) => (
+                {effectiveContentOptions.map((option) => (
                   <option key={option.key} value={option.key}>
-                    {option.key} (v{option.version}, {option.status})
+                    {option.key} (v{option.version}, {option.status}
+                    {option.status !== "ACTIVE" ? ", selected inactive" : ""})
                   </option>
                 ))}
               </select>
@@ -283,14 +361,22 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
                 <option value="">None</option>
-                {offerOptions.map((option) => (
+                {effectiveOfferOptions.map((option) => (
                   <option key={option.key} value={option.key}>
-                    {option.key} (v{option.version}, {option.status})
+                    {option.key} (v{option.version}, {option.status}
+                    {option.status !== "ACTIVE" ? ", selected inactive" : ""})
                   </option>
                 ))}
               </select>
             </label>
           </div>
+          {activeContentOptions.length === 0 || activeOfferOptions.length === 0 ? (
+            <p className="text-[11px] text-amber-700">
+              {activeContentOptions.length === 0 ? "No ACTIVE content blocks found." : ""}
+              {activeContentOptions.length === 0 && activeOfferOptions.length === 0 ? " " : ""}
+              {activeOfferOptions.length === 0 ? "No ACTIVE offers found." : ""} Activate catalog items in Catalog pages to use them here.
+            </p>
+          ) : null}
 
           <div className="grid gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs">

@@ -95,7 +95,10 @@ export default function DecisionBuilderDocsPage() {
           </div>
           <div className="rounded-md border border-stone-200 p-3">
             <p className="font-semibold">inapp_message</p>
-            <p className="text-stone-700">Message payload with placement/template/ttl/tracking/payload fields.</p>
+            <p className="text-stone-700">
+              Message payload with placement/template/ttl/tracking/payload fields. Content Block and Offer selectors list ACTIVE
+              catalog items by default, and selecting a content block auto-fills templateId.
+            </p>
           </div>
           <div className="rounded-md border border-stone-200 p-3">
             <p className="font-semibold">personalize</p>
