@@ -1,7 +1,14 @@
+import { useState } from "react";
 import type { AttributeOperator } from "@decisioning/dsl";
 import { FieldPicker } from "./FieldPicker";
 import type { ConditionRow, FieldRegistryItem } from "./types";
-import { createConditionRow, getFieldByName, getOperatorsForFieldType } from "./wizard-utils";
+import {
+  COMMON_CONDITION_CHIPS,
+  conditionRowFromCommonChip,
+  createConditionRow,
+  getFieldByName,
+  getOperatorsForFieldType
+} from "./wizard-utils";
 
 interface ConditionBuilderProps {
   title?: string;
@@ -51,6 +58,8 @@ export function ConditionBuilder({
   pathPrefix,
   sampleValueLookup
 }: ConditionBuilderProps) {
+  const [chipWarning, setChipWarning] = useState<string | null>(null);
+
   const updateRow = (index: number, patch: Partial<ConditionRow>) => {
     const next = rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row));
     onChange(next);
@@ -61,7 +70,26 @@ export function ConditionBuilder({
   };
 
   const addRow = () => {
-    onChange([...rows, createConditionRow()]);
+    const fallbackField = registry.find((item) => item.common) ?? registry[0];
+    if (!fallbackField) {
+      onChange([...rows, createConditionRow()]);
+      return;
+    }
+    const operators = getOperatorsForFieldType(fallbackField.dataType);
+    const op = operators[0] ?? "exists";
+    const value = op === "exists" ? "" : String(fallbackField.sampleValues?.[0] ?? "");
+    onChange([...rows, createConditionRow({ field: fallbackField.field, op, value })]);
+  };
+
+  const applyChip = (chipId: string) => {
+    const row = conditionRowFromCommonChip(chipId, registry);
+    if (!row) {
+      const missing = COMMON_CONDITION_CHIPS.find((chip) => chip.id === chipId)?.field ?? chipId;
+      setChipWarning(`Field '${missing}' is not available in this environment registry.`);
+      return;
+    }
+    onChange([...rows, row]);
+    setChipWarning(null);
   };
 
   return (
@@ -71,6 +99,23 @@ export function ConditionBuilder({
         Builder supports AND conditions in this version. Advanced grouping (OR/nested groups) is coming soon.
       </p>
       <p className="text-xs text-stone-500">Examples: `purchase_count eq 0`, `email exists`, `country in US,JP`.</p>
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-stone-700">Common conditions</p>
+        <div className="flex flex-wrap gap-1">
+          {COMMON_CONDITION_CHIPS.map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              onClick={() => applyChip(chip.id)}
+              disabled={readOnly}
+              className="rounded-full border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100 disabled:opacity-60"
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+        {chipWarning ? <p className="text-xs text-amber-700">{chipWarning}</p> : null}
+      </div>
 
       <div className="space-y-3">
         {rows.length === 0 ? <p className="text-xs text-stone-500">No conditions yet.</p> : null}

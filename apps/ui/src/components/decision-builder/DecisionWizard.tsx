@@ -30,6 +30,7 @@ interface DecisionWizardProps {
   onRunSimulation: (definition: DecisionDefinition, profileJson: string) => Promise<WizardSimulationResult>;
   onActivate: (activationNote: string) => Promise<void>;
   activationPreview?: ActivationPreviewResponse | null;
+  onActivationReadyChange?: (ready: boolean) => void;
 }
 
 const STEP_PREFIX: Record<WizardStepId, string[]> = {
@@ -121,6 +122,7 @@ export function DecisionWizard({
   environment,
   readOnlyReasons,
   onDraftChange,
+  onActivationReadyChange,
   onOpenAdvanced,
   onRunSimulation,
   onActivate,
@@ -133,6 +135,8 @@ export function DecisionWizard({
   const [simulationError, setSimulationError] = useState<string | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [skipSimulation, setSkipSimulation] = useState(false);
+  const [checklistConfirmed, setChecklistConfirmed] = useState(false);
   const [audiencesAnyInput, setAudiencesAnyInput] = useState("");
   const [timeoutPayloadJson, setTimeoutPayloadJson] = useState("{}");
   const [timeoutTrackingJson, setTimeoutTrackingJson] = useState("{}");
@@ -140,6 +144,16 @@ export function DecisionWizard({
   const [errorPayloadJson, setErrorPayloadJson] = useState("{}");
   const [errorTrackingJson, setErrorTrackingJson] = useState("{}");
   const [errorJsonError, setErrorJsonError] = useState<string | null>(null);
+  const [showAdvancedPerformance, setShowAdvancedPerformance] = useState(false);
+  const [localStepErrors, setLocalStepErrors] = useState<Record<WizardStepId, Record<string, string>>>({
+    template: {},
+    basics: {},
+    eligibility: {},
+    rules: {},
+    guardrails: {},
+    fallback: {},
+    test_activate: {}
+  });
   const lastScrolledErrorRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -169,6 +183,10 @@ export function DecisionWizard({
     onDraftChange(draft);
   }, [draft, onDraftChange]);
 
+  useEffect(() => {
+    onActivationReadyChange?.(Boolean(simulation) || skipSimulation ? checklistConfirmed : false);
+  }, [checklistConfirmed, onActivationReadyChange, simulation, skipSimulation]);
+
   const mappedErrors = useMemo(() => {
     const raw = [...(validation?.schemaErrors ?? []), ...(validation?.errors ?? [])];
     return mapValidationErrors(raw);
@@ -185,6 +203,22 @@ export function DecisionWizard({
     }
     return map;
   }, [mappedErrors]);
+
+  const localStepErrorCount = useMemo(() => {
+    const map = new Map<WizardStepId, number>();
+    for (const step of WIZARD_STEPS) {
+      map.set(step.id, Object.keys(localStepErrors[step.id] ?? {}).length);
+    }
+    return map;
+  }, [localStepErrors]);
+
+  const errorByPathMerged = useMemo(
+    () => ({
+      ...errorByPath,
+      ...(localStepErrors[activeStep] ?? {})
+    }),
+    [activeStep, errorByPath, localStepErrors]
+  );
 
   useEffect(() => {
     if (mappedErrors.length === 0) {
@@ -211,6 +245,81 @@ export function DecisionWizard({
       target.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [activeStep, mappedErrors]);
+
+  const scrollToFirstInvalidControl = (errors: Record<string, string>) => {
+    const firstPath = Object.keys(errors)[0];
+    if (!firstPath) {
+      return;
+    }
+    const target = document.querySelector<HTMLElement>(`[data-error-path^="${firstPath}"]`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.focus?.();
+    }
+  };
+
+  const validateStepLight = (step: WizardStepId): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (step === "basics") {
+      if (!draft.key.trim()) {
+        errors.key = "required";
+      }
+      if (!draft.name.trim()) {
+        errors.name = "required";
+      }
+    }
+    if (step === "rules") {
+      if (draft.flow.rules.length === 0) {
+        errors["flow.rules"] = "at least one rule required";
+      }
+      draft.flow.rules.forEach((rule, index) => {
+        if (!rule.then?.actionType) {
+          errors[`flow.rules.${index}.then.actionType`] = "required";
+        }
+      });
+    }
+    if (step === "fallback" && !draft.outputs.default?.actionType) {
+      errors["outputs.default.actionType"] = "required";
+    }
+    return errors;
+  };
+
+  const updateStepErrors = (step: WizardStepId, errors: Record<string, string>) => {
+    setLocalStepErrors((current) => ({
+      ...current,
+      [step]: errors
+    }));
+  };
+
+  const goToStep = (step: WizardStepId) => {
+    setActiveStep(step);
+  };
+
+  const nextStep = () => {
+    const errors = validateStepLight(activeStep);
+    updateStepErrors(activeStep, errors);
+    if (Object.keys(errors).length > 0) {
+      scrollToFirstInvalidControl(errors);
+      return;
+    }
+    const index = WIZARD_STEPS.findIndex((step) => step.id === activeStep);
+    const next = WIZARD_STEPS[index + 1];
+    if (next) {
+      setActiveStep(next.id);
+    }
+  };
+
+  const previousStep = () => {
+    const index = WIZARD_STEPS.findIndex((step) => step.id === activeStep);
+    const previous = WIZARD_STEPS[index - 1];
+    if (previous) {
+      setActiveStep(previous.id);
+    }
+  };
+
+  const skipTemplate = () => {
+    setActiveStep("basics");
+  };
 
   const applyTemplate = (template: "blank" | "welcome_message" | "suppress_inactive") => {
     if (template === "blank") {
@@ -364,6 +473,12 @@ export function DecisionWizard({
 
   const readOnly = readOnlyReasons.length > 0;
   const activeHint = STEP_HINTS[activeStep];
+  const hasMessagingAction = useMemo(
+    () =>
+      draft.flow.rules.some((rule) => rule.then.actionType === "message") || draft.outputs.default?.actionType === "message",
+    [draft.flow.rules, draft.outputs.default?.actionType]
+  );
+  const emptyEligibility = (draft.eligibility.attributes?.length ?? 0) === 0 && (draft.eligibility.audiencesAny?.length ?? 0) === 0;
 
   const commitAudiencesAnyInput = () => {
     const audiencesAny = audiencesAnyInput
@@ -379,6 +494,17 @@ export function DecisionWizard({
     }));
   };
 
+  const timeoutPreset = useMemo(() => {
+    const timeout = draft.performance?.timeoutMs ?? 120;
+    if (timeout <= 120) {
+      return "fast";
+    }
+    if (timeout <= 300) {
+      return "balanced";
+    }
+    return "safe";
+  }, [draft.performance?.timeoutMs]);
+
   return (
     <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)_320px]">
       <aside className="panel h-fit p-3">
@@ -386,15 +512,16 @@ export function DecisionWizard({
         <nav className="space-y-1">
           {WIZARD_STEPS.map((step) => {
             const completed = isStepComplete(step.id, draft, Boolean(simulation));
-            const errors = stepErrorCount.get(step.id) ?? 0;
+            const errors = (stepErrorCount.get(step.id) ?? 0) + (localStepErrorCount.get(step.id) ?? 0);
             return (
               <button
                 key={step.id}
                 type="button"
-                onClick={() => setActiveStep(step.id)}
+                onClick={() => goToStep(step.id)}
                 className={`flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm ${
                   activeStep === step.id ? "bg-stone-200" : "hover:bg-stone-100"
                 }`}
+                aria-current={activeStep === step.id ? "step" : undefined}
               >
                 <span>{step.title}</span>
                 <span className="text-xs">
@@ -479,7 +606,7 @@ export function DecisionWizard({
                   disabled={readOnly}
                   className="rounded-md border border-stone-300 px-2 py-1"
                 />
-                {errorByPath.key ? <span className="text-xs text-red-700">{errorByPath.key}</span> : null}
+                {errorByPathMerged.key ? <span className="text-xs text-red-700">{errorByPathMerged.key}</span> : null}
               </label>
               <label className="flex flex-col gap-1 text-sm" data-error-path="name">
                 Name
@@ -489,7 +616,7 @@ export function DecisionWizard({
                   disabled={readOnly}
                   className="rounded-md border border-stone-300 px-2 py-1"
                 />
-                {errorByPath.name ? <span className="text-xs text-red-700">{errorByPath.name}</span> : null}
+                {errorByPathMerged.name ? <span className="text-xs text-red-700">{errorByPathMerged.name}</span> : null}
               </label>
               <label className="flex flex-col gap-1 text-sm md:col-span-2" data-error-path="description">
                 Description
@@ -517,6 +644,11 @@ export function DecisionWizard({
         {activeStep === "eligibility" ? (
           <section className="panel space-y-3 p-4">
             <h3 className="font-semibold">Eligibility</h3>
+            {emptyEligibility && hasMessagingAction ? (
+              <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                Eligibility is empty. This messaging decision currently applies to everyone.
+              </p>
+            ) : null}
             <label className="flex flex-col gap-1 text-sm" data-error-path="eligibility.audiencesAny">
               Audiences (match any)
               <input
@@ -549,7 +681,7 @@ export function DecisionWizard({
               }}
               registry={fieldRegistry}
               readOnly={readOnly}
-              errorByPath={errorByPath}
+              errorByPath={errorByPathMerged}
               pathPrefix="eligibility.attributes"
             />
           </section>
@@ -570,15 +702,16 @@ export function DecisionWizard({
               }
               registry={fieldRegistry}
               readOnly={readOnly}
-              errorByPath={errorByPath}
+              errorByPath={errorByPathMerged}
             />
+            {errorByPathMerged["flow.rules"] ? <p className="text-xs text-red-700">{errorByPathMerged["flow.rules"]}</p> : null}
           </section>
         ) : null}
 
         {activeStep === "guardrails" ? (
           <section className="panel space-y-3 p-4">
             <h3 className="font-semibold">Guardrails</h3>
-            <GuardrailsEditor definition={draft} onChange={setDraft} readOnly={readOnly} errorByPath={errorByPath} />
+            <GuardrailsEditor definition={draft} onChange={setDraft} readOnly={readOnly} errorByPath={errorByPathMerged} />
           </section>
         ) : null}
 
@@ -589,9 +722,92 @@ export function DecisionWizard({
               Fail-open: return stale/default action on timeout. Fail-closed: disable fallback and return runtime errors.
             </p>
 
-            <div className="rounded-md border border-stone-200 p-3">
-              <h4 className="font-semibold text-sm">Timeout budgets</h4>
+            <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+              <h4 className="font-semibold text-sm">Recommended mode</h4>
               <div className="mt-2 grid gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-1 text-xs">
+                  Reliability mode
+                  <select
+                    value={draft.cachePolicy?.mode ?? "normal"}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cachePolicy: {
+                          mode: event.target.value as "disabled" | "normal" | "stale_if_error" | "stale_while_revalidate",
+                          ttlSeconds: current.cachePolicy?.ttlSeconds ?? 60,
+                          staleTtlSeconds: current.cachePolicy?.staleTtlSeconds ?? 1800,
+                          keyContextAllowlist: current.cachePolicy?.keyContextAllowlist ?? ["appKey", "placement"]
+                        }
+                      }))
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  >
+                    <option value="normal">normal</option>
+                    <option value="stale_if_error">stale_if_error</option>
+                    <option value="stale_while_revalidate">stale_while_revalidate</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs">
+                  Timeout preset
+                  <select
+                    value={timeoutPreset}
+                    onChange={(event) =>
+                      setDraft((current) => {
+                        if (event.target.value === "fast") {
+                          return {
+                            ...current,
+                            performance: {
+                              ...current.performance,
+                              timeoutMs: 120,
+                              wbsTimeoutMs: 80
+                            }
+                          };
+                        }
+                        if (event.target.value === "balanced") {
+                          return {
+                            ...current,
+                            performance: {
+                              ...current.performance,
+                              timeoutMs: 300,
+                              wbsTimeoutMs: 180
+                            }
+                          };
+                        }
+                        return {
+                          ...current,
+                          performance: {
+                            ...current.performance,
+                            timeoutMs: 800,
+                            wbsTimeoutMs: 500
+                          }
+                        };
+                      })
+                    }
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  >
+                    <option value="fast">Fast (120ms)</option>
+                    <option value="balanced">Balanced (300ms)</option>
+                    <option value="safe">Safe (800ms)</option>
+                  </select>
+                </label>
+              </div>
+              <label className="mt-2 flex items-center gap-2 text-xs text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={showAdvancedPerformance}
+                  onChange={(event) => setShowAdvancedPerformance(event.target.checked)}
+                />
+                Show advanced controls
+              </label>
+            </div>
+
+            {showAdvancedPerformance ? (
+              <>
+                <div className="rounded-md border border-stone-200 p-3">
+                  <h4 className="font-semibold text-sm">Timeout budgets</h4>
+                  <div className="mt-2 grid gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1 text-xs" data-error-path="performance.timeoutMs">
                   Overall timeout (ms)
                   <input
@@ -638,12 +854,12 @@ export function DecisionWizard({
                     <span className="text-red-700">{errorByPath["performance.wbsTimeoutMs"]}</span>
                   ) : null}
                 </label>
-              </div>
-            </div>
+                  </div>
+                </div>
 
-            <div className="rounded-md border border-stone-200 p-3">
-              <h4 className="font-semibold text-sm">Cache policy</h4>
-              <div className="mt-2 grid gap-3 md:grid-cols-2">
+                <div className="rounded-md border border-stone-200 p-3">
+                  <h4 className="font-semibold text-sm">Cache policy</h4>
+                  <div className="mt-2 grid gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1 text-xs" data-error-path="cachePolicy.mode">
                   Mode
                   <select
@@ -738,8 +954,10 @@ export function DecisionWizard({
                     placeholder="appKey, placement"
                   />
                 </label>
-              </div>
-            </div>
+                  </div>
+                </div>
+              </>
+            ) : null}
 
             <div className="rounded-md border border-stone-200 p-3">
               <h4 className="font-semibold text-sm">Timeout/error fallback</h4>
@@ -987,7 +1205,7 @@ export function DecisionWizard({
                     }))
                   }
                   readOnly={readOnly}
-                  errorByPath={errorByPath}
+                  errorByPath={errorByPathMerged}
                   pathPrefix="outputs.default"
                 />
               </div>
@@ -1008,9 +1226,48 @@ export function DecisionWizard({
               onActivate={runActivation}
               activating={activating}
               activationPreview={activationPreview}
+              onChecklistChange={setChecklistConfirmed}
+              onSkipSimulationChange={setSkipSimulation}
+              validationPassed={Boolean(validation?.valid)}
             />
           </section>
         ) : null}
+
+        <section className="sticky bottom-0 z-10 rounded-md border border-stone-200 bg-white/95 p-3 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={previousStep}
+                disabled={readOnly || activeStep === "template"}
+                className="rounded-md border border-stone-300 px-3 py-1 text-sm disabled:opacity-50"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={nextStep}
+                disabled={readOnly || activeStep === "test_activate"}
+                className="rounded-md bg-ink px-3 py-1 text-sm text-white disabled:opacity-50"
+              >
+                Next step
+              </button>
+              {activeStep === "template" ? (
+                <button
+                  type="button"
+                  onClick={skipTemplate}
+                  disabled={readOnly}
+                  className="rounded-md border border-stone-300 px-3 py-1 text-sm disabled:opacity-50"
+                >
+                  Skip templates
+                </button>
+              ) : null}
+            </div>
+            <p className="text-xs text-stone-600">
+              Step {WIZARD_STEPS.findIndex((step) => step.id === activeStep) + 1} of {WIZARD_STEPS.length}
+            </p>
+          </div>
+        </section>
       </main>
 
       <SummaryPanel definition={draft} validation={validation} groupedErrors={groupedErrors} readOnlyReasons={readOnlyReasons} />

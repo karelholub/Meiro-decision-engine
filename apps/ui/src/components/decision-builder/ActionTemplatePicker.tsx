@@ -82,6 +82,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
   const [nestedPayloadJson, setNestedPayloadJson] = useState(JSON.stringify(isRecord(payload.payload) ? payload.payload : {}, null, 2));
   const [rawPayloadJson, setRawPayloadJson] = useState(JSON.stringify(payload, null, 2));
   const [payloadError, setPayloadError] = useState<string | null>(null);
+  const [showAdvancedPayload, setShowAdvancedPayload] = useState(false);
 
   useEffect(() => {
     setTrackingJson(JSON.stringify(isRecord(payload.tracking) ? payload.tracking : {}, null, 2));
@@ -329,7 +330,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
           </p>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs">
-              Content Block Reference
+              Content Block Reference (required)
               <select
                 value={selectedContentKey}
                 onChange={(event) => {
@@ -425,49 +426,62 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
             </label>
           </div>
 
-          <label className="flex flex-col gap-1 text-xs">
-            Tracking (JSON object)
-            <textarea
-              value={trackingJson}
-              onChange={(event) => setTrackingJson(event.target.value)}
-              onBlur={() => {
-                try {
-                  const parsed = JSON.parse(trackingJson);
-                  if (!isRecord(parsed)) {
-                    throw new Error("Tracking must be a JSON object");
-                  }
-                  updatePayload({ tracking: parsed });
-                  setPayloadError(null);
-                } catch (error) {
-                  setPayloadError(error instanceof Error ? error.message : "Invalid tracking JSON");
-                }
-              }}
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={showAdvancedPayload}
+              onChange={(event) => setShowAdvancedPayload(event.target.checked)}
               disabled={readOnly}
-              className="min-h-24 rounded-md border border-stone-300 px-2 py-1 font-mono"
             />
+            Custom payload (advanced)
           </label>
+          {showAdvancedPayload ? (
+            <>
+              <label className="flex flex-col gap-1 text-xs">
+                Tracking (JSON object)
+                <textarea
+                  value={trackingJson}
+                  onChange={(event) => setTrackingJson(event.target.value)}
+                  onBlur={() => {
+                    try {
+                      const parsed = JSON.parse(trackingJson);
+                      if (!isRecord(parsed)) {
+                        throw new Error("Tracking must be a JSON object");
+                      }
+                      updatePayload({ tracking: parsed });
+                      setPayloadError(null);
+                    } catch (error) {
+                      setPayloadError(error instanceof Error ? error.message : "Invalid tracking JSON");
+                    }
+                  }}
+                  disabled={readOnly}
+                  className="min-h-24 rounded-md border border-stone-300 px-2 py-1 font-mono"
+                />
+              </label>
 
-          <label className="flex flex-col gap-1 text-xs">
-            Payload (JSON object)
-            <textarea
-              value={nestedPayloadJson}
-              onChange={(event) => setNestedPayloadJson(event.target.value)}
-              onBlur={() => {
-                try {
-                  const parsed = JSON.parse(nestedPayloadJson);
-                  if (!isRecord(parsed)) {
-                    throw new Error("Payload must be a JSON object");
-                  }
-                  updatePayload({ payload: parsed });
-                  setPayloadError(null);
-                } catch (error) {
-                  setPayloadError(error instanceof Error ? error.message : "Invalid payload JSON");
-                }
-              }}
-              disabled={readOnly}
-              className="min-h-24 rounded-md border border-stone-300 px-2 py-1 font-mono"
-            />
-          </label>
+              <label className="flex flex-col gap-1 text-xs">
+                Payload (JSON object)
+                <textarea
+                  value={nestedPayloadJson}
+                  onChange={(event) => setNestedPayloadJson(event.target.value)}
+                  onBlur={() => {
+                    try {
+                      const parsed = JSON.parse(nestedPayloadJson);
+                      if (!isRecord(parsed)) {
+                        throw new Error("Payload must be a JSON object");
+                      }
+                      updatePayload({ payload: parsed });
+                      setPayloadError(null);
+                    } catch (error) {
+                      setPayloadError(error instanceof Error ? error.message : "Invalid payload JSON");
+                    }
+                  }}
+                  disabled={readOnly}
+                  className="min-h-24 rounded-md border border-stone-300 px-2 py-1 font-mono"
+                />
+              </label>
+            </>
+          ) : null}
         </div>
       ) : null}
 

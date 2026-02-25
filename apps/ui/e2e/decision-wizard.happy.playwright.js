@@ -30,23 +30,32 @@ test("decision wizard happy path", async ({ page, request }) => {
 
   await page.goto(`/decisions/${created.decisionId}/edit?tab=basic`);
 
-  await page.getByRole("button", { name: "Rules" }).click();
+  await page.getByRole("button", { name: "Skip templates" }).click();
+  await page.getByRole("button", { name: "Next step" }).click();
+  await page.getByRole("button", { name: "consent_marketing = true" }).click();
+  await page.getByRole("button", { name: "Next step" }).click();
+
   await page.getByLabel("Action type").first().selectOption("message");
   await page.getByLabel("Placement").first().fill("home_top");
   await page.getByLabel("Template ID").first().fill("banner_v1");
+  await page.getByRole("button", { name: "Next step" }).click();
+
+  await page.getByRole("button", { name: "Standard messaging safety" }).click();
+  await page.getByRole("button", { name: "Next step" }).click();
+  await page.getByRole("button", { name: "Next step" }).click();
+
+  await page.getByRole("button", { name: "Run eligible test" }).click();
+  await page.getByRole("button", { name: "Run ineligible test" }).click();
+  await expect(page.getByText("Assertion: matched rule + actionType != noop")).toBeVisible();
+  await expect(page.getByText("Assertion: default/noop outcome")).toBeVisible();
 
   await page.getByRole("button", { name: "Validate" }).first().click();
   await expect(page.getByText("Validation passed.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Save" }).first().click();
-  await expect(page.getByText("Draft saved.")).toBeVisible();
+  await page.getByLabel(`I confirmed the target environment (DEV)`).check();
+  await page.getByLabel(new RegExp(`I confirmed the key/version \\(${decisionKey} v1\\)`)).check();
 
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Activate" }).first().click();
+  await page.getByRole("button", { name: /^Activate$/ }).nth(1).click();
   await expect(page.getByText("Draft activated.")).toBeVisible();
-
-  await page.getByRole("button", { name: "Test & Activate" }).click();
-  await page.getByRole("button", { name: "Run simulation" }).click();
-
-  await expect(page.getByText("Action:").first()).toContainText("message");
 });

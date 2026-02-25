@@ -64,7 +64,9 @@ export function FieldPicker({ value, onChange, registry, disabled, error, sample
         </div>
       ) : null}
 
-      <div className="max-h-40 overflow-auto rounded-md border border-stone-200 bg-stone-50">
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-stone-700">All fields</p>
+        <div className="max-h-40 overflow-auto rounded-md border border-stone-200 bg-stone-50">
         {filtered.map((item) => {
           const sampleValues = sampleValueLookup?.[item.field] ?? item.sampleValues;
           return (
@@ -84,6 +86,7 @@ export function FieldPicker({ value, onChange, registry, disabled, error, sample
             </button>
           );
         })}
+        </div>
       </div>
 
       <label className="flex flex-col gap-1 text-xs">

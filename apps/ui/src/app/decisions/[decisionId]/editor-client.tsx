@@ -11,6 +11,7 @@ import type {
 } from "@decisioning/shared";
 import { Badge } from "../../../components/ui/badge";
 import {
+  DecisionActionBar,
   DecisionWizard,
   detectWizardUnsupported,
   ensureDecisionDefinitionDefaults,
@@ -74,6 +75,7 @@ export default function DecisionEditorClient({
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [simulationError, setSimulationError] = useState<string | null>(null);
+  const [wizardActivationReady, setWizardActivationReady] = useState(false);
 
   const draftVersion = useMemo(
     () => details?.versions.find((version) => version.status === "DRAFT") ?? null,
@@ -444,6 +446,18 @@ export default function DecisionEditorClient({
   }
 
   const statusVariant = selectedVersion.status === "ACTIVE" ? "success" : selectedVersion.status === "ARCHIVED" ? "warning" : "neutral";
+  const canSave = !(tab === "basic" && !unsupported.supported);
+  const canActivate =
+    Boolean(validation?.valid) &&
+    (tab !== "basic" || !wizardEnabled || wizardActivationReady) &&
+    !isAutosaving;
+  const activateDisabledReason = !validation
+    ? "Run Validate before activating."
+    : !validation.valid
+      ? "Validation must pass before activation."
+      : tab === "basic" && wizardEnabled && !wizardActivationReady
+        ? "Complete activation checklist and simulation (or skip simulation) in Test & Activate."
+        : undefined;
 
   return (
     <section className="space-y-4">
@@ -461,48 +475,23 @@ export default function DecisionEditorClient({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 text-sm">
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void validateDraft()}>
-            Validate
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={formatJson}>
-            Format
-          </button>
-          <button
-            className="rounded-md bg-ink px-3 py-1 text-white disabled:opacity-60"
-            onClick={() => void saveDraft()}
-            disabled={tab === "basic" && !unsupported.supported}
-            title={tab === "basic" && !unsupported.supported ? "Open Advanced JSON to save this decision." : undefined}
-          >
-            Save
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void activate()}>
-            Activate
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void archive()}>
-            Archive
-          </button>
-
-          <span className="mx-2 border-l border-stone-300" />
-
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void duplicate()}>
-            Duplicate
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={exportJson}>
-            Export JSON
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void ensureDraftExists()}>
-            Create Draft From Active
-          </button>
-          <Link href="/docs/decision-builder" className="rounded-md border border-stone-300 px-3 py-1">
-            Builder Docs
-          </Link>
-        </div>
-
-        <p className="text-xs text-stone-600">
-          Autosave: {isAutosaving ? "saving..." : "idle"}
-          {lastSavedAt ? ` · last saved ${new Date(lastSavedAt).toLocaleTimeString()}` : ""}
-        </p>
+        <DecisionActionBar
+          environment={details.environment}
+          status={selectedVersion.status}
+          isAutosaving={isAutosaving}
+          lastSavedAt={lastSavedAt}
+          canSave={canSave}
+          canActivate={canActivate}
+          activateDisabledReason={activateDisabledReason}
+          onSave={() => void saveDraft()}
+          onValidate={() => void validateDraft()}
+          onActivate={() => void activate()}
+          onFormatJson={formatJson}
+          onArchive={() => void archive()}
+          onCreateDraftFromActive={() => void ensureDraftExists()}
+          onDuplicate={() => void duplicate()}
+          onExportJson={exportJson}
+        />
       </header>
 
       <div className="panel flex flex-wrap gap-2 p-4 text-sm">
@@ -591,6 +580,7 @@ export default function DecisionEditorClient({
             readOnlyReasons={unsupported.supported ? [] : unsupported.reasons}
             activationPreview={activationPreview}
             onDraftChange={handleWizardDraftChange}
+            onActivationReadyChange={setWizardActivationReady}
             onOpenAdvanced={() => switchTab("advanced")}
             onRunSimulation={async (definition, profileJson) => {
               try {

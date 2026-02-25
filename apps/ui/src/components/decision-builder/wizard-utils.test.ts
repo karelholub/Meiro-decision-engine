@@ -3,8 +3,10 @@ import type { DecisionDefinition, FlowRule } from "@decisioning/dsl";
 import { fieldRegistry } from "./field-registry";
 import {
   attributesToConditionRows,
+  conditionRowFromCommonChip,
   conditionRowsToAttributes,
   detectWizardUnsupported,
+  draftRiskFlags,
   mapValidationErrors,
   normalizeRulePriorities,
   reorderRules
@@ -197,5 +199,36 @@ describe("mapValidationErrors", () => {
 
     expect(mapped[2]?.step).toBe("guardrails");
     expect(mapped[3]?.step).toBe("fallback");
+  });
+});
+
+describe("draftRiskFlags", () => {
+  it("flags applies-to-everyone when eligibility is empty", () => {
+    const definition: DecisionDefinition = {
+      ...baseDefinition,
+      eligibility: {
+        audiencesAny: [],
+        attributes: []
+      }
+    };
+    expect(draftRiskFlags(definition).appliesToEveryone).toBe(true);
+  });
+});
+
+describe("conditionRowFromCommonChip", () => {
+  it("creates valid prefilled condition rows for common chips", () => {
+    const emailRow = conditionRowFromCommonChip("email_exists", fieldRegistry);
+    expect(emailRow).toMatchObject({
+      field: "email",
+      op: "exists",
+      value: ""
+    });
+
+    const consentRow = conditionRowFromCommonChip("consent_true", fieldRegistry);
+    expect(consentRow).toMatchObject({
+      field: "consent_marketing",
+      op: "eq",
+      value: "true"
+    });
   });
 });

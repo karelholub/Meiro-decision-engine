@@ -1,4 +1,5 @@
 export * from "./ActionTemplatePicker";
+export * from "./DecisionActionBar";
 export * from "./ConditionBuilder";
 export * from "./DecisionWizard";
 export * from "./FieldPicker";

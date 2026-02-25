@@ -81,7 +81,7 @@ test("catalog content block can be activated and resolved in decision simulation
   await expect(page.getByText("Draft activated.")).toBeVisible();
 
   await page.getByRole("button", { name: "Test & Activate" }).click();
-  await page.getByRole("button", { name: "Run simulation" }).click();
+  await page.getByRole("button", { name: "Run eligible test" }).click();
 
   await expect(page.getByText("Catalog Winback")).toBeVisible();
 });

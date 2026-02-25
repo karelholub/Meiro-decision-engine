@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getDecisionWizardEnabled, getDecisionWizardMode } from "./app-settings";
+import { getDecisionWizardEnabled, getDecisionWizardMode, getGlobalSuppressAudienceKey } from "./app-settings";
 
 describe("app settings helper", () => {
   it("uses default mode outside browser", () => {
@@ -8,5 +8,9 @@ describe("app settings helper", () => {
 
   it("returns a boolean wizard-enabled value outside browser", () => {
     expect(typeof getDecisionWizardEnabled()).toBe("boolean");
+  });
+
+  it("defaults global suppress audience key to empty string", () => {
+    expect(getGlobalSuppressAudienceKey()).toBe("");
   });
 });

@@ -5,8 +5,10 @@ import {
   getDecisionWizardEnabled,
   getDecisionWizardEnvDefaultValue,
   getDecisionWizardMode,
+  getGlobalSuppressAudienceKey,
   onAppSettingsChange,
   resetAppSettings,
+  setGlobalSuppressAudienceKey,
   setDecisionWizardMode,
   type DecisionWizardMode
 } from "../../../lib/app-settings";
@@ -95,6 +97,7 @@ const toPayload = (form: RuntimeSettingsForm, fallback: RuntimeSettingsPayload):
 
 export default function AppSettingsPage() {
   const [wizardMode, setWizardMode] = useState<DecisionWizardMode>("default");
+  const [globalSuppressAudienceKey, setGlobalSuppressAudienceKeyState] = useState("");
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [runtimeEffective, setRuntimeEffective] = useState<RuntimeSettingsPayload | null>(null);
   const [runtimeForm, setRuntimeForm] = useState<RuntimeSettingsForm | null>(null);
@@ -105,8 +108,10 @@ export default function AppSettingsPage() {
 
   useEffect(() => {
     setWizardMode(getDecisionWizardMode());
+    setGlobalSuppressAudienceKeyState(getGlobalSuppressAudienceKey());
     return onAppSettingsChange((settings) => {
       setWizardMode(settings.decisionWizardMode);
+      setGlobalSuppressAudienceKeyState(settings.globalSuppressAudienceKey);
     });
   }, []);
 
@@ -231,12 +236,28 @@ export default function AppSettingsPage() {
           <p className="mt-1 text-xs text-stone-600">Applies immediately in the editor after navigation or refresh.</p>
         </div>
 
+        <label className="flex flex-col gap-1 text-sm">
+          Global suppress audience key (for Guardrails shortcut)
+          <input
+            value={globalSuppressAudienceKey}
+            onChange={(event) => {
+              const value = event.target.value;
+              setGlobalSuppressAudienceKeyState(value);
+              setGlobalSuppressAudienceKey(value);
+            }}
+            className="rounded-md border border-stone-300 px-2 py-1"
+            placeholder="global_suppress"
+          />
+          <span className="text-xs text-stone-600">Leave empty to hide the shortcut in Guardrails.</span>
+        </label>
+
         <div className="flex items-center gap-2">
           <button
             className="rounded-md border border-stone-300 px-3 py-2 text-sm"
             onClick={() => {
               resetAppSettings();
               setWizardMode(getDecisionWizardMode());
+              setGlobalSuppressAudienceKeyState(getGlobalSuppressAudienceKey());
             }}
             type="button"
           >

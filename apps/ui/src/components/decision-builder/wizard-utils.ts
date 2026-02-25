@@ -186,6 +186,37 @@ export const createConditionRow = (partial?: Partial<ConditionRow>): ConditionRo
   };
 };
 
+export const COMMON_CONDITION_CHIPS: Array<{
+  id: string;
+  label: string;
+  field: string;
+  op: AttributeOperator;
+  value?: string;
+}> = [
+  { id: "email_exists", label: "email exists", field: "email", op: "exists" },
+  { id: "purchase_zero", label: "web_purchase_count = 0", field: "web_purchase_count", op: "eq", value: "0" },
+  { id: "consent_true", label: "consent_marketing = true", field: "consent_marketing", op: "eq", value: "true" },
+  { id: "rfm_lost", label: "rfm = Lost", field: "rfm", op: "eq", value: "Lost" }
+];
+
+export const conditionRowFromCommonChip = (chipId: string, registry: FieldRegistryItem[]): ConditionRow | null => {
+  const chip = COMMON_CONDITION_CHIPS.find((item) => item.id === chipId);
+  if (!chip) {
+    return null;
+  }
+  const fieldMeta = getFieldByName(chip.field, registry);
+  if (!fieldMeta) {
+    return null;
+  }
+  const operators = getOperatorsForFieldType(fieldMeta.dataType);
+  const op = operators.includes(chip.op) ? chip.op : operators[0] ?? "eq";
+  return createConditionRow({
+    field: chip.field,
+    op,
+    value: op === "exists" ? "" : chip.value ?? ""
+  });
+};
+
 export const conditionRowsToAttributes = (rows: ConditionRow[], registry: FieldRegistryItem[]): AttributePredicate[] => {
   return rows
     .filter((row) => row.field.trim().length > 0)
@@ -818,4 +849,60 @@ export const deriveWizardRequiredAttributes = (definition: DecisionDefinition): 
   }
 
   return [...fields].sort((left, right) => left.localeCompare(right));
+};
+
+export const deriveRequiredFieldsFromDraft = (definition: DecisionDefinition): {
+  requiredAttributes: string[];
+  requiredAudiences: string[];
+  requiredContextKeys: string[];
+} => {
+  const attributeSet = new Set<string>();
+  const audienceSet = new Set<string>();
+  const contextSet = new Set<string>();
+
+  for (const audience of definition.eligibility.audiencesAny ?? []) {
+    const trimmed = audience.trim();
+    if (trimmed) {
+      audienceSet.add(trimmed);
+    }
+  }
+
+  for (const field of deriveWizardRequiredAttributes(definition)) {
+    const trimmed = field.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed.startsWith("context.") || trimmed.startsWith("ctx.")) {
+      contextSet.add(trimmed);
+      continue;
+    }
+    attributeSet.add(trimmed);
+  }
+
+  for (const key of definition.performance?.requiredContextKeysOverride ?? []) {
+    const trimmed = key.trim();
+    if (trimmed) {
+      contextSet.add(trimmed);
+    }
+  }
+
+  return {
+    requiredAttributes: [...attributeSet].sort((left, right) => left.localeCompare(right)),
+    requiredAudiences: [...audienceSet].sort((left, right) => left.localeCompare(right)),
+    requiredContextKeys: [...contextSet].sort((left, right) => left.localeCompare(right))
+  };
+};
+
+export const draftRiskFlags = (definition: DecisionDefinition): {
+  appliesToEveryone: boolean;
+  messagingWithoutCaps: boolean;
+} => {
+  const appliesToEveryone = (definition.eligibility.attributes?.length ?? 0) === 0 && (definition.eligibility.audiencesAny?.length ?? 0) === 0;
+  const usesMessaging =
+    definition.outputs.default?.actionType === "message" || definition.flow.rules.some((rule) => rule.then.actionType === "message");
+  const messagingWithoutCaps = usesMessaging && !definition.caps.perProfilePerDay && !definition.caps.perProfilePerWeek;
+  return {
+    appliesToEveryone,
+    messagingWithoutCaps
+  };
 };

@@ -23,6 +23,7 @@ interface RuleListBuilderProps {
 
 export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPath }: RuleListBuilderProps) {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [ruleNames, setRuleNames] = useState<Record<string, string>>({});
 
   const normalized = useMemo(() => normalizeRulePriorities(rules), [rules]);
 
@@ -101,6 +102,7 @@ export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPa
                   <p className="font-semibold">Priority {rule.priority}</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <span className="cursor-grab rounded border border-dashed border-stone-300 px-2 py-1 text-xs text-stone-500">::</span>
                   <button
                     type="button"
                     onClick={() => moveRule(index, -1)}
@@ -128,25 +130,39 @@ export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPa
                 </div>
               </div>
 
-              <label className="mb-3 flex flex-col gap-1 text-xs" data-error-path={`flow.rules.${index}.id`}>
-                Rule id
-                <div className="flex gap-2">
-                  <input
-                    value={rule.id}
-                    onChange={(event) => updateRule(index, { id: event.target.value })}
-                    disabled={readOnly}
-                    className="w-full rounded-md border border-stone-300 px-2 py-1 font-mono"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => updateRule(index, { id: `rule-${Date.now()}` })}
-                    disabled={readOnly}
-                    className="rounded-md border border-stone-300 px-2 py-1"
-                  >
-                    Regenerate
-                  </button>
-                </div>
+              <label className="mb-3 flex flex-col gap-1 text-xs">
+                Rule name (optional, UI-only)
+                <input
+                  value={ruleNames[rule.id] ?? ""}
+                  onChange={(event) => setRuleNames((current) => ({ ...current, [rule.id]: event.target.value }))}
+                  disabled={readOnly}
+                  className="w-full rounded-md border border-stone-300 px-2 py-1"
+                  placeholder="Welcome buyers"
+                />
               </label>
+
+              <details className="mb-3 rounded-md border border-stone-200 p-2 text-xs" data-error-path={`flow.rules.${index}.id`}>
+                <summary className="cursor-pointer font-medium">Advanced</summary>
+                <label className="mt-2 flex flex-col gap-1">
+                  Rule id
+                  <div className="flex gap-2">
+                    <input
+                      value={rule.id}
+                      onChange={(event) => updateRule(index, { id: event.target.value })}
+                      disabled={readOnly}
+                      className="w-full rounded-md border border-stone-300 px-2 py-1 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateRule(index, { id: `rule-${Date.now()}` })}
+                      disabled={readOnly}
+                      className="rounded-md border border-stone-300 px-2 py-1"
+                    >
+                      Regenerate id
+                    </button>
+                  </div>
+                </label>
+              </details>
 
               <div className="space-y-3 rounded-md border border-stone-200 p-3">
                 <h4 className="text-sm font-semibold">IF (optional)</h4>

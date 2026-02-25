@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { DecisionValidationResponse } from "@decisioning/shared";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import type { ValidationByStep } from "./types";
-import { deriveWizardRequiredAttributes, getDecisionSummaryText } from "./wizard-utils";
+import { deriveRequiredFieldsFromDraft, draftRiskFlags, getDecisionSummaryText } from "./wizard-utils";
 import { apiClient } from "../../lib/api";
 
 interface SummaryPanelProps {
@@ -18,9 +18,11 @@ const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 export function SummaryPanel({ definition, validation, groupedErrors, readOnlyReasons }: SummaryPanelProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [catalogPreview, setCatalogPreview] = useState<unknown | null>(null);
+  const [copyRequirementsStatus, setCopyRequirementsStatus] = useState<"idle" | "copied">("idle");
 
   const summaryText = useMemo(() => getDecisionSummaryText(definition), [definition]);
-  const requiredAttributes = useMemo(() => deriveWizardRequiredAttributes(definition), [definition]);
+  const requirements = useMemo(() => deriveRequiredFieldsFromDraft(definition), [definition]);
+  const riskFlags = useMemo(() => draftRiskFlags(definition), [definition]);
   const jsonPreview = useMemo(() => (previewOpen ? pretty(definition) : ""), [definition, previewOpen]);
   const referencedContentKey = useMemo(() => {
     for (const rule of definition.flow.rules) {
@@ -76,10 +78,28 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
     }
   };
 
+  const copyRequirements = async () => {
+    try {
+      await navigator.clipboard.writeText(pretty(requirements));
+      setCopyRequirementsStatus("copied");
+      window.setTimeout(() => setCopyRequirementsStatus("idle"), 1200);
+    } catch {
+      setCopyRequirementsStatus("idle");
+    }
+  };
+
   return (
     <aside className="sticky top-24 space-y-3">
       <section className="panel space-y-2 p-3 text-sm">
         <h3 className="font-semibold">Live summary</h3>
+        {riskFlags.appliesToEveryone ? (
+          <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">Applies to everyone: no audiences or conditions configured.</p>
+        ) : null}
+        {riskFlags.messagingWithoutCaps ? (
+          <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+            No caps configured for messaging action (fatigue risk).
+          </p>
+        ) : null}
         <p className="text-stone-700">{summaryText}</p>
         <ul className="space-y-1 text-xs text-stone-700">
           <li>Eligibility conditions: {definition.eligibility.attributes?.length ?? 0}</li>
@@ -95,15 +115,22 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
           <li>Default action: {definition.outputs.default?.actionType ?? "noop"}</li>
         </ul>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Required attributes</p>
-          {requiredAttributes.length === 0 ? (
-            <p className="mt-1 text-xs text-stone-600">No explicit attribute requirements detected.</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Data requirements</p>
+            <button type="button" onClick={copyRequirements} className="rounded-md border border-stone-300 px-2 py-1 text-xs">
+              {copyRequirementsStatus === "copied" ? "Copied" : "Copy requirements for Pipes"}
+            </button>
+          </div>
+          {requirements.requiredAttributes.length === 0 &&
+          requirements.requiredAudiences.length === 0 &&
+          requirements.requiredContextKeys.length === 0 ? (
+            <p className="mt-1 text-xs text-stone-600">Data requirements (derived from rules): none yet.</p>
           ) : (
-            <ul className="mt-1 space-y-1 text-xs text-stone-700">
-              {requiredAttributes.map((field) => (
-                <li key={field}>{field}</li>
-              ))}
-            </ul>
+            <div className="mt-1 space-y-1 text-xs text-stone-700">
+              <p>Attributes: {requirements.requiredAttributes.length ? requirements.requiredAttributes.join(", ") : "none"}</p>
+              <p>Audiences: {requirements.requiredAudiences.length ? requirements.requiredAudiences.join(", ") : "none"}</p>
+              <p>Context keys: {requirements.requiredContextKeys.length ? requirements.requiredContextKeys.join(", ") : "none"}</p>
+            </div>
           )}
         </div>
         <p className="text-xs text-stone-600">

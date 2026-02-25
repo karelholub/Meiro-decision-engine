@@ -2,13 +2,15 @@ export type DecisionWizardMode = "default" | "enabled" | "disabled";
 
 export interface AppSettingsState {
   decisionWizardMode: DecisionWizardMode;
+  globalSuppressAudienceKey: string;
 }
 
 const APP_SETTINGS_STORAGE_KEY = "decisioning_app_settings_v1";
 const APP_SETTINGS_CHANGE_EVENT = "decisioning:app-settings-changed";
 
 const DEFAULT_SETTINGS: AppSettingsState = {
-  decisionWizardMode: "default"
+  decisionWizardMode: "default",
+  globalSuppressAudienceKey: ""
 };
 
 const isTruthy = (value: string) => {
@@ -38,7 +40,8 @@ const normalizeSettings = (value: unknown): AppSettingsState => {
 
   const candidate = value as Record<string, unknown>;
   return {
-    decisionWizardMode: normalizeDecisionWizardMode(candidate.decisionWizardMode)
+    decisionWizardMode: normalizeDecisionWizardMode(candidate.decisionWizardMode),
+    globalSuppressAudienceKey: typeof candidate.globalSuppressAudienceKey === "string" ? candidate.globalSuppressAudienceKey : ""
   };
 };
 
@@ -78,6 +81,10 @@ export const getDecisionWizardEnabled = (): boolean => {
   return getDecisionWizardEnvDefault();
 };
 
+export const getGlobalSuppressAudienceKey = (): string => {
+  return readStoredSettings().globalSuppressAudienceKey.trim();
+};
+
 const writeSettings = (settings: AppSettingsState) => {
   if (typeof window === "undefined") {
     return;
@@ -95,6 +102,14 @@ export const setDecisionWizardMode = (mode: DecisionWizardMode) => {
   writeSettings({
     ...current,
     decisionWizardMode: normalizeDecisionWizardMode(mode)
+  });
+};
+
+export const setGlobalSuppressAudienceKey = (key: string) => {
+  const current = readStoredSettings();
+  writeSettings({
+    ...current,
+    globalSuppressAudienceKey: key.trim()
   });
 };
 

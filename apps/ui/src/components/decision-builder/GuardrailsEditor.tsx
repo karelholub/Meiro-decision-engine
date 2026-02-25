@@ -1,5 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import type { DecisionDefinition } from "@decisioning/dsl";
+import { getGlobalSuppressAudienceKey, onAppSettingsChange } from "../../lib/app-settings";
 
 interface GuardrailsEditorProps {
   definition: DecisionDefinition;
@@ -14,8 +15,14 @@ const hasMarketingConsentShortcut = (definition: DecisionDefinition) => {
   );
 };
 
+const hasMxEmailExistsShortcut = (definition: DecisionDefinition) => {
+  return (definition.eligibility.attributes ?? []).some((predicate) => predicate.field === "mx_email" && predicate.op === "exists");
+};
+
 export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }: GuardrailsEditorProps) {
   const shortcutEnabled = hasMarketingConsentShortcut(definition);
+  const mxEmailShortcutEnabled = hasMxEmailExistsShortcut(definition);
+  const [globalSuppressAudienceKey, setGlobalSuppressAudienceKey] = useState("");
   const [capPerDayInput, setCapPerDayInput] = useState(definition.caps.perProfilePerDay?.toString() ?? "");
   const [capPerWeekInput, setCapPerWeekInput] = useState(definition.caps.perProfilePerWeek?.toString() ?? "");
   const [holdoutPercentageInput, setHoldoutPercentageInput] = useState(definition.holdout.percentage.toString());
@@ -31,6 +38,11 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
   useEffect(() => {
     setHoldoutPercentageInput(definition.holdout.percentage.toString());
   }, [definition.holdout.percentage]);
+
+  useEffect(() => {
+    setGlobalSuppressAudienceKey(getGlobalSuppressAudienceKey());
+    return onAppSettingsChange((settings) => setGlobalSuppressAudienceKey(settings.globalSuppressAudienceKey));
+  }, []);
 
   const updateHoldout = (patch: Partial<DecisionDefinition["holdout"]>) => {
     onChange({
@@ -74,6 +86,90 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
       eligibility: {
         ...definition.eligibility,
         attributes: nextAttributes
+      }
+    });
+  };
+
+  const toggleMxEmailShortcut = (enabled: boolean) => {
+    const currentAttributes = definition.eligibility.attributes ?? [];
+    const withoutShortcut = currentAttributes.filter(
+      (predicate) => !(predicate.field === "mx_email" && predicate.op === "exists")
+    );
+    const nextAttributes = enabled
+      ? [
+          ...withoutShortcut,
+          {
+            field: "mx_email",
+            op: "exists" as const
+          }
+        ]
+      : withoutShortcut;
+    onChange({
+      ...definition,
+      eligibility: {
+        ...definition.eligibility,
+        attributes: nextAttributes
+      }
+    });
+  };
+
+  const globalSuppressExcluded = globalSuppressAudienceKey
+    ? !(definition.eligibility.audiencesAny ?? []).includes(globalSuppressAudienceKey)
+    : false;
+
+  const toggleGlobalSuppressExclusion = (enabled: boolean) => {
+    if (!globalSuppressAudienceKey) {
+      return;
+    }
+    const audiencesAny = definition.eligibility.audiencesAny ?? [];
+    if (enabled) {
+      onChange({
+        ...definition,
+        eligibility: {
+          ...definition.eligibility,
+          audiencesAny: audiencesAny.filter((audience) => audience !== globalSuppressAudienceKey)
+        }
+      });
+      return;
+    }
+    onChange({
+      ...definition,
+      eligibility: {
+        ...definition.eligibility,
+        audiencesAny: [...new Set([...audiencesAny, globalSuppressAudienceKey])]
+      }
+    });
+  };
+
+  const applyPreset = (preset: "standard_messaging" | "experiment_mode" | "no_caps") => {
+    if (preset === "standard_messaging") {
+      onChange({
+        ...definition,
+        caps: {
+          ...definition.caps,
+          perProfilePerDay: 1,
+          perProfilePerWeek: 3
+        }
+      });
+      return;
+    }
+    if (preset === "experiment_mode") {
+      onChange({
+        ...definition,
+        holdout: {
+          ...definition.holdout,
+          enabled: true,
+          percentage: definition.holdout.percentage > 0 ? definition.holdout.percentage : 10
+        }
+      });
+      return;
+    }
+    onChange({
+      ...definition,
+      caps: {
+        ...definition.caps,
+        perProfilePerDay: null,
+        perProfilePerWeek: null
       }
     });
   };
@@ -127,6 +223,36 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
 
   return (
     <section className="space-y-4">
+      <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-stone-700">Presets</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => applyPreset("standard_messaging")}
+            disabled={readOnly}
+            className="rounded-md border border-stone-300 px-2 py-1 text-xs disabled:opacity-60"
+          >
+            Standard messaging safety
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset("experiment_mode")}
+            disabled={readOnly}
+            className="rounded-md border border-stone-300 px-2 py-1 text-xs disabled:opacity-60"
+          >
+            Experiment mode
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset("no_caps")}
+            disabled={readOnly}
+            className="rounded-md border border-amber-400 bg-amber-50 px-2 py-1 text-xs text-amber-900 disabled:opacity-60"
+          >
+            No caps (advanced)
+          </button>
+        </div>
+      </div>
+
       <div className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm" data-error-path="caps.perProfilePerDay">
           Cap per profile per day
@@ -210,6 +336,26 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
           Require `consent_marketing = true` shortcut
         </label>
         <p className="mt-1 text-xs text-stone-600">Adds/removes an eligibility condition without editing JSON.</p>
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={mxEmailShortcutEnabled}
+            onChange={(event) => toggleMxEmailShortcut(event.target.checked)}
+            disabled={readOnly}
+          />
+          Require `mx_email exists` shortcut
+        </label>
+        {globalSuppressAudienceKey ? (
+          <label className="mt-2 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={globalSuppressExcluded}
+              onChange={(event) => toggleGlobalSuppressExclusion(event.target.checked)}
+              disabled={readOnly}
+            />
+            Exclude `{globalSuppressAudienceKey}` audience
+          </label>
+        ) : null}
       </div>
 
       <div className="rounded-md border border-stone-200 p-3">
