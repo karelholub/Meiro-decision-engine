@@ -130,13 +130,17 @@ const navPermissionByHref: Record<string, string> = {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { hasPermission } = usePermissions();
+  const { hasPermission, loading, me } = usePermissions();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const shouldFilterNav = !loading && Boolean(me);
   const visibleGroups = NAV_GROUPS.map((group) => ({
     ...group,
     items: group.items.filter((item) => {
       const permission = navPermissionByHref[item.href];
-      return permission ? hasPermission(permission) : true;
+      if (!permission || !shouldFilterNav) {
+        return true;
+      }
+      return hasPermission(permission);
     })
   })).filter((group) => group.items.length > 0);
   const activeGroup = visibleGroups.find((group) => group.items.some((item) => isItemActive(pathname, item.href)))?.id ?? "observe";
@@ -232,10 +236,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="flex items-center gap-2">
             <EnvironmentSelector />
+            <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/login">
+              Switch User
+            </Link>
             <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/simulate">
               Run Simulation
             </Link>
-            {hasPermission("decision.write") ? (
+            {!shouldFilterNav || hasPermission("decision.write") ? (
               <Link className="rounded-md bg-ink px-3 py-2 text-sm text-white hover:opacity-90" href="/decisions?create=wizard">
                 New Decision
               </Link>

@@ -2353,6 +2353,66 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     roleSeedsEnsured = true;
   };
 
+  type DevLoginProfile = "viewer" | "builder" | "publisher" | "operator" | "admin";
+  const devRoleProfileAssignments: Record<
+    DevLoginProfile,
+    Array<{ env: "DEV" | "STAGE" | "PROD"; roleKey: keyof typeof defaultRolePermissions }>
+  > = {
+    viewer: [
+      { env: "DEV", roleKey: "viewer" },
+      { env: "STAGE", roleKey: "viewer" },
+      { env: "PROD", roleKey: "viewer" }
+    ],
+    builder: [
+      { env: "DEV", roleKey: "builder" },
+      { env: "STAGE", roleKey: "viewer" },
+      { env: "PROD", roleKey: "viewer" }
+    ],
+    publisher: [
+      { env: "DEV", roleKey: "publisher" },
+      { env: "STAGE", roleKey: "publisher" },
+      { env: "PROD", roleKey: "viewer" }
+    ],
+    operator: [
+      { env: "DEV", roleKey: "operator" },
+      { env: "STAGE", roleKey: "operator" },
+      { env: "PROD", roleKey: "operator" }
+    ],
+    admin: [
+      { env: "DEV", roleKey: "admin" },
+      { env: "STAGE", roleKey: "admin" },
+      { env: "PROD", roleKey: "admin" }
+    ]
+  };
+
+  const applyDevRoleProfile = async (input: { userId: string; profile: DevLoginProfile }) => {
+    const assignments = devRoleProfileAssignments[input.profile];
+    await prisma.$transaction(async (tx) => {
+      await (tx as any).userEnvRole.deleteMany({
+        where: {
+          userId: input.userId
+        }
+      });
+      for (const assignment of assignments) {
+        const role = await (tx as any).role.findUnique({
+          where: {
+            key: assignment.roleKey
+          }
+        });
+        if (!role) {
+          continue;
+        }
+        await (tx as any).userEnvRole.create({
+          data: {
+            userId: input.userId,
+            env: assignment.env,
+            roleId: role.id
+          }
+        });
+      }
+    });
+  };
+
   const resolveAuthContext: ResolveAuthContext = async (request, reply) => {
     const cached = authContextByRequest.get(request);
     if (cached) {
@@ -3043,6 +3103,70 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       email: auth.email,
       userId: auth.userId,
       envPermissions: auth.permissionsByEnv
+    };
+  });
+
+  app.post("/v1/auth/dev-login", async (request, reply) => {
+    if (process.env.NODE_ENV === "production") {
+      return buildResponseError(reply, 404, "Not found");
+    }
+    if (!hasRbacModels) {
+      return buildResponseError(reply, 409, "RBAC models unavailable");
+    }
+
+    const env = toEnvironmentKey(getRawEnvironment(request).toUpperCase()) ?? "DEV";
+    if (env !== "DEV") {
+      return buildResponseError(reply, 400, "Dev login is only available in DEV environment");
+    }
+
+    const body = z
+      .object({
+        email: z.string().email(),
+        profile: z.enum(["viewer", "builder", "publisher", "operator", "admin"])
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return buildResponseError(reply, 400, "Invalid body", body.error.flatten());
+    }
+
+    await ensureRoleSeeds();
+    const userModel = (prisma as any).user;
+    const user = await userModel.upsert({
+      where: { email: body.data.email.trim().toLowerCase() },
+      update: { isActive: true },
+      create: {
+        email: body.data.email.trim().toLowerCase(),
+        name: body.data.email.split("@")[0]
+      }
+    });
+
+    await applyDevRoleProfile({
+      userId: user.id,
+      profile: body.data.profile
+    });
+
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: "DEV",
+          actorUserId: user.id,
+          actorEmail: user.email,
+          action: "auth.dev_login",
+          entityType: "user",
+          entityKey: user.email,
+          metadata: toInputJson({
+            profile: body.data.profile
+          })
+        }
+      });
+    }
+
+    return {
+      status: "ok",
+      email: user.email,
+      profile: body.data.profile,
+      assignments: devRoleProfileAssignments[body.data.profile]
     };
   });
 

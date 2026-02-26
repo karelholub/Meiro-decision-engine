@@ -59,7 +59,9 @@ export function PermissionProvider({ children }: { children: React.ReactNode }) 
       environment,
       hasPermission: (permission) => {
         if (!me) {
-          return false;
+          // Backward-compatible local/dev fallback: when /v1/me is unavailable,
+          // keep UI usable while API-side authz still guards mutations.
+          return process.env.NODE_ENV !== "production";
         }
         const envPermissions = me.envPermissions?.[environment] ?? [];
         return envPermissions.includes(permission);

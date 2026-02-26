@@ -33,6 +33,38 @@ import type { DecisionDefinition } from "@decisioning/dsl";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
 const API_USER_EMAIL = process.env.NEXT_PUBLIC_USER_EMAIL;
+export const USER_EMAIL_STORAGE_KEY = "decisioning_user_email";
+
+const getStoredUserEmail = (): string | null => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const value = window.localStorage.getItem(USER_EMAIL_STORAGE_KEY)?.trim();
+    return value ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveApiUserEmail = (): string | null => {
+  return getStoredUserEmail() ?? API_USER_EMAIL ?? null;
+};
+
+export const setApiUserEmail = (email: string | null) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (!email || !email.trim()) {
+      window.localStorage.removeItem(USER_EMAIL_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(USER_EMAIL_STORAGE_KEY, email.trim().toLowerCase());
+  } catch {
+    // noop
+  }
+};
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public details?: unknown) {
@@ -228,6 +260,8 @@ export type MeResponse = {
   envPermissions: Record<"DEV" | "STAGE" | "PROD", string[]>;
 };
 
+export type DevLoginProfile = "viewer" | "builder" | "publisher" | "operator" | "admin";
+
 export type ReleasePlanItem = {
   type: "decision" | "stack" | "offer" | "content" | "campaign" | "policy" | "template" | "placement" | "app";
   key: string;
@@ -385,8 +419,9 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   if (shouldAttachWriteKey && API_KEY) {
     headers.set("X-API-KEY", API_KEY);
   }
-  if (API_USER_EMAIL) {
-    headers.set("X-USER-EMAIL", API_USER_EMAIL);
+  const userEmail = resolveApiUserEmail();
+  if (userEmail) {
+    headers.set("X-USER-EMAIL", userEmail);
   }
   headers.set("X-ENV", getEnvironment());
 
@@ -413,8 +448,9 @@ export async function apiFetchText(path: string, init?: RequestInit): Promise<st
   if (shouldAttachWriteKey && API_KEY) {
     headers.set("X-API-KEY", API_KEY);
   }
-  if (API_USER_EMAIL) {
-    headers.set("X-USER-EMAIL", API_USER_EMAIL);
+  const userEmail = resolveApiUserEmail();
+  if (userEmail) {
+    headers.set("X-USER-EMAIL", userEmail);
   }
   headers.set("X-ENV", getEnvironment());
 
@@ -1203,6 +1239,18 @@ export const apiClient = {
   },
   me: {
     get: () => apiFetch<MeResponse>(`/v1/me`)
+  },
+  auth: {
+    devLogin: (input: { email: string; profile: DevLoginProfile }) =>
+      apiFetch<{
+        status: "ok";
+        email: string;
+        profile: DevLoginProfile;
+        assignments: Array<{ env: "DEV" | "STAGE" | "PROD"; roleKey: string }>;
+      }>(`/v1/auth/dev-login`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      })
   },
   users: {
     list: () =>
