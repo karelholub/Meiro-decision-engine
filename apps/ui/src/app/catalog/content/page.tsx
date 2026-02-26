@@ -390,6 +390,7 @@ export default function CatalogContentPage() {
         lastSavedAt={editor.lastSavedAt}
         canSave={hasPermission("catalog.content.write")}
         canValidate={hasPermission("catalog.content.write")}
+        showActivate={hasPermission("catalog.content.activate")}
         saving={saving}
         canActivate={canActivate}
         activateDisabledReason={

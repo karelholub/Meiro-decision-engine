@@ -1119,6 +1119,92 @@ const makePrisma = () => {
   };
 };
 
+const attachRbacAndReleaseModels = (input: {
+  prisma: any;
+  permissionsByEnv: Record<"DEV" | "STAGE" | "PROD", string[]>;
+}) => {
+  const userRow = {
+    id: "user-1",
+    email: "viewer@example.com",
+    name: "Viewer User",
+    isActive: true
+  };
+  const rolesByKey = new Map<string, { id: string; key: string; permissions: string[] }>();
+  const releaseRows: Array<Record<string, any>> = [];
+
+  input.prisma.user = {
+    upsert: vi.fn().mockResolvedValue(userRow),
+    findMany: vi.fn().mockResolvedValue([userRow]),
+    findUnique: vi.fn().mockResolvedValue(userRow)
+  };
+  input.prisma.role = {
+    upsert: vi.fn().mockImplementation(async ({ where, create, update }: any) => {
+      const existing = rolesByKey.get(where.key);
+      const next = {
+        id: existing?.id ?? `${where.key}-id`,
+        key: where.key,
+        permissions: (Array.isArray(update?.permissions) ? update.permissions : create?.permissions ?? []) as string[]
+      };
+      rolesByKey.set(where.key, next);
+      return next;
+    }),
+    findUnique: vi.fn().mockImplementation(async ({ where }: any) => {
+      return rolesByKey.get(where.key) ?? null;
+    })
+  };
+  input.prisma.userEnvRole = {
+    findMany: vi.fn().mockImplementation(async () => {
+      return Object.entries(input.permissionsByEnv)
+        .filter(([, permissions]) => permissions.length > 0)
+        .map(([env, permissions], index) => ({
+          id: `uer-${index + 1}`,
+          userId: userRow.id,
+          env,
+          roleId: `role-${env}`,
+          role: {
+            id: `role-${env}`,
+            key: `role-${env}`,
+            permissions
+          }
+        }));
+    }),
+    deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    create: vi.fn().mockResolvedValue({}),
+    upsert: vi.fn().mockResolvedValue({})
+  };
+  input.prisma.auditEvent = {
+    create: vi.fn().mockResolvedValue({})
+  };
+  input.prisma.release = {
+    create: vi.fn().mockImplementation(async ({ data }: any) => {
+      const created = {
+        id: data.id ?? `release-${releaseRows.length + 1}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...data
+      };
+      releaseRows.push(created);
+      return created;
+    }),
+    findMany: vi.fn().mockImplementation(async () => [...releaseRows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())),
+    findUnique: vi.fn().mockImplementation(async ({ where }: any) => releaseRows.find((row) => row.id === where.id) ?? null),
+    update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+      const row = releaseRows.find((entry) => entry.id === where.id);
+      if (!row) {
+        throw new Error("release not found");
+      }
+      Object.assign(row, data, { updatedAt: new Date() });
+      return row;
+    })
+  };
+
+  return {
+    userRow,
+    rolesByKey,
+    releaseRows
+  };
+};
+
 const makeMeiro = (consents: string[] = ["email_marketing"]): MeiroAdapter => ({
   getProfile: vi.fn().mockResolvedValue({
     profileId: "p-1001",

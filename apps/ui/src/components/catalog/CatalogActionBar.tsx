@@ -12,6 +12,7 @@ type CatalogActionBarProps = {
   saving?: boolean;
   canSave?: boolean;
   canValidate?: boolean;
+  showActivate?: boolean;
   canActivate: boolean;
   activateDisabledReason?: string;
   onSave: () => void;
@@ -31,6 +32,7 @@ export function CatalogActionBar({
   saving,
   canSave = true,
   canValidate = true,
+  showActivate = true,
   canActivate,
   activateDisabledReason,
   onSave,
@@ -50,9 +52,11 @@ export function CatalogActionBar({
         <Button variant="outline" onClick={onValidate} disabled={!canValidate}>
           Validate
         </Button>
-        <Button onClick={onActivate} disabled={!canActivate} title={!canActivate ? activateDisabledReason : undefined}>
-          Activate
-        </Button>
+        {showActivate ? (
+          <Button onClick={onActivate} disabled={!canActivate} title={!canActivate ? activateDisabledReason : undefined}>
+            Activate
+          </Button>
+        ) : null}
 
         <details className="relative">
           <summary className="inline-flex cursor-pointer list-none items-center rounded-md border border-stone-300 bg-white px-3 py-2 text-sm hover:bg-stone-100">

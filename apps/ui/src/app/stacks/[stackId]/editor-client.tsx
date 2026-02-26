@@ -320,13 +320,11 @@ export default function StackEditorClient({
         >
           Validate
         </button>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
-          onClick={() => void activate()}
-          disabled={!hasPermission("stack.activate")}
-        >
-          Activate
-        </button>
+        {hasPermission("stack.activate") ? (
+          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void activate()}>
+            Activate
+          </button>
+        ) : null}
         <button
           className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
           onClick={() => void archive()}

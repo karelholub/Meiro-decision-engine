@@ -357,6 +357,7 @@ export default function CatalogOffersPage() {
         lastSavedAt={editor.lastSavedAt}
         canSave={hasPermission("catalog.offer.write")}
         canValidate={hasPermission("catalog.offer.write")}
+        showActivate={hasPermission("catalog.offer.activate")}
         saving={saving}
         canActivate={canActivate}
         activateDisabledReason={

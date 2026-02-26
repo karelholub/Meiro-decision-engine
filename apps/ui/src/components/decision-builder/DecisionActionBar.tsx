@@ -7,6 +7,8 @@ interface DecisionActionBarProps {
   isAutosaving: boolean;
   lastSavedAt: string | null;
   canSave: boolean;
+  canValidate?: boolean;
+  showActivate?: boolean;
   canActivate: boolean;
   activateDisabledReason?: string;
   onSave: () => void;
@@ -27,6 +29,8 @@ export function DecisionActionBar({
   isAutosaving,
   lastSavedAt,
   canSave,
+  canValidate = true,
+  showActivate = true,
   canActivate,
   activateDisabledReason,
   onSave,
@@ -60,18 +64,20 @@ export function DecisionActionBar({
         >
           Save
         </button>
-        <button type="button" className="rounded-md border border-stone-300 px-3 py-1" onClick={onValidate}>
+        <button type="button" className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50" onClick={onValidate} disabled={!canValidate}>
           Validate
         </button>
-        <button
-          type="button"
-          className="rounded-md bg-stone-900 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={onActivate}
-          disabled={!canActivate}
-          title={!canActivate ? activateDisabledReason : undefined}
-        >
-          Activate
-        </button>
+        {showActivate ? (
+          <button
+            type="button"
+            className="rounded-md bg-stone-900 px-3 py-1 text-white disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={onActivate}
+            disabled={!canActivate}
+            title={!canActivate ? activateDisabledReason : undefined}
+          >
+            Activate
+          </button>
+        ) : null}
 
         <details className="relative">
           <summary className="list-none cursor-pointer rounded-md border border-stone-300 px-3 py-1">More</summary>

@@ -456,7 +456,8 @@ export default function DecisionEditorClient({
   }
 
   const statusVariant = selectedVersion.status === "ACTIVE" ? "success" : selectedVersion.status === "ARCHIVED" ? "warning" : "neutral";
-  const canSave = hasPermission("decision.write") && !(tab === "basic" && !unsupported.supported);
+  const canWrite = hasPermission("decision.write");
+  const canSave = canWrite && !(tab === "basic" && !unsupported.supported);
   const canActivate =
     hasPermission("decision.activate") &&
     Boolean(validation?.valid) &&
@@ -492,6 +493,8 @@ export default function DecisionEditorClient({
           isAutosaving={isAutosaving}
           lastSavedAt={lastSavedAt}
           canSave={canSave}
+          canValidate={canWrite}
+          showActivate={hasPermission("decision.activate")}
           canActivate={canActivate}
           activateDisabledReason={activateDisabledReason}
           onSave={() => void saveDraft()}
