@@ -2468,7 +2468,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         return null;
       }
 
-      if (!userEmail || envKey !== "DEV") {
+      if (!userEmail) {
         return null;
       }
 
@@ -2476,14 +2476,24 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       const userModel = (prisma as any).user;
       const userEnvRoleModel = (prisma as any).userEnvRole;
 
-      const user = await userModel.upsert({
-        where: { email: userEmail },
-        update: { isActive: true },
-        create: {
-          email: userEmail,
-          name: userEmail.split("@")[0]
-        }
-      });
+      // In DEV we allow first-use auto-provisioning; in STAGE/PROD user must already exist.
+      const user =
+        envKey === "DEV"
+          ? await userModel.upsert({
+              where: { email: userEmail },
+              update: { isActive: true },
+              create: {
+                email: userEmail,
+                name: userEmail.split("@")[0]
+              }
+            })
+          : await userModel.findUnique({
+              where: { email: userEmail }
+            });
+
+      if (!user) {
+        return null;
+      }
 
       const assignments = await userEnvRoleModel.findMany({
         where: {
