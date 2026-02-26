@@ -1177,8 +1177,9 @@ const attachRbacAndReleaseModels = (input: {
   };
   input.prisma.release = {
     create: vi.fn().mockImplementation(async ({ data }: any) => {
+      const generatedId = `11111111-1111-4111-8111-${String(releaseRows.length + 1).padStart(12, "0")}`;
       const created = {
-        id: data.id ?? `release-${releaseRows.length + 1}`,
+        id: data.id ?? generatedId,
         createdAt: new Date(),
         updatedAt: new Date(),
         ...data
@@ -3590,6 +3591,351 @@ describe("API", () => {
     expect(response.statusCode).toBe(200);
     expect(enqueueFailure).not.toHaveBeenCalled();
 
+    await app.close();
+  });
+
+  it("RBAC denies decision activation without decision.activate permission", async () => {
+    const { prisma } = makePrisma();
+    attachRbacAndReleaseModels({
+      prisma,
+      permissionsByEnv: {
+        DEV: ["decision.read"],
+        STAGE: [],
+        PROD: []
+      }
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/decisions/f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f/activate",
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toBe("Forbidden");
+    await app.close();
+  });
+
+  it("RBAC allows viewer read access for decisions list", async () => {
+    const { prisma } = makePrisma();
+    (prisma.decisionVersion as any).count = vi.fn().mockResolvedValue(2);
+    attachRbacAndReleaseModels({
+      prisma,
+      permissionsByEnv: {
+        DEV: ["decision.read"],
+        STAGE: [],
+        PROD: []
+      }
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/decisions",
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(Array.isArray(response.json().items)).toBe(true);
+    await app.close();
+  });
+
+  it("release plan includes decision dependencies content -> offer", async () => {
+    const { prisma, decisionVersionFindFirst } = makePrisma();
+    attachRbacAndReleaseModels({
+      prisma,
+      permissionsByEnv: {
+        DEV: ["promotion.create"],
+        STAGE: [],
+        PROD: []
+      }
+    });
+
+    const dependencyDefinition = createDefaultDecisionDefinition({
+      id: "dep-decision-id",
+      key: "decision_with_deps",
+      name: "Decision With Deps",
+      version: 3,
+      status: "ACTIVE"
+    });
+    dependencyDefinition.flow.rules = [
+      {
+        id: "rule-1",
+        priority: 1,
+        then: {
+          actionType: "message",
+          payload: {
+            payloadRef: {
+              contentKey: "content_home",
+              offerKey: "offer_promo"
+            }
+          }
+        }
+      }
+    ];
+
+    const originalDecisionFindFirst = decisionVersionFindFirst.getMockImplementation();
+    decisionVersionFindFirst.mockImplementation(async (args?: any) => {
+      const key = args?.where?.decision?.key;
+      if (key === "decision_with_deps") {
+        return {
+          id: "version-dep-1",
+          decisionId: dependencyDefinition.id,
+          version: 3,
+          status: "ACTIVE",
+          definitionJson: dependencyDefinition,
+          decision: {
+            id: dependencyDefinition.id,
+            key: dependencyDefinition.key,
+            environment: "DEV",
+            name: dependencyDefinition.name,
+            description: dependencyDefinition.description
+          }
+        };
+      }
+      if (originalDecisionFindFirst) {
+        return originalDecisionFindFirst(args);
+      }
+      return null;
+    });
+
+    const offers = [
+      {
+        id: "offer-1",
+        environment: "DEV",
+        key: "offer_promo",
+        name: "Promo",
+        description: "",
+        status: "ACTIVE",
+        version: 2,
+        tags: [],
+        type: "discount",
+        valueJson: { percent: 10 },
+        constraints: {},
+        startAt: null,
+        endAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        activatedAt: new Date()
+      }
+    ];
+    const contentBlocks = [
+      {
+        id: "content-1",
+        environment: "DEV",
+        key: "content_home",
+        name: "Home",
+        description: "",
+        status: "ACTIVE",
+        version: 4,
+        tags: [],
+        templateId: "banner_v1",
+        schemaJson: {},
+        localesJson: { en: { title: "Hello" } },
+        tokenBindings: { offerKey: "offer_promo" },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        activatedAt: new Date()
+      }
+    ];
+
+    (prisma as any).offer = {
+      findFirst: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        return offers.find((item) => item.environment === where.environment && item.key === where.key) ?? null;
+      }),
+      findMany: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        return offers.filter((item) => item.environment === where.environment && item.key === where.key);
+      }),
+      create: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 })
+    };
+    (prisma as any).contentBlock = {
+      findFirst: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        return contentBlocks.find((item) => item.environment === where.environment && item.key === where.key) ?? null;
+      }),
+      findMany: vi.fn().mockImplementation(async (args?: any) => {
+        const where = args?.where ?? {};
+        return contentBlocks.filter((item) => item.environment === where.environment && item.key === where.key);
+      }),
+      create: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 })
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/releases/plan",
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      },
+      payload: {
+        sourceEnv: "DEV",
+        targetEnv: "STAGE",
+        selection: [{ type: "decision", key: "decision_with_deps" }],
+        mode: "copy_as_draft"
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    const itemIds = body.plan.items.map((item: any) => `${item.type}:${item.key}`);
+    expect(itemIds).toContain("decision:decision_with_deps");
+    expect(itemIds).toContain("content:content_home");
+    expect(itemIds).toContain("offer:offer_promo");
+
+    await app.close();
+  });
+
+  it("release apply copies decision into target and preserves key", async () => {
+    const { prisma } = makePrisma();
+    attachRbacAndReleaseModels({
+      prisma,
+      permissionsByEnv: {
+        DEV: ["promotion.create", "promotion.apply"],
+        STAGE: [],
+        PROD: []
+      }
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const planResponse = await app.inject({
+      method: "POST",
+      url: "/v1/releases/plan",
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      },
+      payload: {
+        sourceEnv: "DEV",
+        targetEnv: "STAGE",
+        selection: [{ type: "decision", key: "cart_recovery" }],
+        mode: "copy_as_draft"
+      }
+    });
+    expect(planResponse.statusCode).toBe(201);
+    const releaseId = planResponse.json().releaseId as string;
+
+    const applyResponse = await app.inject({
+      method: "POST",
+      url: `/v1/releases/${releaseId}/apply`,
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      },
+      payload: {}
+    });
+
+    expect(applyResponse.statusCode).toBe(200);
+    expect(applyResponse.json().item.status).toBe("APPLIED");
+    expect(prisma.decision.create).toHaveBeenCalled();
+    expect(prisma.decision.create.mock.calls[0]?.[0]?.data?.key).toBe("cart_recovery");
+    expect(prisma.decision.create.mock.calls[0]?.[0]?.data?.environment).toBe("STAGE");
+    await app.close();
+  });
+
+  it("release apply requires approval when target is PROD", async () => {
+    const { prisma } = makePrisma();
+    attachRbacAndReleaseModels({
+      prisma,
+      permissionsByEnv: {
+        DEV: ["promotion.create", "promotion.apply"],
+        STAGE: [],
+        PROD: []
+      }
+    });
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const planResponse = await app.inject({
+      method: "POST",
+      url: "/v1/releases/plan",
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      },
+      payload: {
+        sourceEnv: "DEV",
+        targetEnv: "PROD",
+        selection: [{ type: "decision", key: "cart_recovery" }],
+        mode: "copy_as_draft"
+      }
+    });
+    expect(planResponse.statusCode).toBe(201);
+    const releaseId = planResponse.json().releaseId as string;
+
+    const applyResponse = await app.inject({
+      method: "POST",
+      url: `/v1/releases/${releaseId}/apply`,
+      headers: {
+        "x-env": "DEV",
+        "x-user-email": "viewer@example.com"
+      },
+      payload: {}
+    });
+
+    expect(applyResponse.statusCode).toBe(403);
+    expect(applyResponse.json().error).toContain("approved");
     await app.close();
   });
 });
