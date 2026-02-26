@@ -88,6 +88,7 @@ import { registerMaintenanceRoutes } from "./routes/maintenance";
 import { registerOrchestrationRoutes } from "./routes/orchestration";
 import { registerPrecomputeRoutes } from "./routes/precompute";
 import { registerPipesCallbackRoutes } from "./routes/pipesCallback";
+import { registerReleaseRoutes } from "./routes/releases";
 import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
 import {
   processPipesWebhook,
@@ -104,6 +105,7 @@ import {
 import { createCatalogResolver } from "./services/catalogResolver";
 import { buildActionDescriptor, type RuntimeActionDescriptor } from "./services/actionDescriptor";
 import { createOrchestrationService } from "./services/orchestrationService";
+import { allPermissions, defaultRolePermissions } from "./lib/permissions";
 
 interface PolicyHook {
   preDecision?: (input: { definition: DecisionDefinition; profile: EngineProfile }) => Promise<void> | void;
@@ -1363,25 +1365,67 @@ class TtlCache<T> {
   }
 }
 
-const createWriteAuth = (config: AppConfig) => {
+interface RequestAuthContext {
+  userId: string | null;
+  email: string | null;
+  isAdmin: boolean;
+  permissionsByEnv: Record<"DEV" | "STAGE" | "PROD", string[]>;
+  permissions: Set<string>;
+}
+
+type ResolveAuthContext = (request: FastifyRequest, reply: FastifyReply) => Promise<RequestAuthContext | null>;
+type ResolvePermissionForRequest = (request: FastifyRequest) => string | string[] | null;
+
+const toEnvironmentKey = (value: string): "DEV" | "STAGE" | "PROD" | null => {
+  if (value === "DEV" || value === "STAGE" || value === "PROD") {
+    return value;
+  }
+  return null;
+};
+
+const createWriteAuth = (input: {
+  config: AppConfig;
+  resolveAuthContext: ResolveAuthContext;
+  resolvePermission: ResolvePermissionForRequest;
+}) => {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!config.apiWriteKey) {
+    const auth = await input.resolveAuthContext(request, reply);
+    if (!auth) {
+      if (!input.config.apiWriteKey) {
+        return;
+      }
+      return buildResponseError(reply, 401, "Unauthorized");
+    }
+
+    const permission = input.resolvePermission(request);
+    if (!permission || auth.isAdmin) {
       return;
     }
-    const supplied = request.headers["x-api-key"];
-    if (supplied !== config.apiWriteKey) {
-      return buildResponseError(reply, 401, "Unauthorized");
+
+    if (Array.isArray(permission)) {
+      if (permission.some((key) => auth.permissions.has(key))) {
+        return;
+      }
+      return buildResponseError(reply, 403, "Forbidden");
+    }
+
+    if (!auth.permissions.has(permission)) {
+      return buildResponseError(reply, 403, "Forbidden");
     }
   };
 };
 
-const createDecideAuth = (config: AppConfig) => {
+const createDecideAuth = (input: {
+  config: AppConfig;
+  resolveAuthContext: ResolveAuthContext;
+}) => {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!config.protectDecide) {
+    if (!input.config.protectDecide) {
       return;
     }
-    const supplied = request.headers["x-api-key"];
-    if (supplied !== config.apiWriteKey) {
+
+    const auth = await input.resolveAuthContext(request, reply);
+    if (!auth) {
       return buildResponseError(reply, 401, "Unauthorized");
     }
   };
@@ -2229,8 +2273,313 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     reply.header("x-request-id", requestId);
   });
 
-  const requireWriteAuth = createWriteAuth(config);
-  const requireDecideAuth = createDecideAuth(config);
+  app.addHook("onResponse", async (request, reply) => {
+    if (reply.statusCode >= 400) {
+      return;
+    }
+    if (request.method.toUpperCase() === "GET") {
+      return;
+    }
+
+    const auditModel = (prisma as any).auditEvent;
+    if (!auditModel?.create) {
+      return;
+    }
+
+    const route = String((request.routeOptions as { url?: string } | undefined)?.url ?? request.url.split("?")[0] ?? "");
+    const mapAction = (): { action: string; entityType?: string } | null => {
+      if (route.includes("/activate")) return { action: "entity.activate" };
+      if (route.includes("/archive")) return { action: "entity.archive" };
+      if (route.startsWith("/v1/releases")) return { action: "release.apply", entityType: "release" };
+      if (route.startsWith("/v1/cache/invalidate")) return { action: "cache.invalidate", entityType: "cache" };
+      if (route.includes("/dlq/messages") && route.includes("/retry")) return { action: "dlq.retry", entityType: "dlq" };
+      if (route.includes("/dlq/messages") && route.includes("/quarantine")) return { action: "dlq.quarantine", entityType: "dlq" };
+      if (route.includes("/dlq/messages") && route.includes("/resolve")) return { action: "dlq.resolve", entityType: "dlq" };
+      if (route.startsWith("/v1/precompute")) return { action: "precompute.run", entityType: "precompute" };
+      if (route.startsWith("/v1/settings")) return { action: "settings.update", entityType: "settings" };
+      return null;
+    };
+    const mapped = mapAction();
+    if (!mapped) {
+      return;
+    }
+
+    const auth = await resolveAuthContext(request, reply);
+    const environment = toEnvironmentKey(getRawEnvironment(request).toUpperCase());
+    await auditModel.create({
+      data: {
+        env: environment,
+        actorUserId: auth?.userId ?? null,
+        actorEmail: auth?.email ?? null,
+        action: mapped.action,
+        entityType: mapped.entityType,
+        metadata: toInputJson({
+          method: request.method,
+          path: route,
+          requestId: reply.getHeader("x-request-id")
+        })
+      }
+    });
+  });
+
+  const authContextByRequest = new WeakMap<FastifyRequest, Promise<RequestAuthContext | null>>();
+  let roleSeedsEnsured = false;
+
+  const hasRbacModels =
+    Boolean((prisma as any).user?.findUnique) &&
+    Boolean((prisma as any).role?.findUnique) &&
+    Boolean((prisma as any).userEnvRole?.findMany);
+
+  const ensureRoleSeeds = async () => {
+    if (!hasRbacModels || roleSeedsEnsured) {
+      return;
+    }
+    const roleModel = (prisma as any).role;
+    for (const [key, permissions] of Object.entries(defaultRolePermissions)) {
+      await roleModel.upsert({
+        where: { key },
+        update: {
+          name: key[0]?.toUpperCase() + key.slice(1),
+          permissions: toInputJson(permissions)
+        },
+        create: {
+          key,
+          name: key[0]?.toUpperCase() + key.slice(1),
+          description: `${key} preset`,
+          permissions: toInputJson(permissions)
+        }
+      });
+    }
+    roleSeedsEnsured = true;
+  };
+
+  const resolveAuthContext: ResolveAuthContext = async (request, reply) => {
+    const cached = authContextByRequest.get(request);
+    if (cached) {
+      return cached;
+    }
+
+    const resolver = (async (): Promise<RequestAuthContext | null> => {
+      const envKey = toEnvironmentKey(getRawEnvironment(request).toUpperCase()) ?? "DEV";
+      const fullByEnv = {
+        DEV: allPermissions(),
+        STAGE: allPermissions(),
+        PROD: allPermissions()
+      } as Record<"DEV" | "STAGE" | "PROD", string[]>;
+
+      const apiKeyHeader = request.headers["x-api-key"];
+      const suppliedApiKey = typeof apiKeyHeader === "string" ? apiKeyHeader : undefined;
+      const writeKeyMatch = Boolean(config.apiWriteKey) && suppliedApiKey === config.apiWriteKey;
+
+      const userEmailHeader = request.headers["x-user-email"];
+      const userEmail =
+        typeof userEmailHeader === "string" && userEmailHeader.trim().length > 0 ? userEmailHeader.trim().toLowerCase() : null;
+
+      if (writeKeyMatch) {
+        return {
+          userId: null,
+          email: "api-admin@local",
+          isAdmin: true,
+          permissionsByEnv: fullByEnv,
+          permissions: new Set(fullByEnv[envKey])
+        };
+      }
+
+      if (!config.apiWriteKey) {
+        return {
+          userId: null,
+          email: userEmail,
+          isAdmin: true,
+          permissionsByEnv: fullByEnv,
+          permissions: new Set(fullByEnv[envKey])
+        };
+      }
+
+      if (!hasRbacModels) {
+        if (envKey === "DEV" && userEmail) {
+          return {
+            userId: null,
+            email: userEmail,
+            isAdmin: true,
+            permissionsByEnv: fullByEnv,
+            permissions: new Set(fullByEnv[envKey])
+          };
+        }
+        return null;
+      }
+
+      if (!userEmail || envKey !== "DEV") {
+        return null;
+      }
+
+      await ensureRoleSeeds();
+      const userModel = (prisma as any).user;
+      const userEnvRoleModel = (prisma as any).userEnvRole;
+
+      const user = await userModel.upsert({
+        where: { email: userEmail },
+        update: { isActive: true },
+        create: {
+          email: userEmail,
+          name: userEmail.split("@")[0]
+        }
+      });
+
+      const assignments = await userEnvRoleModel.findMany({
+        where: {
+          userId: user.id
+        },
+        include: {
+          role: true
+        }
+      });
+
+      const permissionsByEnv: Record<"DEV" | "STAGE" | "PROD", string[]> = {
+        DEV: [],
+        STAGE: [],
+        PROD: []
+      };
+
+      for (const assignment of assignments) {
+        const assignmentEnv = toEnvironmentKey(String(assignment.env).toUpperCase());
+        if (!assignmentEnv) {
+          continue;
+        }
+        const permissionArray = Array.isArray(assignment.role?.permissions)
+          ? assignment.role.permissions
+          : typeof assignment.role?.permissions === "string"
+            ? [assignment.role.permissions]
+            : [];
+        for (const permission of permissionArray) {
+          if (typeof permission === "string" && permission.length > 0) {
+            permissionsByEnv[assignmentEnv].push(permission);
+          }
+        }
+      }
+
+      for (const key of ["DEV", "STAGE", "PROD"] as const) {
+        permissionsByEnv[key] = [...new Set(permissionsByEnv[key])];
+      }
+
+      if (permissionsByEnv.DEV.length === 0) {
+        permissionsByEnv.DEV = allPermissions();
+      }
+
+      const isAdmin = [permissionsByEnv.DEV, permissionsByEnv.STAGE, permissionsByEnv.PROD].some((permissions) =>
+        permissions.includes("role.manage")
+      );
+
+      return {
+        userId: user.id,
+        email: user.email,
+        isAdmin,
+        permissionsByEnv,
+        permissions: new Set(permissionsByEnv[envKey])
+      };
+    })();
+
+    authContextByRequest.set(request, resolver);
+    return resolver;
+  };
+
+  const inferWritePermission: ResolvePermissionForRequest = (request) => {
+    const method = request.method.toUpperCase();
+    const route = String((request.routeOptions as { url?: string } | undefined)?.url ?? request.url.split("?")[0] ?? "");
+
+    if (route.startsWith("/v1/decisions")) {
+      if (route.includes("/activate")) return "decision.activate";
+      if (route.includes("/archive")) return "decision.archive";
+      if (method === "GET") return "decision.read";
+      return "decision.write";
+    }
+    if (route.startsWith("/v1/stacks")) {
+      if (route.includes("/activate")) return "stack.activate";
+      if (route.includes("/archive")) return "stack.archive";
+      if (method === "GET") return "stack.read";
+      return "stack.write";
+    }
+    if (route.startsWith("/v1/catalog/offers")) {
+      if (route.includes("/activate")) return "catalog.offer.activate";
+      if (route.includes("/archive")) return "catalog.offer.archive";
+      if (method === "GET") return "catalog.offer.read";
+      return "catalog.offer.write";
+    }
+    if (route.startsWith("/v1/catalog/content")) {
+      if (route.includes("/activate")) return "catalog.content.activate";
+      if (route.includes("/archive")) return "catalog.content.archive";
+      if (method === "GET") return "catalog.content.read";
+      return "catalog.content.write";
+    }
+    if (route.startsWith("/v1/inapp/apps")) return method === "GET" ? "engage.app.read" : "engage.app.write";
+    if (route.startsWith("/v1/inapp/placements")) return method === "GET" ? "engage.placement.read" : "engage.placement.write";
+    if (route.startsWith("/v1/inapp/templates")) return method === "GET" ? "engage.template.read" : "engage.template.write";
+    if (route.startsWith("/v1/inapp/campaigns")) {
+      if (route.includes("/activate") || route.includes("/approve-and-activate")) return "engage.campaign.activate";
+      if (route.includes("/archive")) return "engage.campaign.archive";
+      return method === "GET" ? "engage.campaign.read" : "engage.campaign.write";
+    }
+    if (route.startsWith("/v1/orchestration/policies")) {
+      if (route.includes("/activate")) return "decision.activate";
+      if (route.includes("/archive")) return "decision.archive";
+      return method === "GET" ? "decision.read" : "decision.write";
+    }
+    if (route.startsWith("/v1/logs")) return route.includes("/export") ? "logs.export" : "logs.read";
+    if (route.startsWith("/v1/cache")) return method === "GET" ? "cache.read" : "cache.invalidate";
+    if (route.startsWith("/v1/dlq")) {
+      if (route.includes("/retry")) return "dlq.retry";
+      if (route.includes("/quarantine")) return "dlq.quarantine";
+      if (route.includes("/resolve")) return "dlq.resolve";
+      return "dlq.read";
+    }
+    if (route.startsWith("/v1/precompute")) return method === "GET" ? "precompute.read" : "precompute.run";
+    if (route.startsWith("/v1/results")) return method === "GET" ? "results.read" : "precompute.run";
+    if (route.startsWith("/v1/settings/wbs-mapping")) return method === "GET" ? "settings.wbsMapping.read" : "settings.wbsMapping.write";
+    if (route.startsWith("/v1/settings/wbs")) return method === "GET" ? "settings.wbs.read" : "settings.wbs.write";
+    if (route.startsWith("/v1/settings/runtime")) return method === "GET" ? "settings.app.read" : "settings.app.write";
+    if (route.startsWith("/v1/settings/pipes-callback")) return method === "GET" ? "settings.pipes.read" : "settings.pipes.write";
+    if (route.startsWith("/v1/settings/webhook-rules")) return method === "GET" ? "settings.webhooks.read" : "settings.webhooks.write";
+    if (route.startsWith("/v1/releases")) {
+      if (route.endsWith("/approve")) return "promotion.approve";
+      if (route.endsWith("/apply")) return "promotion.apply";
+      return "promotion.create";
+    }
+    if (route.startsWith("/v1/me")) return null;
+    return null;
+  };
+
+  const requirePermission = (permission: string) => {
+    return async (request: FastifyRequest, reply: FastifyReply) => {
+      const auth = await resolveAuthContext(request, reply);
+      if (!auth) {
+        return buildResponseError(reply, 401, "Unauthorized");
+      }
+      if (!auth.isAdmin && !auth.permissions.has(permission)) {
+        return buildResponseError(reply, 403, "Forbidden");
+      }
+    };
+  };
+
+  const requireAnyPermission = (permissions: string[]) => {
+    return async (request: FastifyRequest, reply: FastifyReply) => {
+      const auth = await resolveAuthContext(request, reply);
+      if (!auth) {
+        return buildResponseError(reply, 401, "Unauthorized");
+      }
+      if (!auth.isAdmin && !permissions.some((permission) => auth.permissions.has(permission))) {
+        return buildResponseError(reply, 403, "Forbidden");
+      }
+    };
+  };
+
+  const requireWriteAuth = createWriteAuth({
+    config,
+    resolveAuthContext,
+    resolvePermission: inferWritePermission
+  });
+  const requireDecideAuth = createDecideAuth({
+    config,
+    resolveAuthContext
+  });
   const requirePipesAuth = createPipesAuth(config);
   const precomputeRunner = createPrecomputeRunner({
     app,
@@ -2577,6 +2926,15 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     requireWriteAuth
   });
 
+  await registerReleaseRoutes({
+    app,
+    prisma,
+    buildResponseError,
+    resolveAuth: resolveAuthContext,
+    requirePermission,
+    requireAnyPermission
+  });
+
   await registerWebhooksRoutes({
     app,
     prisma,
@@ -2661,6 +3019,145 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       name: "decisioning-api",
       status: "ok",
       docsHint: "Use /health or /v1/* endpoints."
+    };
+  });
+
+  app.get("/v1/me", async (request, reply) => {
+    const auth = await resolveAuthContext(request, reply);
+    if (!auth) {
+      if (!config.apiWriteKey) {
+        return {
+          email: null,
+          userId: null,
+          envPermissions: {
+            DEV: allPermissions(),
+            STAGE: allPermissions(),
+            PROD: allPermissions()
+          }
+        };
+      }
+      return buildResponseError(reply, 401, "Unauthorized");
+    }
+
+    return {
+      email: auth.email,
+      userId: auth.userId,
+      envPermissions: auth.permissionsByEnv
+    };
+  });
+
+  app.get("/v1/users", { preHandler: requirePermission("user.manage") }, async () => {
+    const userModel = (prisma as any).user;
+    const userEnvRoleModel = (prisma as any).userEnvRole;
+    if (!userModel?.findMany || !userEnvRoleModel?.findMany) {
+      return {
+        items: []
+      };
+    }
+
+    const [users, assignments] = await Promise.all([
+      userModel.findMany({
+        where: { isActive: true },
+        orderBy: { email: "asc" }
+      }),
+      userEnvRoleModel.findMany({
+        include: { role: true }
+      })
+    ]);
+
+    return {
+      items: users.map((user: any) => ({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        roles: assignments
+          .filter((assignment: any) => assignment.userId === user.id)
+          .map((assignment: any) => ({
+            env: assignment.env,
+            roleKey: assignment.role?.key ?? null
+          }))
+      }))
+    };
+  });
+
+  app.put("/v1/users/:id/roles", { preHandler: requirePermission("user.manage") }, async (request, reply) => {
+    const userModel = (prisma as any).user;
+    const roleModel = (prisma as any).role;
+    const userEnvRoleModel = (prisma as any).userEnvRole;
+    if (!userModel?.findUnique || !roleModel?.findUnique || !userEnvRoleModel?.deleteMany) {
+      return buildResponseError(reply, 409, "RBAC models unavailable");
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid user id", params.error.flatten());
+    }
+    const body = z
+      .object({
+        assignments: z.array(
+          z.object({
+            env: z.enum(["DEV", "STAGE", "PROD"]),
+            roleKey: z.string().min(1)
+          })
+        )
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return buildResponseError(reply, 400, "Invalid body", body.error.flatten());
+    }
+
+    const user = await userModel.findUnique({ where: { id: params.data.id } });
+    if (!user) {
+      return buildResponseError(reply, 404, "User not found");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await (tx as any).userEnvRole.deleteMany({ where: { userId: user.id } });
+      for (const assignment of body.data.assignments) {
+        const role = await (tx as any).role.findUnique({ where: { key: assignment.roleKey } });
+        if (!role) {
+          continue;
+        }
+        await (tx as any).userEnvRole.create({
+          data: {
+            userId: user.id,
+            env: assignment.env,
+            roleId: role.id
+          }
+        });
+      }
+    });
+
+    return {
+      status: "ok"
+    };
+  });
+
+  app.get("/v1/audit/events", { preHandler: requirePermission("audit.read") }, async (request, reply) => {
+    const query = z
+      .object({
+        env: z.enum(["DEV", "STAGE", "PROD"]).optional(),
+        action: z.string().optional(),
+        limit: z.coerce.number().int().positive().max(500).optional()
+      })
+      .safeParse(request.query);
+    if (!query.success) {
+      return buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const auditModel = (prisma as any).auditEvent;
+    if (!auditModel?.findMany) {
+      return { items: [] };
+    }
+    const items = await auditModel.findMany({
+      where: {
+        ...(query.data.env ? { env: query.data.env } : {}),
+        ...(query.data.action ? { action: query.data.action } : {})
+      },
+      orderBy: { ts: "desc" },
+      take: query.data.limit ?? 100
+    });
+    return {
+      items
     };
   });
 

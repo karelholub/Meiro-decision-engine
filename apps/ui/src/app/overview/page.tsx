@@ -8,6 +8,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { apiClient, type RealtimeCacheStatsResponse, type SystemHealthResponse } from "../../lib/api";
 import type { DecisionStackVersionSummary, DecisionVersionSummary, InAppOverviewReport, LogsQueryResponseItem } from "@decisioning/shared";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { usePermissions } from "../../lib/permissions";
 
 type PrecomputeRunSummary = {
   runKey: string;
@@ -34,6 +35,7 @@ const heartbeatStatusLabel: Record<HeartbeatStatus, string> = {
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 export default function OverviewPage() {
+  const { hasPermission } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [apiHealth, setApiHealth] = useState<SystemHealthResponse | null>(null);
@@ -298,6 +300,11 @@ export default function OverviewPage() {
               <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/simulate">
                 Run Simulation
               </Link>
+              {environment === "DEV" && hasPermission("promotion.create") ? (
+                <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/releases">
+                  Promote from DEV
+                </Link>
+              ) : null}
             </div>
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Operate</p>

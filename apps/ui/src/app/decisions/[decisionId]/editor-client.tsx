@@ -17,8 +17,10 @@ import {
   ensureDecisionDefinitionDefaults,
   type WizardSimulationResult
 } from "../../../components/decision-builder";
+import PermissionDenied from "../../../components/permission-denied";
 import { getDecisionWizardEnabled, onAppSettingsChange } from "../../../lib/app-settings";
-import { apiClient } from "../../../lib/api";
+import { ApiError, apiClient } from "../../../lib/api";
+import { usePermissions } from "../../../lib/permissions";
 
 const reasonCatalog = [
   { code: "RULE_MATCH", meaning: "Rule condition matched and THEN action executed." },
@@ -76,6 +78,8 @@ export default function DecisionEditorClient({
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [simulationError, setSimulationError] = useState<string | null>(null);
   const [wizardActivationReady, setWizardActivationReady] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
+  const { hasPermission } = usePermissions();
 
   const draftVersion = useMemo(
     () => details?.versions.find((version) => version.status === "DRAFT") ?? null,
@@ -103,6 +107,9 @@ export default function DecisionEditorClient({
       setActivationPreview(null);
       return response;
     } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setForbidden(true);
+      }
       setFeedback(error instanceof Error ? error.message : "Failed to load decision");
       return null;
     }
@@ -442,12 +449,16 @@ export default function DecisionEditorClient({
   }, []);
 
   if (!details || !selectedVersion) {
+    if (forbidden) {
+      return <PermissionDenied title="You don't have permission to edit this decision" />;
+    }
     return <p className="text-sm">Loading editor...</p>;
   }
 
   const statusVariant = selectedVersion.status === "ACTIVE" ? "success" : selectedVersion.status === "ARCHIVED" ? "warning" : "neutral";
-  const canSave = !(tab === "basic" && !unsupported.supported);
+  const canSave = hasPermission("decision.write") && !(tab === "basic" && !unsupported.supported);
   const canActivate =
+    hasPermission("decision.activate") &&
     Boolean(validation?.valid) &&
     (tab !== "basic" || !wizardEnabled || wizardActivationReady) &&
     !isAutosaving;

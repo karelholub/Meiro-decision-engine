@@ -32,6 +32,7 @@ import type { DecisionDefinition } from "@decisioning/dsl";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
+const API_USER_EMAIL = process.env.NEXT_PUBLIC_USER_EMAIL;
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public details?: unknown) {
@@ -221,6 +222,47 @@ export type PipesRequirementsResponse = {
   };
 };
 
+export type MeResponse = {
+  email: string | null;
+  userId: string | null;
+  envPermissions: Record<"DEV" | "STAGE" | "PROD", string[]>;
+};
+
+export type ReleasePlanItem = {
+  type: "decision" | "stack" | "offer" | "content" | "campaign" | "policy" | "template" | "placement" | "app";
+  key: string;
+  version: number;
+  action: "create_new" | "update_new_version" | "noop";
+  dependsOn: Array<{ type: string; key: string; version: number }>;
+  diff: { hasChanges: boolean; summary: string; jsonPatch?: Array<Record<string, unknown>> };
+  riskFlags: string[];
+  targetVersion: number;
+};
+
+export type ReleaseRecord = {
+  id: string;
+  sourceEnv: "DEV" | "STAGE" | "PROD";
+  targetEnv: "DEV" | "STAGE" | "PROD";
+  key: string;
+  status: "DRAFT" | "READY" | "APPROVED" | "APPLIED" | "FAILED" | "CANCELED";
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  approvalByUserId: string | null;
+  approvalNote: string | null;
+  appliedByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  summary: string | null;
+  planJson: {
+    sourceEnv: "DEV" | "STAGE" | "PROD";
+    targetEnv: "DEV" | "STAGE" | "PROD";
+    mode: "copy_as_draft" | "copy_and_activate";
+    items: ReleasePlanItem[];
+    graph?: Array<{ id: string; dependsOn: string[] }>;
+    applyResult?: unknown;
+  };
+};
+
 export type PipesInlineEvaluateResponse = {
   status: "ok";
   eligible: boolean;
@@ -343,6 +385,9 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   if (shouldAttachWriteKey && API_KEY) {
     headers.set("X-API-KEY", API_KEY);
   }
+  if (API_USER_EMAIL) {
+    headers.set("X-USER-EMAIL", API_USER_EMAIL);
+  }
   headers.set("X-ENV", getEnvironment());
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -367,6 +412,9 @@ export async function apiFetchText(path: string, init?: RequestInit): Promise<st
   const shouldAttachWriteKey = method !== "GET";
   if (shouldAttachWriteKey && API_KEY) {
     headers.set("X-API-KEY", API_KEY);
+  }
+  if (API_USER_EMAIL) {
+    headers.set("X-USER-EMAIL", API_USER_EMAIL);
   }
   headers.set("X-ENV", getEnvironment());
 
@@ -1151,6 +1199,59 @@ export const apiClient = {
       apiFetch<{ ok: boolean; profile: unknown; summary: unknown }>(`/v1/settings/wbs-mapping/test`, {
         method: "POST",
         body: JSON.stringify(input)
+      })
+  },
+  me: {
+    get: () => apiFetch<MeResponse>(`/v1/me`)
+  },
+  users: {
+    list: () =>
+      apiFetch<{
+        items: Array<{
+          id: string;
+          email: string;
+          name: string | null;
+          roles: Array<{ env: "DEV" | "STAGE" | "PROD"; roleKey: string | null }>;
+        }>;
+      }>(`/v1/users`),
+    saveRoles: (
+      userId: string,
+      assignments: Array<{
+        env: "DEV" | "STAGE" | "PROD";
+        roleKey: string;
+      }>
+    ) =>
+      apiFetch<{ status: string }>(`/v1/users/${userId}/roles`, {
+        method: "PUT",
+        body: JSON.stringify({ assignments })
+      })
+  },
+  releases: {
+    plan: (input: {
+      sourceEnv: "DEV" | "STAGE" | "PROD";
+      targetEnv: "DEV" | "STAGE" | "PROD";
+      selection: Array<{
+        type: "decision" | "stack" | "offer" | "content" | "campaign" | "policy" | "template" | "placement" | "app";
+        key: string;
+        version?: number;
+      }>;
+      mode: "copy_as_draft" | "copy_and_activate";
+    }) =>
+      apiFetch<{ releaseId: string; plan: ReleaseRecord["planJson"] }>(`/v1/releases/plan`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
+    list: () => apiFetch<{ items: ReleaseRecord[] }>(`/v1/releases`),
+    get: (id: string) => apiFetch<{ item: ReleaseRecord }>(`/v1/releases/${id}`),
+    approve: (id: string, note?: string) =>
+      apiFetch<{ item: ReleaseRecord }>(`/v1/releases/${id}/approve`, {
+        method: "POST",
+        body: JSON.stringify(note ? { note } : {})
+      }),
+    apply: (id: string) =>
+      apiFetch<{ item: ReleaseRecord }>(`/v1/releases/${id}/apply`, {
+        method: "POST",
+        body: JSON.stringify({})
       })
   }
 };

@@ -10,6 +10,8 @@ type CatalogActionBarProps = {
   environment: string;
   lastSavedAt: string | null;
   saving?: boolean;
+  canSave?: boolean;
+  canValidate?: boolean;
   canActivate: boolean;
   activateDisabledReason?: string;
   onSave: () => void;
@@ -27,6 +29,8 @@ export function CatalogActionBar({
   environment,
   lastSavedAt,
   saving,
+  canSave = true,
+  canValidate = true,
   canActivate,
   activateDisabledReason,
   onSave,
@@ -40,10 +44,10 @@ export function CatalogActionBar({
   return (
     <div className="panel space-y-3 p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={onSave} disabled={saving}>
+        <Button onClick={onSave} disabled={saving || !canSave}>
           {saving ? "Saving..." : "Save"}
         </Button>
-        <Button variant="outline" onClick={onValidate}>
+        <Button variant="outline" onClick={onValidate} disabled={!canValidate}>
           Validate
         </Button>
         <Button onClick={onActivate} disabled={!canActivate} title={!canActivate ? activateDisabledReason : undefined}>

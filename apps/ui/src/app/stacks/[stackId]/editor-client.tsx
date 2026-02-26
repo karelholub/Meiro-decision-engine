@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DecisionStackDefinition } from "@decisioning/dsl";
 import type { DecisionStackDetailsResponse, DecisionStackValidationResponse, DecisionVersionSummary } from "@decisioning/shared";
-import { apiClient } from "../../../lib/api";
+import PermissionDenied from "../../../components/permission-denied";
+import { ApiError, apiClient } from "../../../lib/api";
+import { usePermissions } from "../../../lib/permissions";
 
 type StepForm = {
   id: string;
@@ -49,6 +51,8 @@ export default function StackEditorClient({
   const [jsonDraft, setJsonDraft] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [validation, setValidation] = useState<DecisionStackValidationResponse | null>(null);
+  const [forbidden, setForbidden] = useState(false);
+  const { hasPermission } = usePermissions();
 
   const draftVersion = useMemo(() => details?.versions.find((version) => version.status === "DRAFT") ?? null, [details]);
   const activeVersion = useMemo(() => details?.versions.find((version) => version.status === "ACTIVE") ?? null, [details]);
@@ -96,6 +100,9 @@ export default function StackEditorClient({
       setValidation(null);
       setFeedback(null);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setForbidden(true);
+      }
       setFeedback(error instanceof Error ? error.message : "Failed to load stack");
     }
   };
@@ -265,6 +272,9 @@ export default function StackEditorClient({
   };
 
   if (!details) {
+    if (forbidden) {
+      return <PermissionDenied title="You don't have permission to edit this stack" />;
+    }
     return <p className="text-sm">Loading stack editor...</p>;
   }
 
@@ -296,16 +306,32 @@ export default function StackEditorClient({
         <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void ensureDraft()}>
           Create Draft From Active
         </button>
-        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void saveDraft()}>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
+          onClick={() => void saveDraft()}
+          disabled={!hasPermission("stack.write")}
+        >
           Save Draft
         </button>
-        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void validateDraft()}>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
+          onClick={() => void validateDraft()}
+          disabled={!hasPermission("stack.write")}
+        >
           Validate
         </button>
-        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void activate()}>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
+          onClick={() => void activate()}
+          disabled={!hasPermission("stack.activate")}
+        >
           Activate
         </button>
-        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void archive()}>
+        <button
+          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
+          onClick={() => void archive()}
+          disabled={!hasPermission("stack.archive")}
+        >
           Archive
         </button>
       </div>

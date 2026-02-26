@@ -1207,8 +1207,26 @@ Current structure intentionally leaves extension points for:
 - policy checks (`policyHook` pre/post decision)
 - candidate ranking (`rankerHook`)
 - destination expansion via action payload contracts
-- future RBAC/approvals metadata on decision records
 - environment scoping (`dev`/`stage`/`prod`) in decision model
+
+## RBAC and Releases
+
+- RBAC is environment scoped via `User`, `Role`, and `UserEnvRole`.
+- Default role presets are seeded: `viewer`, `builder`, `publisher`, `operator`, `admin`.
+- Use `GET /v1/me` to inspect current user permissions across `DEV`/`STAGE`/`PROD`.
+- Use `GET /v1/users` and `PUT /v1/users/:id/roles` (admin) to manage role assignment per environment.
+- All sensitive actions are written to immutable `AuditEvent` records, and can be read via `GET /v1/audit/events`.
+
+Promotion workflow:
+1. Create plan: `POST /v1/releases/plan` with source/target env, selected entities, and mode (`copy_as_draft` or `copy_and_activate`).
+2. Review release in UI (`/releases`) including dependencies, diff summary, and risk flags.
+3. Approve (required for PROD unless admin override): `POST /v1/releases/:id/approve`.
+4. Apply: `POST /v1/releases/:id/apply`.
+
+Recommended promotion workflow:
+1. Build and validate in `DEV`.
+2. Promote to `STAGE` and validate activation behavior.
+3. Approve and apply to `PROD`.
 
 ## Important Paths
 

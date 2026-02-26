@@ -7,6 +7,7 @@ import {
 } from "@decisioning/dsl";
 import type { MeiroProfile } from "@decisioning/meiro";
 import { type WbsMappingConfig } from "@decisioning/wbs-mapping";
+import { defaultRolePermissions } from "../src/lib/permissions";
 
 const prisma = new PrismaClient();
 
@@ -396,6 +397,77 @@ const upsertPipesCallbackConfig = async () => {
   });
 };
 
+const upsertRbacSeed = async () => {
+  const roleModel = (prisma as any).role;
+  const userModel = (prisma as any).user;
+  const userEnvRoleModel = (prisma as any).userEnvRole;
+  if (!roleModel || !userModel || !userEnvRoleModel) {
+    return;
+  }
+
+  const roleDefinitions: Array<{ key: string; name: string; description: string }> = [
+    { key: "viewer", name: "Viewer", description: "Read-only access with simulator support." },
+    { key: "builder", name: "Builder", description: "Author drafts and run validations in DEV." },
+    { key: "publisher", name: "Publisher", description: "Activate in DEV/STAGE and create promotions." },
+    { key: "operator", name: "Operator", description: "Operate cache, DLQ, logs, and precompute." },
+    { key: "admin", name: "Admin", description: "Full access, approvals, and role management." }
+  ];
+
+  for (const role of roleDefinitions) {
+    await roleModel.upsert({
+      where: { key: role.key },
+      update: {
+        name: role.name,
+        description: role.description,
+        permissions: toInputJson(defaultRolePermissions[role.key] ?? [])
+      },
+      create: {
+        key: role.key,
+        name: role.name,
+        description: role.description,
+        permissions: toInputJson(defaultRolePermissions[role.key] ?? [])
+      }
+    });
+  }
+
+  const adminEmail = process.env.SEED_ADMIN_EMAIL?.trim();
+  if (!adminEmail) {
+    return;
+  }
+
+  const adminUser = await userModel.upsert({
+    where: { email: adminEmail },
+    update: { isActive: true },
+    create: {
+      email: adminEmail,
+      name: "Seed Admin",
+      isActive: true
+    }
+  });
+  const adminRole = await roleModel.findUnique({ where: { key: "admin" } });
+  if (!adminRole) {
+    return;
+  }
+
+  for (const env of ["DEV", "STAGE", "PROD"] as const) {
+    await userEnvRoleModel.upsert({
+      where: {
+        userId_env_roleId: {
+          userId: adminUser.id,
+          env,
+          roleId: adminRole.id
+        }
+      },
+      update: {},
+      create: {
+        userId: adminUser.id,
+        env,
+        roleId: adminRole.id
+      }
+    });
+  }
+};
+
 const inAppTemplateSchema = {
   type: "object",
   required: ["title", "subtitle", "cta", "image", "deeplink"],
@@ -760,6 +832,7 @@ const main = async () => {
 
   await upsertWbsInstance();
   await upsertWbsMapping();
+  await upsertRbacSeed();
   await upsertDlqConfig();
   await upsertPipesCallbackConfig();
   await upsertCatalogSeed();

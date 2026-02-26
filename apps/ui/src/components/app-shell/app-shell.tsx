@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import EnvironmentSelector from "../environment-selector";
 import { cn } from "../../lib/cn";
+import { usePermissions } from "../../lib/permissions";
 
 type NavItem = {
   href: string;
@@ -30,7 +31,8 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/execution/orchestration", label: "Orchestration Policies" },
       { href: "/execution/dlq", label: "DLQ" },
       { href: "/execution/precompute", label: "Precompute Runs" },
-      { href: "/execution/results", label: "Decision Results" }
+      { href: "/execution/results", label: "Decision Results" },
+      { href: "/releases", label: "Releases" }
     ]
   },
   {
@@ -78,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/settings/wbs", label: "WBS Settings" },
       { href: "/settings/wbs-mapping", label: "WBS Mapping" },
       { href: "/settings/app", label: "App Settings" },
+      { href: "/configure/users", label: "Users" },
       { href: "/docs", label: "Help & Docs" }
     ]
   }
@@ -93,12 +96,52 @@ const defaultOpenState: Record<NavGroup["id"], boolean> = {
 
 const isItemActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
+const navPermissionByHref: Record<string, string> = {
+  "/overview": "logs.read",
+  "/logs": "logs.read",
+  "/execution/cache": "cache.read",
+  "/execution/orchestration": "decision.read",
+  "/execution/dlq": "dlq.read",
+  "/execution/precompute": "precompute.read",
+  "/execution/results": "results.read",
+  "/releases": "promotion.create",
+  "/decisions": "decision.read",
+  "/stacks": "stack.read",
+  "/simulate": "simulator.run",
+  "/catalog/offers": "catalog.offer.read",
+  "/catalog/content": "catalog.content.read",
+  "/engagement/inapp/campaigns": "engage.campaign.read",
+  "/engagement/inapp/apps": "engage.app.read",
+  "/engagement/inapp/placements": "engage.placement.read",
+  "/engagement/inapp/templates": "engage.template.read",
+  "/engagement/inapp/reports": "engage.campaign.read",
+  "/engagement/inapp/events": "engage.campaign.read",
+  "/engagement/inapp/decide-debugger": "engage.campaign.read",
+  "/engagement/inapp/events-monitor": "engage.campaign.read",
+  "/execution/webhooks": "settings.webhooks.read",
+  "/settings/integrations/pipes": "settings.pipes.read",
+  "/settings/integrations/pipes-callback": "settings.pipes.read",
+  "/settings/wbs": "settings.wbs.read",
+  "/settings/wbs-mapping": "settings.wbsMapping.read",
+  "/settings/app": "settings.app.read",
+  "/configure/users": "user.manage",
+  "/docs": "decision.read"
+};
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { hasPermission } = usePermissions();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const activeGroup = NAV_GROUPS.find((group) => group.items.some((item) => isItemActive(pathname, item.href)))?.id ?? "observe";
-  const activeGroupLabel = NAV_GROUPS.find((group) => group.id === activeGroup)?.label ?? "Observe";
-  const activeItem = NAV_GROUPS.flatMap((group) => group.items).find((item) => isItemActive(pathname, item.href));
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => {
+      const permission = navPermissionByHref[item.href];
+      return permission ? hasPermission(permission) : true;
+    })
+  })).filter((group) => group.items.length > 0);
+  const activeGroup = visibleGroups.find((group) => group.items.some((item) => isItemActive(pathname, item.href)))?.id ?? "observe";
+  const activeGroupLabel = visibleGroups.find((group) => group.id === activeGroup)?.label ?? "Observe";
+  const activeItem = visibleGroups.flatMap((group) => group.items).find((item) => isItemActive(pathname, item.href));
   const [groupOpen, setGroupOpen] = useState<Record<NavGroup["id"], boolean>>(defaultOpenState);
 
   useEffect(() => {
@@ -124,7 +167,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="space-y-3 text-sm">
-          {NAV_GROUPS.map((group) => {
+          {visibleGroups.map((group) => {
             const currentGroupActive = group.items.some((item) => isItemActive(pathname, item.href));
             const open = groupOpen[group.id];
 
@@ -192,9 +235,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/simulate">
               Run Simulation
             </Link>
-            <Link className="rounded-md bg-ink px-3 py-2 text-sm text-white hover:opacity-90" href="/decisions?create=wizard">
-              New Decision
-            </Link>
+            {hasPermission("decision.write") ? (
+              <Link className="rounded-md bg-ink px-3 py-2 text-sm text-white hover:opacity-90" href="/decisions?create=wizard">
+                New Decision
+              </Link>
+            ) : null}
           </div>
         </header>
 

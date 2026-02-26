@@ -692,3 +692,67 @@ model DlqConfig {
 
   @@map("dlq_config")
 }
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Role {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  name         String
+  description  String?
+  permissions  Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model UserEnvRole {
+  id        String   @id @default(uuid())
+  userId    String
+  env       String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, env, roleId])
+  @@index([env])
+}
+
+model AuditEvent {
+  id            String   @id @default(uuid())
+  ts            DateTime @default(now())
+  env           String?
+  actorUserId   String?
+  actorEmail    String?
+  action        String
+  entityType    String?
+  entityKey     String?
+  entityVersion Int?
+  metadata      Json?
+
+  @@index([ts])
+  @@index([env, action])
+  @@index([entityType, entityKey])
+}
+
+model Release {
+  id               String   @id @default(uuid())
+  sourceEnv        String
+  targetEnv        String
+  key              String
+  status           String
+  createdByUserId  String?
+  createdByEmail   String?
+  approvalByUserId String?
+  approvalNote     String?
+  appliedByUserId  String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  summary          String?
+  planJson         Json
+}

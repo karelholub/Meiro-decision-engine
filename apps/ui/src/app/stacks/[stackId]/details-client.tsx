@@ -46,6 +46,9 @@ export default function StackDetailsClient({ stackId }: { stackId: string }) {
         <Link className="rounded-md bg-ink px-3 py-2 text-white" href={`/stacks/${stackId}/edit`}>
           Open Editor
         </Link>
+        <Link className="rounded-md border border-stone-300 px-3 py-2" href={`/releases`}>
+          Promote...
+        </Link>
         <button className="rounded-md border border-stone-300 px-3 py-2" onClick={() => void load()}>
           Refresh
         </button>

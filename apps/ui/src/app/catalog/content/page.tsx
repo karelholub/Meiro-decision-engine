@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CatalogContentBlock } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
 import { CatalogActionBar, ContentBlockEditor, PreviewPane, type TokenBindingRow } from "../../../components/catalog";
 import {
@@ -77,6 +78,7 @@ const parsePayloadOrThrow = (editor: ContentEditorState) => {
 };
 
 export default function CatalogContentPage() {
+  const { hasPermission } = usePermissions();
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [items, setItems] = useState<CatalogContentBlock[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -166,7 +168,7 @@ export default function CatalogContentPage() {
 
   const hasDraftForKey = versionsForKey.some((item) => item.status === "DRAFT");
   const readOnly = editor.status === "ARCHIVED";
-  const canActivate = !createMode && !readOnly && hasDraftForKey && lastValidationValid === true;
+  const canActivate = hasPermission("catalog.content.activate") && !createMode && !readOnly && hasDraftForKey && lastValidationValid === true;
 
   const schemaParse = useMemo(() => safeJsonParse<Record<string, unknown> | null>(editor.schemaJsonText), [editor.schemaJsonText]);
   const localesParse = useMemo(() => safeJsonParse<Record<string, unknown>>(editor.localesJsonText), [editor.localesJsonText]);
@@ -386,6 +388,8 @@ export default function CatalogContentPage() {
         versionLabel={statusRibbon}
         environment={environment}
         lastSavedAt={editor.lastSavedAt}
+        canSave={hasPermission("catalog.content.write")}
+        canValidate={hasPermission("catalog.content.write")}
         saving={saving}
         canActivate={canActivate}
         activateDisabledReason={
