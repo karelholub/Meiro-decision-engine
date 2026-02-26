@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  ApiError,
   apiClient,
   type PipesInlineEvaluateResponse,
   type PipesRequirementsResponse
 } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
+import { Button } from "../../../../components/ui/button";
+import { CollapsibleSection, RedactedJsonViewer, StatusChipsRow, buildTesterSkeletonFromRequirements, simpleHash } from "../../../../components/configure";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 
@@ -17,7 +20,7 @@ const defaultProfileJson = JSON.stringify(
       churnScore: 0.92,
       daysSinceLastOrder: 18,
       loyaltyScore: 84,
-      first_name: "Alex"
+      customer_tier: "gold"
     },
     audiences: ["known_customer"],
     consents: ["email_marketing"]
@@ -45,11 +48,14 @@ const parseJsonObject = (raw: string, label: string): Record<string, unknown> =>
   return parsed as Record<string, unknown>;
 };
 
+const isEndpointReachable = (error: unknown) => error instanceof ApiError || error instanceof Error;
+
 export default function PipesIntegrationPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [requirementsMode, setRequirementsMode] = useState<"decision" | "stack">("decision");
   const [requirementsKey, setRequirementsKey] = useState("cart_recovery");
   const [requirements, setRequirements] = useState<PipesRequirementsResponse | null>(null);
+  const [requirementsHash, setRequirementsHash] = useState<string | null>(null);
   const [requirementsError, setRequirementsError] = useState<string | null>(null);
   const [requirementsLoading, setRequirementsLoading] = useState(false);
 
@@ -59,36 +65,49 @@ export default function PipesIntegrationPage() {
   const [profileJson, setProfileJson] = useState(defaultProfileJson);
   const [contextJson, setContextJson] = useState(defaultContextJson);
   const [debug, setDebug] = useState(true);
+  const [useRequirementsHash, setUseRequirementsHash] = useState(true);
   const [evaluateResult, setEvaluateResult] = useState<PipesInlineEvaluateResponse | null>(null);
   const [evaluateError, setEvaluateError] = useState<string | null>(null);
   const [evaluateLoading, setEvaluateLoading] = useState(false);
+
+  const [requirementsReachable, setRequirementsReachable] = useState<"ok" | "error" | "unknown">("unknown");
+  const [evaluateReachable, setEvaluateReachable] = useState<"ok" | "error" | "unknown">("unknown");
+  const [callbackConfigured, setCallbackConfigured] = useState<"ok" | "warn" | "unknown">("unknown");
 
   useEffect(() => {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
   }, []);
 
-  const evaluateEndpoint = useMemo(() => `${API_BASE_URL}/v1/evaluate`, []);
-  const requirementsEndpoint = useMemo(() => `${API_BASE_URL}/v1/requirements/decision/:key`, []);
+  useEffect(() => {
+    const runStatusChecks = async () => {
+      try {
+        await apiClient.pipes.getDecisionRequirements("__healthcheck__");
+        setRequirementsReachable("ok");
+      } catch (error) {
+        setRequirementsReachable(isEndpointReachable(error) ? "ok" : "error");
+      }
 
-  const curlSample = useMemo(() => {
-    return [
-      `curl -X POST '${evaluateEndpoint}' \\`,
-      "  -H 'Content-Type: application/json' \\",
-      `  -H 'X-ENV: ${environment}' \\`,
-      "  -H 'X-API-KEY: <write-key-or-use-X-PIPES-KEY>' \\",
-      "  --data '{",
-      '    "mode": "full",',
-      '    "decisionKey": "cart_recovery",',
-      '    "profile": {',
-      '      "profileId": "pipes-inline-001",',
-      '      "attributes": { "cartValue": 120, "country": "US" },',
-      '      "audiences": ["cart_abandoners"]',
-      "    },",
-      '    "context": { "appKey": "storefront", "placement": "home_top" }',
-      "  }'"
-    ].join("\n");
-  }, [environment, evaluateEndpoint]);
+      try {
+        await apiClient.pipes.evaluateInline({});
+        setEvaluateReachable("ok");
+      } catch (error) {
+        setEvaluateReachable(isEndpointReachable(error) ? "ok" : "error");
+      }
+
+      try {
+        const callback = await apiClient.settings.getPipesCallback();
+        setCallbackConfigured(callback.config.isEnabled && Boolean(callback.config.callbackUrl) ? "ok" : "warn");
+      } catch {
+        setCallbackConfigured("unknown");
+      }
+    };
+
+    void runStatusChecks();
+  }, [environment]);
+
+  const evaluateEndpoint = useMemo(() => `${API_BASE_URL}/v1/evaluate`, []);
+  const requirementsEndpoint = useMemo(() => `${API_BASE_URL}/v1/requirements/${requirementsMode}/:key`, [requirementsMode]);
 
   const loadRequirements = async () => {
     if (!requirementsKey.trim()) {
@@ -103,13 +122,26 @@ export default function PipesIntegrationPage() {
         requirementsMode === "decision"
           ? await apiClient.pipes.getDecisionRequirements(requirementsKey.trim())
           : await apiClient.pipes.getStackRequirements(requirementsKey.trim());
+      const hash = simpleHash(JSON.stringify(response));
       setRequirements(response);
+      setRequirementsHash(hash);
+      setUseRequirementsHash(true);
     } catch (error) {
       setRequirements(null);
+      setRequirementsHash(null);
       setRequirementsError(error instanceof Error ? error.message : "Failed to load requirements");
     } finally {
       setRequirementsLoading(false);
     }
+  };
+
+  const fillTesterSkeleton = () => {
+    if (!requirements) {
+      return;
+    }
+    const skeleton = buildTesterSkeletonFromRequirements(requirements);
+    setProfileJson(`${JSON.stringify(skeleton.profile, null, 2)}\n`);
+    setContextJson(`${JSON.stringify(skeleton.context, null, 2)}\n`);
   };
 
   const runEvaluate = async () => {
@@ -138,6 +170,9 @@ export default function PipesIntegrationPage() {
       if (trimmedStack) {
         payload.stackKey = trimmedStack;
       }
+      if (useRequirementsHash && requirementsHash) {
+        payload.requirementsHash = requirementsHash;
+      }
 
       const response = await apiClient.pipes.evaluateInline(payload);
       setEvaluateResult(response);
@@ -149,22 +184,95 @@ export default function PipesIntegrationPage() {
     }
   };
 
+  const evaluateSummary = useMemo(() => {
+    if (!evaluateResult) {
+      return null;
+    }
+    return {
+      eligible: evaluateResult.eligible,
+      reasons: evaluateResult.reasons,
+      missingFields: evaluateResult.missingFields,
+      typeIssues: evaluateResult.typeIssues
+    };
+  }, [evaluateResult]);
+
+  const pinnedEvaluateRequest = useMemo(() => {
+    const safeProfile = (() => {
+      try {
+        return parseJsonObject(profileJson, "profile");
+      } catch {
+        return {};
+      }
+    })();
+    const safeContext = (() => {
+      try {
+        return parseJsonObject(contextJson, "context");
+      } catch {
+        return {};
+      }
+    })();
+
+    const payload: Record<string, unknown> = {
+      mode: evaluateMode,
+      decisionKey: decisionKey.trim() || undefined,
+      stackKey: stackKey.trim() || undefined,
+      requirementsHash: useRequirementsHash ? requirementsHash : undefined,
+      profile: safeProfile,
+      context: safeContext,
+      debug
+    };
+
+    if (!payload.decisionKey) {
+      delete payload.decisionKey;
+    }
+    if (!payload.stackKey) {
+      delete payload.stackKey;
+    }
+    if (!payload.requirementsHash) {
+      delete payload.requirementsHash;
+    }
+
+    return payload;
+  }, [contextJson, debug, decisionKey, evaluateMode, profileJson, requirementsHash, stackKey, useRequirementsHash]);
+
   return (
     <section className="space-y-4">
       <header className="panel p-4">
         <h2 className="text-xl font-semibold">Pipes Integration</h2>
-        <p className="text-sm text-stone-700">Inline profile evaluation contract for Pipes and API clients.</p>
+        <p className="text-sm text-stone-700">Task flow: connect to verify requirements to run inline evaluate debug.</p>
       </header>
 
-      <article className="panel space-y-3 p-4">
-        <h3 className="font-semibold">Endpoints ({environment})</h3>
-        <p className="text-sm text-stone-700">Evaluate endpoint: <span className="font-mono text-xs">{evaluateEndpoint}</span></p>
-        <p className="text-sm text-stone-700">Requirements endpoint: <span className="font-mono text-xs">{requirementsEndpoint}</span></p>
-        <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">{curlSample}</pre>
-      </article>
+      <StatusChipsRow
+        chips={[
+          { label: "Requirements endpoint", status: requirementsReachable },
+          { label: "Evaluate endpoint", status: evaluateReachable },
+          { label: "Callback configured", status: callbackConfigured }
+        ]}
+      />
 
-      <article className="panel space-y-3 p-4">
-        <h3 className="font-semibold">Lookup Requirements</h3>
+      <CollapsibleSection title="Connect Pipes" subtitle="Confirm endpoints and required headers for this environment.">
+        <div className="space-y-3">
+          <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+            <p className="font-medium">Environment: {environment}</p>
+            <p className="mt-1">Requirements endpoint: <span className="font-mono text-xs">{requirementsEndpoint}</span></p>
+            <p>Evaluate endpoint: <span className="font-mono text-xs">{evaluateEndpoint}</span></p>
+            <div className="mt-2 flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(requirementsEndpoint)}>Copy requirements endpoint</Button>
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(evaluateEndpoint)}>Copy evaluate endpoint</Button>
+            </div>
+          </div>
+          <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+            <p className="font-medium">Required headers</p>
+            <ul className="mt-1 list-disc pl-5 text-xs text-stone-700">
+              <li>`X-ENV: {environment}`</li>
+              <li>`X-PIPES-KEY` or `X-API-KEY`</li>
+              <li>`Content-Type: application/json`</li>
+            </ul>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Lookup Requirements" subtitle="Fetch requirements and generate tester skeletons.">
         <div className="grid gap-3 md:grid-cols-[180px_1fr_auto]">
           <label className="flex flex-col gap-1 text-sm">
             Type
@@ -187,26 +295,26 @@ export default function PipesIntegrationPage() {
             />
           </label>
           <div className="flex items-end">
-            <button
-              type="button"
-              className="rounded-md bg-ink px-4 py-2 text-sm text-white"
-              onClick={() => void loadRequirements()}
-              disabled={requirementsLoading}
-            >
-              {requirementsLoading ? "Loading..." : "Fetch"}
-            </button>
+            <Button onClick={() => void loadRequirements()} disabled={requirementsLoading}>{requirementsLoading ? "Loading..." : "Fetch"}</Button>
           </div>
         </div>
         {requirementsError ? <p className="text-sm text-red-700">{requirementsError}</p> : null}
         {requirements ? (
-          <pre className="max-h-80 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">
-            {JSON.stringify(requirements, null, 2)}
-          </pre>
+          <div className="space-y-3 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+            <p>requirementsHash: <span className="font-mono text-xs">{requirementsHash}</span></p>
+            <p>Required attributes: {requirements.required.attributes.join(", ") || "-"}</p>
+            <p>Required audiences: {requirements.required.audiences.join(", ") || "-"}</p>
+            <p>Required context keys: {requirements.required.contextKeys.join(", ") || "-"}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(requirements, null, 2))}>Copy requirements JSON</Button>
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(pinnedEvaluateRequest, null, 2))}>Copy pinned evaluate request body</Button>
+              <Button variant="outline" size="sm" onClick={fillTesterSkeleton}>Fill tester with minimal skeleton</Button>
+            </div>
+          </div>
         ) : null}
-      </article>
+      </CollapsibleSection>
 
-      <article className="panel space-y-3 p-4">
-        <h3 className="font-semibold">Try Inline Evaluate (Debug)</h3>
+      <CollapsibleSection title="Try Inline Evaluate (Debug)" subtitle="Run /v1/evaluate with requirements hash pinning and inspect safe debug output.">
         <div className="grid gap-3 md:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
             Mode
@@ -223,58 +331,52 @@ export default function PipesIntegrationPage() {
             <input type="checkbox" checked={debug} onChange={(event) => setDebug(event.target.checked)} />
             Include debug trace
           </label>
+          <label className="flex items-center gap-2 text-sm md:col-span-2">
+            <input
+              type="checkbox"
+              checked={useRequirementsHash}
+              onChange={(event) => setUseRequirementsHash(event.target.checked)}
+              disabled={!requirementsHash}
+            />
+            Use requirementsHash ({requirementsHash ?? "not loaded"})
+          </label>
           <label className="flex flex-col gap-1 text-sm">
             Decision key
-            <input
-              value={decisionKey}
-              onChange={(event) => setDecisionKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-              placeholder="Set this OR stack key"
-            />
+            <input value={decisionKey} onChange={(event) => setDecisionKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Stack key
-            <input
-              value={stackKey}
-              onChange={(event) => setStackKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-              placeholder="Set this OR decision key"
-            />
+            <input value={stackKey} onChange={(event) => setStackKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
           </label>
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             Profile JSON
-            <textarea
-              value={profileJson}
-              onChange={(event) => setProfileJson(event.target.value)}
-              className="min-h-48 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
-            />
+            <textarea value={profileJson} onChange={(event) => setProfileJson(event.target.value)} className="min-h-48 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs" />
           </label>
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             Context JSON
-            <textarea
-              value={contextJson}
-              onChange={(event) => setContextJson(event.target.value)}
-              className="min-h-32 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
-            />
+            <textarea value={contextJson} onChange={(event) => setContextJson(event.target.value)} className="min-h-32 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs" />
           </label>
         </div>
 
-        <button
-          type="button"
-          className="rounded-md bg-ink px-4 py-2 text-sm text-white"
-          onClick={() => void runEvaluate()}
-          disabled={evaluateLoading}
-        >
-          {evaluateLoading ? "Running..." : "Run /v1/evaluate"}
-        </button>
+        <Button className="mt-2" onClick={() => void runEvaluate()} disabled={evaluateLoading}>{evaluateLoading ? "Running..." : "Run /v1/evaluate"}</Button>
 
         {evaluateError ? <p className="text-sm text-red-700">{evaluateError}</p> : null}
-        {evaluateResult ? (
-          <pre className="max-h-96 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">
-            {JSON.stringify(evaluateResult, null, 2)}
-          </pre>
+
+        {evaluateSummary ? (
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <article className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+              <p><span className="font-medium">Eligible:</span> {String(evaluateSummary.eligible)}</p>
+              <p className="mt-1"><span className="font-medium">Reasons:</span> {evaluateSummary.reasons.join(" | ") || "-"}</p>
+            </article>
+            <article className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+              <p><span className="font-medium">Missing fields:</span> {evaluateSummary.missingFields.length}</p>
+              <p><span className="font-medium">Type issues:</span> {evaluateSummary.typeIssues.length}</p>
+            </article>
+            <RedactedJsonViewer title="Evaluate response JSON" value={evaluateResult} defaultOpen maxChars={4000} />
+            {debug && evaluateResult?.trace ? <RedactedJsonViewer title="Trace (collapsible)" value={evaluateResult.trace} maxChars={5000} /> : null}
+          </div>
         ) : null}
-      </article>
+      </CollapsibleSection>
     </section>
   );
 }

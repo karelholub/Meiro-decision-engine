@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { WbsInstanceSettings } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../lib/lookup-attributes";
+import { Button } from "../../../components/ui/button";
+import { TestResultPanel, validateWbsSettingsForm } from "../../../components/configure";
+
+type WbsTestResult = {
+  requestUrl?: string | null;
+  latencyMs?: number | null;
+  statusCode?: number | null;
+  statusText?: string | null;
+  payload: unknown;
+};
 
 export default function WbsSettingsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -18,18 +28,24 @@ export default function WbsSettingsPage() {
   const [timeoutMs, setTimeoutMs] = useState("1500");
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<string | null>(null);
   const [testAttribute, setTestAttribute] = useState("email");
   const [testValue, setTestValue] = useState("demo@example.com");
   const [testSegmentValue, setTestSegmentValue] = useState("107");
-  const [testRequestUrl, setTestRequestUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [testResult, setTestResult] = useState<WbsTestResult | null>(null);
+
   const testAttributeSelectValue = isCommonLookupAttribute(testAttribute) ? testAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   useEffect(() => {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
   }, []);
+
+  const formErrors = useMemo(
+    () => validateWbsSettingsForm({ baseUrl, attributeParamName, valueParamName }),
+    [attributeParamName, baseUrl, valueParamName]
+  );
+  const hasErrors = Object.keys(formErrors).length > 0;
 
   const hydrate = (item: WbsInstanceSettings | null) => {
     if (!item) {
@@ -63,7 +79,29 @@ export default function WbsSettingsPage() {
     void load();
   }, [environment]);
 
+  const urlPreview = useMemo(() => {
+    if (hasErrors) {
+      return null;
+    }
+    try {
+      const url = new URL(baseUrl);
+      url.searchParams.set(attributeParamName, testAttribute.trim() || "email");
+      url.searchParams.set(valueParamName, testValue.trim() || "demo@example.com");
+      if (includeSegment) {
+        url.searchParams.set(segmentParamName.trim() || "segment", testSegmentValue.trim() || defaultSegmentValue.trim());
+      }
+      return url.toString();
+    } catch {
+      return null;
+    }
+  }, [attributeParamName, baseUrl, defaultSegmentValue, hasErrors, includeSegment, segmentParamName, testAttribute, testSegmentValue, testValue, valueParamName]);
+
   const save = async () => {
+    if (hasErrors) {
+      setFeedback("Fix validation errors before saving.");
+      return;
+    }
+
     try {
       const response = await apiClient.settings.saveWbs({
         name,
@@ -83,6 +121,12 @@ export default function WbsSettingsPage() {
   };
 
   const testConnection = async () => {
+    if (hasErrors) {
+      setFeedback("Fix validation errors before testing.");
+      return;
+    }
+
+    const startedAt = Date.now();
     try {
       const result = await apiClient.settings.testWbsConnection({
         attribute: testAttribute.trim() || "email",
@@ -98,21 +142,27 @@ export default function WbsSettingsPage() {
           timeoutMs: Number(timeoutMs) || 1500
         }
       });
-      setTestRequestUrl(result.requestUrl ?? null);
-      if (result.ok) {
-        setTestResult(`Connection ok (${result.status})`);
-        return;
-      }
 
-      const parts = [
-        result.reachable ? "Endpoint reachable" : "Connection failed",
-        result.upstreamStatusCode ? `upstream HTTP ${result.upstreamStatusCode}` : null,
-        result.error ?? null
-      ].filter(Boolean);
-      setTestResult(parts.join(" · "));
+      setTestResult({
+        requestUrl: result.requestUrl ?? urlPreview,
+        latencyMs: Date.now() - startedAt,
+        statusCode: result.upstreamStatusCode ?? (result.ok ? 200 : null),
+        statusText: result.status,
+        payload: {
+          reachable: result.reachable,
+          tip: result.tip,
+          sample: result.sample,
+          error: result.error
+        }
+      });
     } catch (error) {
-      setTestRequestUrl(null);
-      setTestResult(error instanceof Error ? error.message : "Connection test failed");
+      setTestResult({
+        requestUrl: urlPreview,
+        latencyMs: Date.now() - startedAt,
+        statusCode: 500,
+        statusText: "failed",
+        payload: { error: error instanceof Error ? error.message : "Connection test failed" }
+      });
     }
   };
 
@@ -120,68 +170,45 @@ export default function WbsSettingsPage() {
     <section className="space-y-4">
       <header className="panel p-4">
         <h2 className="text-xl font-semibold">WBS Settings</h2>
-        <p className="text-sm text-stone-700">Configure active WBS instance per environment ({environment}).</p>
+        <p className="text-sm text-stone-700">Connect to verify and test your WBS instance ({environment}).</p>
         {updatedAt ? <p className="text-xs text-stone-600">Last updated: {new Date(updatedAt).toLocaleString()}</p> : null}
       </header>
 
       <div className="panel grid gap-3 p-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           Name
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
         </label>
 
         <label className="flex flex-col gap-1 text-sm md:col-span-2">
           Base URL
-          <input
-            value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          {formErrors.baseUrl ? <span className="text-xs text-red-700">{formErrors.baseUrl}</span> : null}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Attribute param name
-          <input
-            value={attributeParamName}
-            onChange={(event) => setAttributeParamName(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          <input value={attributeParamName} onChange={(event) => setAttributeParamName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          {formErrors.attributeParamName ? <span className="text-xs text-red-700">{formErrors.attributeParamName}</span> : null}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Value param name
-          <input
-            value={valueParamName}
-            onChange={(event) => setValueParamName(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          <input value={valueParamName} onChange={(event) => setValueParamName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          {formErrors.valueParamName ? <span className="text-xs text-red-700">{formErrors.valueParamName}</span> : null}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Segment param name
-          <input
-            value={segmentParamName}
-            onChange={(event) => setSegmentParamName(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          <input value={segmentParamName} onChange={(event) => setSegmentParamName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Timeout ms
-          <input
-            type="number"
-            min={1}
-            value={timeoutMs}
-            onChange={(event) => setTimeoutMs(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-          />
+          <input type="number" min={1} value={timeoutMs} onChange={(event) => setTimeoutMs(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
         </label>
 
-        <label className="flex items-center gap-2 text-sm md:col-span-2">
+        <label className="flex items-center gap-2 text-sm md:col-span-2" title="Enable this only when your WBS endpoint expects a segment query parameter.">
           <input type="checkbox" checked={includeSegment} onChange={(event) => setIncludeSegment(event.target.checked)} />
           Include segment query parameter
         </label>
@@ -189,11 +216,7 @@ export default function WbsSettingsPage() {
         {includeSegment ? (
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             Default segment value
-            <input
-              value={defaultSegmentValue}
-              onChange={(event) => setDefaultSegmentValue(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            <input value={defaultSegmentValue} onChange={(event) => setDefaultSegmentValue(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
           </label>
         ) : null}
 
@@ -214,64 +237,53 @@ export default function WbsSettingsPage() {
             className="rounded-md border border-stone-300 px-2 py-1"
           >
             {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
-              <option key={attribute} value={attribute}>
-                {attribute}
-              </option>
+              <option key={attribute} value={attribute}>{attribute}</option>
             ))}
             <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>
           </select>
           {testAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
-            <input
-              value={testAttribute}
-              onChange={(event) => setTestAttribute(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-              placeholder="custom attribute key"
-            />
+            <input value={testAttribute} onChange={(event) => setTestAttribute(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" placeholder="custom attribute key" />
           ) : null}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Test lookup value
-          <input
-            value={testValue}
-            onChange={(event) => setTestValue(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
-            placeholder="demo@example.com"
-          />
+          <input value={testValue} onChange={(event) => setTestValue(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" placeholder="demo@example.com" />
         </label>
 
         {includeSegment ? (
           <label className="flex flex-col gap-1 text-sm">
             Test segment value
-            <input
-              value={testSegmentValue}
-              onChange={(event) => setTestSegmentValue(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-              placeholder="107"
-            />
+            <input value={testSegmentValue} onChange={(event) => setTestSegmentValue(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" placeholder="107" />
           </label>
         ) : null}
       </div>
 
       <div className="flex items-center gap-3">
-        <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void save()} disabled={loading}>
-          Save
-        </button>
-        <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={() => void testConnection()} disabled={loading}>
-          Test Connection
-        </button>
-        <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={() => void load()} disabled={loading}>
-          Reload
-        </button>
+        <Button onClick={() => void save()} disabled={loading || hasErrors}>Save</Button>
+        <Button variant="outline" onClick={() => void testConnection()} disabled={loading || hasErrors}>Test Connection</Button>
+        <Button variant="outline" onClick={() => void load()} disabled={loading}>Reload</Button>
       </div>
 
       {feedback ? <p className="text-sm text-stone-800">{feedback}</p> : null}
-      {testResult ? <p className="text-sm text-stone-800">{testResult}</p> : null}
-      {testRequestUrl ? (
-        <p className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs text-stone-700">
-          Request URL: {testRequestUrl}
-        </p>
-      ) : null}
+
+      <section className="panel space-y-2 p-4">
+        <h3 className="font-semibold">Test Connection Result</h3>
+        <p className="text-sm">URL preview: <span className="font-mono text-xs">{urlPreview ?? "-"}</span></p>
+        {testResult ? (
+          <TestResultPanel
+            title="WBS lookup test"
+            url={testResult.requestUrl ?? urlPreview}
+            latencyMs={testResult.latencyMs}
+            statusCode={testResult.statusCode}
+            statusText={testResult.statusText}
+            payload={testResult.payload}
+            maxChars={2048}
+          />
+        ) : (
+          <p className="text-sm text-stone-600">Run "Test Connection" to inspect status code, latency, and response snippet.</p>
+        )}
+      </section>
     </section>
   );
 }
