@@ -218,94 +218,118 @@ export default function PipesCallbackSettingsPage() {
           Enable callback delivery
         </label>
 
-        {!isEnabled ? <p className="text-sm text-stone-600">Callback delivery disabled. Enable it to configure transport settings.</p> : null}
+        {!isEnabled ? <p className="text-sm text-stone-600">Callback delivery is currently disabled.</p> : null}
 
-        {isEnabled ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm md:col-span-2">
-              Callback URL
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+            Callback URL
+            <input
+              value={callbackUrl}
+              onChange={(event) => setCallbackUrl(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+              placeholder="https://pipes.example.com/webhooks/decision-result"
+              disabled={!isEnabled}
+            />
+            {callbackValidation.error ? <span className="text-xs text-red-700">{callbackValidation.error}</span> : null}
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            Auth type
+            <select
+              value={authType}
+              onChange={(event) => setAuthType(event.target.value as "bearer" | "shared_secret" | "none")}
+              className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+              disabled={!isEnabled}
+            >
+              <option value="bearer">bearer</option>
+              <option value="shared_secret">shared_secret</option>
+              <option value="none">none</option>
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            Auth secret (write-only)
+            <input
+              value={authSecret}
+              onChange={(event) => setAuthSecret(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+              placeholder="leave blank to keep existing"
+              disabled={!isEnabled}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            Mode
+            <select
+              value={mode}
+              onChange={(event) => setMode(event.target.value as "disabled" | "async_only" | "always")}
+              className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+              disabled={!isEnabled}
+            >
+              <option value="disabled">disabled</option>
+              <option value="async_only">async_only</option>
+              <option value="always">always</option>
+            </select>
+            <span className="text-xs text-stone-500">{mode === "always" ? "Always send callbacks for decisions." : "Send callbacks only for async pipeline events."}</span>
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            Timeout (ms)
+            <input
+              type="number"
+              min={100}
+              max={10000}
+              value={timeoutMs}
+              onChange={(event) => setTimeoutMs(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+              disabled={!isEnabled}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            Max attempts
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={maxAttempts}
+              onChange={(event) => setMaxAttempts(event.target.value)}
+              className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+              disabled={!isEnabled}
+            />
+          </label>
+
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={includeDebug} onChange={(event) => setIncludeDebug(event.target.checked)} disabled={!isEnabled} />
+            Include debug trace/exports
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeProfileSummary}
+              onChange={(event) => setIncludeProfileSummary(event.target.checked)}
+              disabled={!isEnabled}
+            />
+            Include profile summary
+          </label>
+
+          <details className="md:col-span-2" open={showAdvanced}>
+            <summary className="cursor-pointer text-sm font-medium" onClick={() => setShowAdvanced((current) => !current)}>
+              Advanced
+            </summary>
+            <label className="mt-2 flex flex-col gap-1 text-sm">
+              allowPiiKeys (CSV)
               <input
-                value={callbackUrl}
-                onChange={(event) => setCallbackUrl(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
-                placeholder="https://pipes.example.com/webhooks/decision-result"
+                value={allowPiiKeysCsv}
+                onChange={(event) => setAllowPiiKeysCsv(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
+                placeholder="default empty = redact sensitive keys"
+                disabled={!isEnabled}
               />
-              {callbackValidation.error ? <span className="text-xs text-red-700">{callbackValidation.error}</span> : null}
+              <span className="text-xs text-stone-500">Only include keys you explicitly allow for callback payloads.</span>
             </label>
-
-            <label className="flex flex-col gap-1 text-sm">
-              Auth type
-              <select
-                value={authType}
-                onChange={(event) => setAuthType(event.target.value as "bearer" | "shared_secret" | "none")}
-                className="rounded-md border border-stone-300 px-2 py-1"
-              >
-                <option value="bearer">bearer</option>
-                <option value="shared_secret">shared_secret</option>
-                <option value="none">none</option>
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm">
-              Auth secret (write-only)
-              <input
-                value={authSecret}
-                onChange={(event) => setAuthSecret(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
-                placeholder="leave blank to keep existing"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm">
-              Mode
-              <select
-                value={mode}
-                onChange={(event) => setMode(event.target.value as "disabled" | "async_only" | "always")}
-                className="rounded-md border border-stone-300 px-2 py-1"
-              >
-                <option value="disabled">disabled</option>
-                <option value="async_only">async_only</option>
-                <option value="always">always</option>
-              </select>
-              <span className="text-xs text-stone-500">{mode === "always" ? "Always send callbacks for decisions." : "Send callbacks only for async pipeline events."}</span>
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm">
-              Timeout (ms)
-              <input type="number" min={100} max={10000} value={timeoutMs} onChange={(event) => setTimeoutMs(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-            </label>
-
-            <label className="flex flex-col gap-1 text-sm">
-              Max attempts
-              <input type="number" min={1} max={20} value={maxAttempts} onChange={(event) => setMaxAttempts(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-            </label>
-
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={includeDebug} onChange={(event) => setIncludeDebug(event.target.checked)} />
-              Include debug trace/exports
-            </label>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={includeProfileSummary} onChange={(event) => setIncludeProfileSummary(event.target.checked)} />
-              Include profile summary
-            </label>
-
-            <details className="md:col-span-2" open={showAdvanced}>
-              <summary className="cursor-pointer text-sm font-medium" onClick={() => setShowAdvanced((current) => !current)}>
-                Advanced
-              </summary>
-              <label className="mt-2 flex flex-col gap-1 text-sm">
-                allowPiiKeys (CSV)
-                <input
-                  value={allowPiiKeysCsv}
-                  onChange={(event) => setAllowPiiKeysCsv(event.target.value)}
-                  className="rounded-md border border-stone-300 px-2 py-1"
-                  placeholder="default empty = redact sensitive keys"
-                />
-                <span className="text-xs text-stone-500">Only include keys you explicitly allow for callback payloads.</span>
-              </label>
-            </details>
-          </div>
-        ) : null}
+          </details>
+        </div>
       </section>
 
       <div className="flex items-center gap-3">

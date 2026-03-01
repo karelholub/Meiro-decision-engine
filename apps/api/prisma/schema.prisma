@@ -694,22 +694,24 @@ model DlqConfig {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  name         String?
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id          String        @id @default(uuid())
+  email       String        @unique
+  name        String?
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  envRoles    UserEnvRole[]
 }
 
 model Role {
-  id           String   @id @default(uuid())
-  key          String   @unique
-  name         String
-  description  String?
-  permissions  Json
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id          String        @id @default(uuid())
+  key         String        @unique
+  name        String
+  description String?
+  permissions Json
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  envRoles    UserEnvRole[]
 }
 
 model UserEnvRole {
@@ -718,6 +720,8 @@ model UserEnvRole {
   env       String
   roleId    String
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  role      Role     @relation(fields: [roleId], references: [id])
 
   @@unique([userId, env, roleId])
   @@index([env])

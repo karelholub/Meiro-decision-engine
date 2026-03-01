@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/master.swiftdeps"
+  },
+  "/Users/kh/deciEngine/packages/sdk-ios/Sources/DecisioningSDK/DecisioningClient.swift": {
+    "dependencies": "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.d",
+    "object": "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.swift.o",
+    "swiftmodule": "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient~partial.swiftmodule",
+    "swift-dependencies": "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.swiftdeps",
+    "diagnostics": "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.dia"
+  }
+}

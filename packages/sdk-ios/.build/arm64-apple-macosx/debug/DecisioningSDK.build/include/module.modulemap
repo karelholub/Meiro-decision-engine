@@ -1,0 +1,3 @@
+module DecisioningSDK {
+    header "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/include/DecisioningSDK-Swift.h"
+}

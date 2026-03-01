@@ -1,0 +1,112 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "DecisioningSDK-arm64-apple-macosx26.0-debug.module": ["<DecisioningSDK-arm64-apple-macosx26.0-debug.module>"]
+  "DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.module": ["<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.module>"]
+  "DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.test": ["<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.test>"]
+  "DecisioningSDKTests-arm64-apple-macosx26.0-debug.module": ["<DecisioningSDKTests-arm64-apple-macosx26.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<DecisioningSDK-arm64-apple-macosx26.0-debug.module>"]
+  "test": ["<DecisioningSDK-arm64-apple-macosx26.0-debug.module>","<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.test>","<DecisioningSDKTests-arm64-apple-macosx26.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/kh/deciEngine/packages/sdk-ios/Sources/DecisioningSDK/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/kh/deciEngine/packages/sdk-ios/Tests/DecisioningSDKTests/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+commands:
+  "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/kh/deciEngine/packages/sdk-ios/Sources/DecisioningSDK/DecisioningClient.swift"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/sources"]
+    description: "Write auxiliary file /Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/sources"
+
+  "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.derived/runner.swift"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/sources"]
+    description: "Write auxiliary file /Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/sources"
+
+  "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.derived/runner.swift":
+    tool: test-entry-point-tool
+    inputs: []
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.derived/runner.swift"]
+
+  "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/runner.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/DecisioningClientTests.swift.o"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.product/Objects.LinkFileList"
+
+  "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/kh/deciEngine/packages/sdk-ios/Tests/DecisioningSDKTests/DecisioningClientTests.swift"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/sources"]
+    description: "Write auxiliary file /Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/sources"
+
+  "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<DecisioningSDK-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDK.swiftmodule"]
+    outputs: ["<DecisioningSDK-arm64-apple-macosx26.0-debug.module>"]
+
+  "<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/runner.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKPackageTests.swiftmodule"]
+    outputs: ["<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.module>"]
+
+  "<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.test>":
+    tool: phony
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.xctest/Contents/MacOS/DecisioningSDKPackageTests"]
+    outputs: ["<DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.test>"]
+
+  "<DecisioningSDKTests-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/DecisioningClientTests.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKTests.swiftmodule"]
+    outputs: ["<DecisioningSDKTests-arm64-apple-macosx26.0-debug.module>"]
+
+  "C.DecisioningSDK-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/Sources/DecisioningSDK/DecisioningClient.swift","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/sources"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDK.swiftmodule"]
+    description: "Compiling Swift Module 'DecisioningSDK' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","DecisioningSDK","-emit-dependencies","-emit-module","-emit-module-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDK.swiftmodule","-output-file-map","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/sources","-I","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/include/DecisioningSDK-Swift.h","-swift-version","5","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","sdk_ios"]
+
+  "C.DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.derived/runner.swift","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKTests.swiftmodule","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/sources"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/runner.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKPackageTests.swiftmodule"]
+    description: "Compiling Swift Module 'DecisioningSDKPackageTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","DecisioningSDKPackageTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKPackageTests.swiftmodule","-output-file-map","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/sources","-I","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/include/DecisioningSDKPackageTests-Swift.h","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","sdk_ios"]
+
+  "C.DecisioningSDKPackageTests-arm64-apple-macosx26.0-debug.test":
+    tool: shell
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDK.build/DecisioningClient.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/runner.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/DecisioningClientTests.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.product/Objects.LinkFileList"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.xctest/Contents/MacOS/DecisioningSDKPackageTests"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.xctest/Contents/MacOS/DecisioningSDKPackageTests"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug","-o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.xctest/Contents/MacOS/DecisioningSDKPackageTests","-module-name","DecisioningSDKPackageTests","-Xlinker","-no_warn_duplicate_libraries","-Xlinker","-bundle","-Xlinker","-rpath","-Xlinker","@loader_path/../../../","@/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx14.0","-Xlinker","-add_ast_path","-Xlinker","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDK.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKPackageTests.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKTests.swiftmodule","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.DecisioningSDKTests-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/Tests/DecisioningSDKTests/DecisioningClientTests.swift","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDK.swiftmodule","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/sources"]
+    outputs: ["/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/DecisioningClientTests.swift.o","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKTests.swiftmodule"]
+    description: "Compiling Swift Module 'DecisioningSDKTests' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","DecisioningSDKTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules/DecisioningSDKTests.swiftmodule","-output-file-map","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKTests.build/sources","-I","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-Xfrontend","-enable-cross-import-overlays","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-swift-version","5","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","sdk_ios"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/kh/deciEngine/packages/sdk-ios/Sources/DecisioningSDK/","/Users/kh/deciEngine/packages/sdk-ios/Tests/DecisioningSDKTests/","/Users/kh/deciEngine/packages/sdk-ios/Package.swift","/Users/kh/deciEngine/packages/sdk-ios/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

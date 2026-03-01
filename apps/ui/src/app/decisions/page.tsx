@@ -1,17 +1,35 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DecisionVersionSummary } from "@decisioning/shared";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { usePermissions } from "../../lib/permissions";
+import {
+  DecisionViewToggle,
+  DecisionsCompactTable,
+  DecisionsExpandedCards,
+  buildDecisionSummaries,
+  resolveDecisionListView,
+  setDecisionListViewPreference,
+  sortDecisionSummaries,
+  type DecisionListView,
+  type DecisionSortField,
+  type SortDirection
+} from "../../components/decisions";
 
 export default function DecisionsPage() {
   const router = useRouter();
+  const { hasPermission } = usePermissions();
+
   const [items, setItems] = useState<DecisionVersionSummary[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(true);
+  const [sortBy, setSortBy] = useState<DecisionSortField>("updated");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [view, setView] = useState<DecisionListView>("expanded");
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -23,6 +41,10 @@ export default function DecisionsPage() {
   const [createKey, setCreateKey] = useState("");
   const [createName, setCreateName] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+
+  const canWrite = hasPermission("decision.write");
+  const canArchive = hasPermission("decision.archive");
+  const canPromote = hasPermission("promotion.create");
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -37,31 +59,6 @@ export default function DecisionsPage() {
     }
   }, []);
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, DecisionVersionSummary[]>();
-    for (const item of items) {
-      const current = map.get(item.decisionId) ?? [];
-      current.push(item);
-      map.set(item.decisionId, current);
-    }
-
-    return [...map.entries()].map(([decisionId, versions]) => {
-      const sorted = [...versions].sort((a, b) => b.version - a.version);
-      const active = sorted.find((version) => version.status === "ACTIVE") ?? null;
-      const draft = sorted.find((version) => version.status === "DRAFT") ?? null;
-      return {
-        decisionId,
-        key: sorted[0]?.key ?? "",
-        environment: sorted[0]?.environment ?? "DEV",
-        name: sorted[0]?.name ?? "",
-        owner: "Unassigned",
-        active,
-        draft,
-        versions: sorted
-      };
-    });
-  }, [items]);
-
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -70,7 +67,7 @@ export default function DecisionsPage() {
         status: statusFilter || undefined,
         q: search || undefined,
         page,
-        limit: 50
+        limit: 300
       });
       setItems(data.items);
       setTotalPages(data.totalPages);
@@ -84,6 +81,17 @@ export default function DecisionsPage() {
   useEffect(() => {
     void load();
   }, [statusFilter, environment, page]);
+
+  const summaries = useMemo(() => buildDecisionSummaries(items), [items]);
+
+  useEffect(() => {
+    setView(resolveDecisionListView(environment, summaries.length));
+  }, [environment, summaries.length]);
+
+  const displayedSummaries = useMemo(() => {
+    const filtered = showArchived ? summaries : summaries.filter((item) => item.status !== "ARCHIVED_ONLY");
+    return sortDecisionSummaries(filtered, sortBy, sortDirection);
+  }, [showArchived, sortBy, sortDirection, summaries]);
 
   const resetCreateForm = () => {
     setCreateKey("");
@@ -117,7 +125,17 @@ export default function DecisionsPage() {
       await apiClient.decisions.duplicate(decisionId);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Duplicate failed");
+      setError(err instanceof Error ? err.message : "Duplicate active failed");
+    }
+  };
+
+  const createDraftFromActive = async (decisionId: string, tab: "basic" | "advanced") => {
+    try {
+      await apiClient.decisions.duplicate(decisionId);
+      await load();
+      router.push(`/decisions/${decisionId}/edit?tab=${tab}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Create draft failed");
     }
   };
 
@@ -130,6 +148,31 @@ export default function DecisionsPage() {
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Archive failed");
+    }
+  };
+
+  const exportJson = async (decisionId: string) => {
+    try {
+      const details = await apiClient.decisions.get(decisionId);
+      const target =
+        details.versions.find((version) => version.status === "DRAFT") ??
+        details.versions.find((version) => version.status === "ACTIVE") ??
+        details.versions[0];
+
+      if (!target) {
+        setError("No decision versions available to export");
+        return;
+      }
+
+      const blob = new Blob([JSON.stringify(target.definition, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${details.key}-v${target.version}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export JSON failed");
     }
   };
 
@@ -157,6 +200,7 @@ export default function DecisionsPage() {
             <option value="ARCHIVED">ARCHIVED</option>
           </select>
         </label>
+
         <label className="flex min-w-72 flex-1 flex-col gap-1 text-sm">
           Search
           <input
@@ -166,11 +210,49 @@ export default function DecisionsPage() {
             className="rounded-md border border-stone-300 bg-white px-2 py-1"
           />
         </label>
+
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+          Show archived
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          Sort by
+          <select
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value as DecisionSortField)}
+            className="rounded-md border border-stone-300 bg-white px-2 py-1"
+          >
+            <option value="updated">Updated</option>
+            <option value="name">Name</option>
+            <option value="activated">Activated</option>
+            <option value="status">Status</option>
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+          onClick={() => setSortDirection((current) => (current === "desc" ? "asc" : "desc"))}
+        >
+          {sortDirection === "desc" ? "Desc" : "Asc"}
+        </button>
+
+        <DecisionViewToggle
+          value={view}
+          onChange={(next) => {
+            setView(next);
+            setDecisionListViewPreference(environment, next);
+          }}
+        />
+
         <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
           Apply
         </button>
+
         <button
-          className="rounded-md bg-ink px-3 py-2 text-sm text-white"
+          className="rounded-md bg-ink px-3 py-2 text-sm text-white disabled:opacity-50"
+          disabled={!canWrite}
           onClick={() => {
             setCreateMode("wizard");
             setShowCreate((current) => !current);
@@ -179,7 +261,8 @@ export default function DecisionsPage() {
           Create Draft (Wizard)
         </button>
         <button
-          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+          className="rounded-md border border-stone-300 px-3 py-2 text-sm disabled:opacity-50"
+          disabled={!canWrite}
           onClick={() => {
             setCreateMode("json");
             setShowCreate((current) => !current);
@@ -205,11 +288,7 @@ export default function DecisionsPage() {
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Name
-            <input
-              value={createName}
-              onChange={(event) => setCreateName(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            />
+            <input value={createName} onChange={(event) => setCreateName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
           </label>
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             Description
@@ -239,69 +318,31 @@ export default function DecisionsPage() {
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {loading ? <p className="text-sm">Loading...</p> : null}
 
-      <div className="space-y-3">
-        {grouped.map((group) => (
-          <article key={group.decisionId} className="panel p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-semibold">{group.name}</h3>
-                <p className="text-sm text-stone-700">
-                  {group.key} ({group.environment}) · owner: {group.owner}
-                </p>
-                <p className="text-xs text-stone-600">
-                  Last activation: {group.active?.activatedAt ? new Date(group.active.activatedAt).toLocaleString() : "never"}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2 text-sm">
-                <Link href={`/decisions/${group.decisionId}`} className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100">
-                  Details
-                </Link>
-                <Link
-                  href={`/decisions/${group.decisionId}/edit`}
-                  className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100"
-                >
-                  Edit Draft
-                </Link>
-                <button
-                  onClick={() => void duplicateActive(group.decisionId)}
-                  className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100"
-                >
-                  Duplicate Active
-                </button>
-                <button onClick={() => void archive(group.decisionId)} className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100">
-                  Archive
-                </button>
-              </div>
-            </div>
-            <div className="overflow-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead>
-                  <tr className="text-left text-stone-600">
-                    <th className="border-b border-stone-200 py-2">Version</th>
-                    <th className="border-b border-stone-200 py-2">Status</th>
-                    <th className="border-b border-stone-200 py-2">Updated</th>
-                    <th className="border-b border-stone-200 py-2">Activated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.versions.map((version) => (
-                    <tr key={version.versionId}>
-                      <td className="border-b border-stone-100 py-2">v{version.version}</td>
-                      <td className="border-b border-stone-100 py-2">{version.status}</td>
-                      <td className="border-b border-stone-100 py-2">{new Date(version.updatedAt).toLocaleString()}</td>
-                      <td className="border-b border-stone-100 py-2">
-                        {version.activatedAt ? new Date(version.activatedAt).toLocaleString() : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </article>
-        ))}
-      </div>
+      {view === "compact" ? (
+        <DecisionsCompactTable
+          summaries={displayedSummaries}
+          canWrite={canWrite}
+          canArchive={canArchive}
+          canPromote={canPromote}
+          onCreateDraft={createDraftFromActive}
+          onDuplicateActive={duplicateActive}
+          onArchive={archive}
+          onExportJson={exportJson}
+        />
+      ) : (
+        <DecisionsExpandedCards
+          summaries={displayedSummaries}
+          canWrite={canWrite}
+          canArchive={canArchive}
+          canPromote={canPromote}
+          onCreateDraft={createDraftFromActive}
+          onDuplicateActive={duplicateActive}
+          onArchive={archive}
+          onExportJson={exportJson}
+        />
+      )}
 
-      {grouped.length === 0 && !loading ? (
+      {displayedSummaries.length === 0 && !loading ? (
         <article className="panel p-4">
           <p className="text-sm text-stone-700">No decisions found for the selected filters.</p>
         </article>

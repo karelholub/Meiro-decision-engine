@@ -1,0 +1,3 @@
+module DecisioningSDKPackageTests {
+    header "/Users/kh/deciEngine/packages/sdk-ios/.build/arm64-apple-macosx/debug/DecisioningSDKPackageTests.build/include/DecisioningSDKPackageTests-Swift.h"
+}
