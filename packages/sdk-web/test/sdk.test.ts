@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DecisioningWebSdk, MemoryStorage } from "../src/index";
+import { DecisioningWebSdk, MemoryStorage, WebSdkConfigError } from "../src/index";
 
 const mockResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -161,5 +161,54 @@ describe("DecisioningWebSdk", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws a config validation error for missing baseUrl", () => {
+    expect(
+      () =>
+        new DecisioningWebSdk({
+          baseUrl: "" as unknown as string,
+          appKey: "meiro_store"
+        })
+    ).toThrow(WebSdkConfigError);
+  });
+
+  it("supports explicit decide/events full URLs", async () => {
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL) => {
+        if (String(_input) === "https://decide.example.com/custom/decide") {
+          return mockResponse(200, {
+            show: true,
+            placement: "home_top",
+            templateId: "banner_v2",
+            ttl_seconds: 60,
+            tracking: {
+              campaign_id: "c-1",
+              message_id: "m-1",
+              variant_id: "A"
+            },
+            payload: {
+              title: "hello"
+            }
+          });
+        }
+        return mockResponse(202, { status: "accepted" });
+      })
+      .mockName("fetchMock");
+
+    const sdk = new DecisioningWebSdk({
+      baseUrl: "https://fallback-base.example.com",
+      decidePath: "https://decide.example.com/custom/decide",
+      eventsPath: "https://events.example.com/custom/events",
+      appKey: "meiro_store",
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+    sdk.setProfileId("p-1001");
+
+    const decision = await sdk.decide({ placement: "home_top" });
+    await sdk.trackImpression(decision);
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://decide.example.com/custom/decide");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://events.example.com/custom/events");
   });
 });

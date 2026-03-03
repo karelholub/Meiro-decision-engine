@@ -293,6 +293,12 @@ export default function OverviewPage() {
           <h3 className="font-semibold">Quick Actions</h3>
           <div className="space-y-3 text-sm">
             <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-stone-500">Navigate</p>
+              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/usecases">
+                Open Use Cases Navigator
+              </Link>
+            </div>
+            <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Build</p>
               <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/decisions?create=wizard">
                 New Decision Draft

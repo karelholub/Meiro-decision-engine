@@ -67,7 +67,7 @@ export default function DecisionsPage() {
         status: statusFilter || undefined,
         q: search || undefined,
         page,
-        limit: 300
+        limit: 200
       });
       setItems(data.items);
       setTotalPages(data.totalPages);

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      margin: 0 !important;
+      font-family: Helvetica, Arial, sans-serif;
+    }
+
+    h1,
+    p {
+      margin-block-start: 0 !important;
+      margin-block-end: 0 !important;
+    }
+
+    .banner {
+      width: 100%;
+      height: 240px;
+      background: rgba(34, 34, 34, 0.9);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 20px;
+      box-sizing: border-box;
+      border-radius: 16px;
+      box-shadow: 0 0 6px 3px rgba(254, 127, 102, 0.1);
+    }
+
+    .cont-1 {
+      display: flex;
+      gap: 10px;
+    }
+
+    .headline-container {
+      display: flex;
+      align-items: center;
+      width: 140px;
+      box-sizing: border-box;
+    }
+
+    .headline-container h1 {
+      font-style: normal;
+      font-weight: 700;
+      font-size: 18px;
+      text-align: left;
+      color: #fff;
+      margin-left: 10px;
+      line-height: 1.25;
+    }
+
+    #img {
+      width: 160px;
+      height: 160px;
+      cursor: pointer;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      object-fit: cover;
+      background: #2f2f2f;
+    }
+
+    #button {
+      width: 280px;
+      height: 35px;
+      background-color: #fff;
+      border: 1px solid #222;
+      border-radius: 40px;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      color: #222;
+      box-sizing: border-box;
+    }
+
+    #button:hover {
+      background-color: #ccc;
+      cursor: pointer;
+    }
+
+    #price {
+      font-family: Arial, sans-serif;
+      font-style: normal;
+      font-weight: 700;
+      font-size: 14px;
+      line-height: 10px;
+      text-align: center;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .invisible {
+      visibility: hidden !important;
+      pointer-events: none !important;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <div id="banner" class="banner invisible">
+    <div class="cont-1">
+      <img id="img" src="" alt="Recommended product" />
+      <div class="headline-container">
+        <h1 id="headline">Wait!<br />Why not get this as well?</h1>
+      </div>
+    </div>
+    <div>
+      <button id="button" type="button">
+        <span id="price">See product</span>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const CONFIG = {
+      baseUrl: "https://api.example.com",
+      decidePath: "/v2/inapp/decide",
+      eventsPath: "/v2/inapp/events",
+      appKey: "meiro_store",
+      placement: "cart_upsell_banner",
+      environment: "PROD",
+      apiKey: "replace-me",
+      profileId: "replace-profile-id",
+      defaultHeadline: "Wait!\nWhy not get this as well?",
+      defaultButtonText: "See product"
+    };
+
+    const els = {
+      banner: document.getElementById("banner"),
+      image: document.getElementById("img"),
+      button: document.getElementById("button"),
+      headline: document.getElementById("headline"),
+      price: document.getElementById("price")
+    };
+
+    function setVisible() {
+      els.banner.classList.remove("invisible");
+      const frame = window.frameElement;
+      if (frame) frame.style = "";
+      const closeButton = getParentCloseButton();
+      if (closeButton) closeButton.style = "";
+    }
+
+    function setHidden() {
+      els.banner.classList.add("invisible");
+      const frame = window.frameElement;
+      if (frame) frame.style = "display: none";
+      const closeButton = getParentCloseButton();
+      if (closeButton) closeButton.style = "display: none";
+    }
+
+    function getParentCloseButton() {
+      try {
+        return window.parent.document.querySelector('[data-testid="banner-close-btn"]');
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function isCdpHost() {
+      try {
+        return window.parent.location.hostname.slice(0, 3) === "cdp";
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function parseNumber(value) {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    }
+
+    function readCartContext() {
+      try {
+        const items = Array.from(window.parent.document.querySelectorAll("[data-cart-item-img]")).map((item) => ({
+          name: item.getAttribute("data-cart-item-name") || "",
+          price: parseNumber(item.getAttribute("data-cart-item-price")),
+          image: item.getAttribute("data-cart-item-img") || ""
+        }));
+
+        const totalNode = window.parent.document.querySelector("[data-total-cart-price]");
+        const total = totalNode ? parseNumber(totalNode.getAttribute("data-total-cart-price")) : null;
+        const mostExpensive = items
+          .filter((item) => item.price !== null)
+          .sort((a, b) => b.price - a.price)[0] || null;
+
+        return {
+          cartTotal: total,
+          cartItems: items,
+          mostExpensiveCartItem: mostExpensive
+        };
+      } catch (error) {
+        return { cartTotal: null, cartItems: [], mostExpensiveCartItem: null };
+      }
+    }
+
+    function pick(payload, keys, fallback) {
+      for (const key of keys) {
+        if (typeof payload[key] === "string" && payload[key].trim()) {
+          return payload[key].trim();
+        }
+      }
+      return fallback;
+    }
+
+    function pickPrice(payload) {
+      const priceKeys = ["price", "recommendedPrice", "offerPrice", "amount"];
+      for (const key of priceKeys) {
+        const value = payload[key];
+        if (typeof value === "number" && Number.isFinite(value)) return String(value);
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+      return "";
+    }
+
+    function mapDecisionPayload(payload) {
+      const safePayload = payload && typeof payload === "object" ? payload : {};
+      const image = pick(safePayload, ["img", "image", "imageUrl", "productImage"], "");
+      const link = pick(safePayload, ["link", "url", "targetUrl", "productUrl"], "");
+      const productName = pick(safePayload, ["name", "productName", "title"], "");
+      const headline = pick(safePayload, ["headline", "bannerHeadline"], CONFIG.defaultHeadline);
+      const cta = pick(safePayload, ["cta", "buttonText"], CONFIG.defaultButtonText);
+      const price = pickPrice(safePayload);
+      const buttonText = price ? cta + " - only " + price + "€" : cta;
+
+      return { image, link, productName, headline, buttonText };
+    }
+
+    async function callDecide(context) {
+      const response = await fetch(CONFIG.baseUrl + CONFIG.decidePath, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": CONFIG.apiKey,
+          "X-ENV": CONFIG.environment
+        },
+        body: JSON.stringify({
+          appKey: CONFIG.appKey,
+          placement: CONFIG.placement,
+          profileId: CONFIG.profileId,
+          context: context
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Decide request failed with status " + response.status);
+      }
+      return response.json();
+    }
+
+    async function trackEvent(eventType, decision) {
+      if (!decision || !decision.tracking) return;
+      try {
+        await fetch(CONFIG.baseUrl + CONFIG.eventsPath, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-KEY": CONFIG.apiKey,
+            "X-ENV": CONFIG.environment
+          },
+          body: JSON.stringify({
+            eventType: eventType,
+            ts: new Date().toISOString(),
+            appKey: CONFIG.appKey,
+            placement: decision.placement || CONFIG.placement,
+            tracking: decision.tracking,
+            profileId: CONFIG.profileId
+          })
+        });
+      } catch (error) {
+        console.error("Tracking failed", error);
+      }
+    }
+
+    function openLink(url) {
+      if (!url) return;
+      if (window.parent && window.parent.MeiroEvents && typeof window.parent.MeiroEvents.goToWebBannerUrl === "function") {
+        window.parent.MeiroEvents.goToWebBannerUrl(url);
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+
+    function renderDecision(decision) {
+      const mapped = mapDecisionPayload(decision.payload || {});
+      if (!mapped.image || !mapped.link) {
+        setHidden();
+        return;
+      }
+
+      const headlineText = mapped.productName
+        ? "Wait!\nAdd " + mapped.productName + " as well?"
+        : mapped.headline;
+
+      els.image.src = mapped.image;
+      els.price.textContent = mapped.buttonText;
+      els.headline.innerHTML = headlineText.replace("\n", "<br />");
+
+      const onClick = function () {
+        trackEvent("CLICK", decision);
+        openLink(mapped.link);
+      };
+      els.image.onclick = onClick;
+      els.button.onclick = onClick;
+
+      setVisible();
+    }
+
+    async function init() {
+      if (!isCdpHost()) {
+        setHidden();
+        return;
+      }
+
+      const cartContext = readCartContext();
+      try {
+        const decision = await callDecide(cartContext);
+
+        if (!decision || !decision.show) {
+          setHidden();
+          return;
+        }
+
+        renderDecision(decision);
+        trackEvent("IMPRESSION", decision);
+      } catch (error) {
+        console.error("Banner decide init failed", error);
+        setHidden();
+      }
+    }
+
+    setHidden();
+    init();
+  </script>
+</body>
+</html>

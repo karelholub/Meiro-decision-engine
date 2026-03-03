@@ -69,6 +69,9 @@ export interface EventTargetInput {
 
 export interface WebSdkConfig {
   baseUrl: string;
+  decidePath?: string;
+  eventsPath?: string;
+  evaluatePath?: string;
   appKey: string;
   auth?: AuthConfig;
   environment?: string;

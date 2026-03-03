@@ -40,6 +40,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Build",
     hint: "Authoring and validation",
     items: [
+      { href: "/usecases", label: "Use Cases" },
       { href: "/decisions", label: "Decisions" },
       { href: "/stacks", label: "Decision Stacks" },
       { href: "/simulate", label: "Simulator" }
@@ -105,6 +106,7 @@ const navPermissionByHref: Record<string, string> = {
   "/execution/precompute": "precompute.read",
   "/execution/results": "results.read",
   "/releases": "promotion.create",
+  "/usecases": "decision.read",
   "/decisions": "decision.read",
   "/stacks": "stack.read",
   "/simulate": "simulator.run",

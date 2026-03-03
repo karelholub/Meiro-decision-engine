@@ -14,6 +14,9 @@ import type {
 import { generateUuid, sha256Hex } from "./utils";
 
 const DEFAULT_CONTEXT_ALLOWLIST = ["locale", "deviceType", "appVersion"];
+const DEFAULT_DECIDE_PATH = "/v2/inapp/decide";
+const DEFAULT_EVENTS_PATH = "/v2/inapp/events";
+const DEFAULT_EVALUATE_PATH = "/v1/evaluate";
 
 export { LocalStorageStorage, MemoryStorage } from "./storage";
 export type {
@@ -37,40 +40,40 @@ interface IdentityState {
   };
 }
 
+interface NormalizedWebSdkConfig extends WebSdkConfig {
+  baseUrl: string;
+  appKey: string;
+  cacheTtlSeconds: number;
+  staleTtlSeconds: number;
+  decideTimeoutMs: number;
+  eventsTimeoutMs: number;
+  decideRetryCount: 0 | 1;
+  cacheMaxEntries: number;
+  useEvaluateFallback: boolean;
+  decidePath: string;
+  eventsPath: string;
+  evaluatePath: string;
+  decideUrl: string;
+  eventsUrl: string;
+  evaluateUrl: string;
+}
+
+export class WebSdkConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WebSdkConfigError";
+  }
+}
+
 export class DecisioningWebSdk {
-  private readonly config: Required<
-    Pick<
-      WebSdkConfig,
-      | "baseUrl"
-      | "appKey"
-      | "cacheTtlSeconds"
-      | "staleTtlSeconds"
-      | "decideTimeoutMs"
-      | "eventsTimeoutMs"
-      | "decideRetryCount"
-      | "cacheMaxEntries"
-      | "useEvaluateFallback"
-    >
-  > &
-    Omit<WebSdkConfig, "baseUrl" | "appKey" | "cacheTtlSeconds" | "staleTtlSeconds" | "decideTimeoutMs" | "eventsTimeoutMs" | "decideRetryCount" | "cacheMaxEntries" | "useEvaluateFallback">;
+  private readonly config: NormalizedWebSdkConfig;
 
   private readonly cache: DecideCache;
   private readonly http: FetchHttpClient;
   private identity: IdentityState = {};
 
   constructor(input: WebSdkConfig) {
-    this.config = {
-      ...input,
-      baseUrl: input.baseUrl.replace(/\/$/, ""),
-      appKey: input.appKey,
-      cacheTtlSeconds: input.cacheTtlSeconds ?? 60,
-      staleTtlSeconds: input.staleTtlSeconds ?? 30 * 60,
-      decideTimeoutMs: input.decideTimeoutMs ?? 250,
-      eventsTimeoutMs: input.eventsTimeoutMs ?? 1000,
-      decideRetryCount: input.decideRetryCount ?? 1,
-      cacheMaxEntries: input.cacheMaxEntries ?? 128,
-      useEvaluateFallback: input.useEvaluateFallback ?? true
-    };
+    this.config = normalizeConfig(input);
 
     const now = this.config.now ?? (() => Date.now());
     this.cache = new DecideCache({
@@ -189,7 +192,7 @@ export class DecisioningWebSdk {
     const requestId = (this.config.uuid ?? generateUuid)();
     const v2 = await this.http.request({
       method: "POST",
-      url: `${this.config.baseUrl}/v2/inapp/decide`,
+      url: this.config.decideUrl,
       body,
       timeoutMs: this.config.decideTimeoutMs,
       requestId,
@@ -216,7 +219,7 @@ export class DecisioningWebSdk {
     const context = body.context ?? {};
     const response = await this.http.request({
       method: "POST",
-      url: `${this.config.baseUrl}/v1/evaluate`,
+      url: this.config.evaluateUrl,
       body: {
         mode: "full",
         decisionKey: body.decisionKey,
@@ -302,7 +305,7 @@ export class DecisioningWebSdk {
     try {
       const response = await this.http.request({
         method: "POST",
-        url: `${this.config.baseUrl}/v2/inapp/events`,
+        url: this.config.eventsUrl,
         body,
         timeoutMs: this.config.eventsTimeoutMs,
         requestId: (this.config.uuid ?? generateUuid)(),
@@ -341,4 +344,93 @@ const isNetworkError = (error: unknown): boolean => {
     return false;
   }
   return error.name === "AbortError" || error.name === "TypeError";
+};
+
+const normalizeConfig = (input: WebSdkConfig): NormalizedWebSdkConfig => {
+  const errors: string[] = [];
+  const baseUrlRaw = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+  const appKeyRaw = typeof input.appKey === "string" ? input.appKey.trim() : "";
+  const decidePath = typeof input.decidePath === "string" ? input.decidePath.trim() : DEFAULT_DECIDE_PATH;
+  const eventsPath = typeof input.eventsPath === "string" ? input.eventsPath.trim() : DEFAULT_EVENTS_PATH;
+  const evaluatePath = typeof input.evaluatePath === "string" ? input.evaluatePath.trim() : DEFAULT_EVALUATE_PATH;
+
+  if (!baseUrlRaw) {
+    errors.push("baseUrl is required and must be a non-empty string.");
+  }
+  if (!appKeyRaw) {
+    errors.push("appKey is required and must be a non-empty string.");
+  }
+  if (!decidePath) {
+    errors.push("decidePath must be a non-empty string when provided.");
+  }
+  if (!eventsPath) {
+    errors.push("eventsPath must be a non-empty string when provided.");
+  }
+  if (!evaluatePath) {
+    errors.push("evaluatePath must be a non-empty string when provided.");
+  }
+
+  const baseUrl = normalizeBaseUrl(baseUrlRaw, errors);
+  const decideUrl = resolveEndpointUrl(baseUrl, decidePath, "decidePath", errors);
+  const eventsUrl = resolveEndpointUrl(baseUrl, eventsPath, "eventsPath", errors);
+  const evaluateUrl = resolveEndpointUrl(baseUrl, evaluatePath, "evaluatePath", errors);
+
+  if (errors.length > 0) {
+    throw new WebSdkConfigError(`Invalid DecisioningWebSdk config: ${errors.join(" ")}`);
+  }
+
+  return {
+    ...input,
+    baseUrl,
+    appKey: appKeyRaw,
+    cacheTtlSeconds: input.cacheTtlSeconds ?? 60,
+    staleTtlSeconds: input.staleTtlSeconds ?? 30 * 60,
+    decideTimeoutMs: input.decideTimeoutMs ?? 250,
+    eventsTimeoutMs: input.eventsTimeoutMs ?? 1000,
+    decideRetryCount: input.decideRetryCount ?? 1,
+    cacheMaxEntries: input.cacheMaxEntries ?? 128,
+    useEvaluateFallback: input.useEvaluateFallback ?? true,
+    decidePath,
+    eventsPath,
+    evaluatePath,
+    decideUrl,
+    eventsUrl,
+    evaluateUrl
+  };
+};
+
+const normalizeBaseUrl = (baseUrlRaw: string, errors: string[]): string => {
+  try {
+    const parsed = new URL(baseUrlRaw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      errors.push("baseUrl must start with http:// or https://.");
+      return baseUrlRaw;
+    }
+    const pathname = parsed.pathname.endsWith("/") ? parsed.pathname.slice(0, -1) : parsed.pathname;
+    return `${parsed.origin}${pathname}`;
+  } catch {
+    errors.push("baseUrl must be a valid absolute URL.");
+    return baseUrlRaw;
+  }
+};
+
+const resolveEndpointUrl = (baseUrl: string, pathOrUrl: string, fieldName: string, errors: string[]): string => {
+  if (!pathOrUrl) {
+    errors.push(`${fieldName} must not be empty.`);
+    return "";
+  }
+  if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+    try {
+      return new URL(pathOrUrl).toString();
+    } catch {
+      errors.push(`${fieldName} must be a valid absolute URL when using full URL format.`);
+      return "";
+    }
+  }
+  if (!baseUrl) {
+    errors.push(`baseUrl is required when ${fieldName} is a relative path.`);
+    return "";
+  }
+  const normalizedPath = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
+  return `${baseUrl}${normalizedPath}`;
 };

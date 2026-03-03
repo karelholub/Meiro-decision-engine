@@ -8,6 +8,21 @@ Lightweight TypeScript SDK for Decisioning in-app decide + event tracking.
 pnpm add @decisioning/sdk-web
 ```
 
+## Browser Bundle (Simulator Upload)
+
+Build standalone JS files:
+
+```bash
+pnpm --filter @decisioning/sdk-web bundle
+```
+
+Output files:
+
+- `dist/decisioning-sdk-web.iife.js` (plain `<script>` upload/use)
+- `dist/decisioning-sdk-web.esm.js` (ES module environments)
+
+IIFE global name: `DecisioningSDK` (for example `new DecisioningSDK.DecisioningWebSdk(...)`).
+
 ## Quick Start
 
 ```ts
@@ -15,6 +30,9 @@ import { DecisioningWebSdk, LocalStorageStorage } from "@decisioning/sdk-web";
 
 const sdk = new DecisioningWebSdk({
   baseUrl: "https://api.example.com",
+  // optional overrides (relative path or full URL)
+  decidePath: "/v2/inapp/decide",
+  eventsPath: "/v2/inapp/events",
   appKey: "meiro_store",
   environment: "PROD",
   auth: { bearerToken: "<token>" },
@@ -48,6 +66,17 @@ if (decision.show) {
 - `trackImpression(target, context?)`
 - `trackClick(target, context?)`
 - `trackDismiss(target, context?)`
+
+Constructor config requirements:
+
+- required: `baseUrl`, `appKey`
+- optional with defaults:
+  - `decidePath` (default `/v2/inapp/decide`)
+  - `eventsPath` (default `/v2/inapp/events`)
+  - `evaluatePath` (default `/v1/evaluate`, used for fallback)
+
+`decidePath`/`eventsPath`/`evaluatePath` can be either relative paths or full absolute URLs.
+Invalid constructor config throws `WebSdkConfigError` with a readable validation message.
 
 ## Reliability
 
