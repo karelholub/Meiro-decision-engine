@@ -58,11 +58,11 @@ const USE_CASES: UseCase[] = [
     area: "Engage",
     outcomes: ["Campaign launch", "New placement", "Template rollout"],
     routes: [
-      { href: "/engagement/inapp/templates", label: "Templates", requiredPermission: "engage.template.read" },
-      { href: "/engagement/inapp/apps", label: "Apps", requiredPermission: "engage.app.read" },
-      { href: "/engagement/inapp/placements", label: "Placements", requiredPermission: "engage.placement.read" },
+      { href: "/engage/templates", label: "Templates", requiredPermission: "engage.template.read" },
+      { href: "/engage/apps", label: "Apps", requiredPermission: "engage.app.read" },
+      { href: "/engage/placements", label: "Placements", requiredPermission: "engage.placement.read" },
       { href: "/engage/campaigns", label: "Campaigns", requiredPermission: "engage.campaign.read" },
-      { href: "/engagement/inapp/reports", label: "Reports", requiredPermission: "engage.campaign.read" }
+      { href: "/engage/reports", label: "Reports", requiredPermission: "engage.campaign.read" }
     ]
   },
   {
@@ -111,9 +111,8 @@ const USE_CASES: UseCase[] = [
     area: "Operate",
     outcomes: ["Event anomalies", "Debug decide output"],
     routes: [
-      { href: "/engagement/inapp/events", label: "Events", requiredPermission: "engage.campaign.read" },
-      { href: "/engagement/inapp/events-monitor", label: "Events monitor", requiredPermission: "engage.campaign.read" },
-      { href: "/engagement/inapp/decide-debugger", label: "Decide debugger", requiredPermission: "engage.campaign.read" }
+      { href: "/engage/events", label: "Events", requiredPermission: "engage.campaign.read" },
+      { href: "/engage/tools", label: "Engage tools", requiredPermission: "engage.campaign.read" }
     ]
   }
 ];

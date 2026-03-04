@@ -492,6 +492,7 @@ export default function DecisionEditorClient({
           status={selectedVersion.status}
           isAutosaving={isAutosaving}
           lastSavedAt={lastSavedAt}
+          canWrite={canWrite}
           canSave={canSave}
           canValidate={canWrite}
           showActivate={hasPermission("decision.activate")}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { ExperimentDetails, ExperimentSummaryDetails } from "@decisioning/shared";
+import { HasDraftBadge, NoTrafficBadge, StatusBadge } from "../../../../components/ui/status-badges";
 import { apiClient } from "../../../../lib/api";
 import { usePermissions } from "../../../../lib/permissions";
 
@@ -158,6 +159,15 @@ export default function ExperimentDetailsPage() {
     }
   };
 
+  const copyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setMessage(`${label} copied.`);
+    } catch {
+      setError(`Failed to copy ${label.toLowerCase()}.`);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <header className="rounded-lg border border-stone-200 bg-white p-4">
@@ -166,11 +176,13 @@ export default function ExperimentDetailsPage() {
             <h2 className="text-xl font-semibold">{summary?.name ?? key}</h2>
             <p className="text-sm text-stone-600">Key: <span className="font-mono">{key}</span></p>
             <div className="mt-1 flex flex-wrap gap-1 text-xs">
-              <span className="rounded border border-stone-300 px-1">{summary?.status ?? "-"}</span>
-              {summary?.draftVersion ? <span className="rounded border border-indigo-200 bg-indigo-50 px-1 text-indigo-700">Has draft</span> : null}
+              {summary?.status ? <StatusBadge status={summary.status as "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"} /> : null}
+              {summary?.draftVersion ? <HasDraftBadge /> : null}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void copyText(key, "Key")}>Copy key</button>
+            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void copyText(`/v1/experiments/${encodeURIComponent(key)}`, "API ref")}>Copy API ref</button>
             <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/experiments">Back to inventory</Link>
             {canWrite ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href={`/engage/experiments/${encodeURIComponent(key)}/edit`}>Edit draft</Link> : null}
           </div>
@@ -282,6 +294,7 @@ export default function ExperimentDetailsPage() {
 
           <article className="rounded-lg border border-stone-200 bg-white p-4 text-sm">
             <h3 className="font-semibold">Activity</h3>
+            <div className="mt-2"><NoTrafficBadge /></div>
             <p className="mt-2 text-xs text-stone-600">No traffic metrics available in this MVP snapshot.</p>
           </article>
         </aside>

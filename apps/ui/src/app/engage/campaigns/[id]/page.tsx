@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppAuditLog, InAppCampaign, InAppCampaignActivationPreview, InAppCampaignVersion } from "@decisioning/shared";
+import { EndsSoonBadge, StatusBadge } from "../../../../components/ui/status-badges";
 import { apiClient } from "../../../../lib/api";
 import { usePermissions } from "../../../../lib/permissions";
 
@@ -67,6 +68,15 @@ export default function CampaignDetailsPage() {
     }
   };
 
+  const copyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setMessage(`${label} copied.`);
+    } catch {
+      setError(`Failed to copy ${label.toLowerCase()}.`);
+    }
+  };
+
   const latestAudit = useMemo(() => auditLogs.slice(0, 10), [auditLogs]);
 
   return (
@@ -77,11 +87,13 @@ export default function CampaignDetailsPage() {
             <h2 className="text-xl font-semibold">{campaign?.name ?? "Campaign"}</h2>
             <p className="text-sm text-stone-600">Key: <span className="font-mono">{campaign?.key ?? "-"}</span></p>
             <div className="mt-1 flex gap-1 text-xs">
-              <span className="rounded border border-stone-300 px-1">{campaign?.status ?? "-"}</span>
-              {campaign?.endAt && new Date(campaign.endAt).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000 ? <span className="rounded border border-amber-200 bg-amber-50 px-1 text-amber-700">Ends soon</span> : null}
+              {campaign?.status ? <StatusBadge status={campaign.status as "DRAFT" | "ACTIVE" | "PENDING_APPROVAL" | "ARCHIVED"} /> : null}
+              {campaign?.endAt && new Date(campaign.endAt).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000 ? <EndsSoonBadge /> : null}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {campaign?.key ? <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void copyText(campaign.key, "Key")}>Copy key</button> : null}
+            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void copyText(`/v1/inapp/campaigns/${id}`, "API ref")}>Copy API ref</button>
             <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/campaigns">Back to inventory</Link>
             {canWrite ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href={`/engage/campaigns/${id}/edit`}>Edit draft</Link> : null}
           </div>

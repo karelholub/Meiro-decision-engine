@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppCampaign } from "@decisioning/shared";
+import { EndsSoonBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
 import {
@@ -17,13 +18,6 @@ import {
   type CampaignInventorySort,
   type CampaignSavedView
 } from "./inventory-utils";
-
-const statusBadge = (status: InAppCampaign["status"]) => {
-  if (status === "ACTIVE") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "DRAFT") return "border-indigo-200 bg-indigo-50 text-indigo-700";
-  if (status === "PENDING_APPROVAL") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-stone-200 bg-stone-50 text-stone-700";
-};
 
 export default function CampaignInventoryPage() {
   const { hasPermission } = usePermissions();
@@ -315,7 +309,7 @@ export default function CampaignInventoryPage() {
                       <Link href={`/engage/campaigns/${item.id}`} className="font-medium text-indigo-700 hover:underline">{item.name}</Link>
                       <div className="font-mono text-xs text-stone-600">{item.key}</div>
                     </td>
-                    {activeColumns.status ? <td className="border-b border-stone-100 px-2 py-2"><span className={`rounded border px-1.5 py-0.5 text-xs ${statusBadge(item.status)}`}>{item.status}</span></td> : null}
+                    {activeColumns.status ? <td className="border-b border-stone-100 px-2 py-2"><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PENDING_APPROVAL" | "ARCHIVED"} /></td> : null}
                     {activeColumns.appKey ? <td className="border-b border-stone-100 px-2 py-2">{item.appKey}</td> : null}
                     {activeColumns.placement ? <td className="border-b border-stone-100 px-2 py-2">{item.placementKey}</td> : null}
                     {activeColumns.variants ? <td className="border-b border-stone-100 px-2 py-2">{formatVariantsSummary(item)}</td> : null}
@@ -323,7 +317,7 @@ export default function CampaignInventoryPage() {
                     {activeColumns.schedule ? (
                       <td className="border-b border-stone-100 px-2 py-2">
                         <div>{item.startAt ? new Date(item.startAt).toLocaleDateString() : "-"} - {item.endAt ? new Date(item.endAt).toLocaleDateString() : "-"}</div>
-                        {endingSoon ? <div className="text-xs text-amber-700">Ends soon</div> : null}
+                        {endingSoon ? <div className="mt-1"><EndsSoonBadge /></div> : null}
                       </td>
                     ) : null}
                     {activeColumns.updated ? <td className="border-b border-stone-100 px-2 py-2">{new Date(item.updatedAt).toLocaleString()}</td> : null}

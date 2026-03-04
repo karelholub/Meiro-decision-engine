@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { DecisionStackDefinition } from "@decisioning/dsl";
 import type { DecisionStackDetailsResponse, DecisionStackValidationResponse, DecisionVersionSummary } from "@decisioning/shared";
 import PermissionDenied from "../../../components/permission-denied";
+import { EditorActionBar } from "../../../components/ui/editor-action-bar";
+import { StatusBadge } from "../../../components/ui/status-badges";
 import { ApiError, apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
 
@@ -51,6 +53,7 @@ export default function StackEditorClient({
   const [jsonDraft, setJsonDraft] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [validation, setValidation] = useState<DecisionStackValidationResponse | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const { hasPermission } = usePermissions();
 
@@ -181,6 +184,7 @@ export default function StackEditorClient({
       const definition = tab === "advanced" ? (JSON.parse(jsonDraft) as DecisionStackDefinition) : buildDefinitionFromBasic();
       const response = await apiClient.stacks.updateDraft(stackId, definition);
       setJsonDraft(JSON.stringify(response.definition, null, 2));
+      setLastSavedAt(new Date().toISOString());
       setFeedback("Draft saved.");
       await load();
     } catch (error) {
@@ -278,16 +282,60 @@ export default function StackEditorClient({
     return <p className="text-sm">Loading stack editor...</p>;
   }
 
+  const canWrite = hasPermission("stack.write");
+  const canValidate = canWrite;
+  const canActivate = hasPermission("stack.activate") && Boolean(validation?.valid);
+  const activateDisabledReason = !validation
+    ? "Run Validate before activating."
+    : !validation.valid
+      ? "Validation must pass before activation."
+      : undefined;
+  const canArchive = hasPermission("stack.archive");
+
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">{details.name}</h2>
-        <p className="text-sm text-stone-700">
-          key: {details.key} ({details.environment})
-        </p>
-        <p className="text-sm text-stone-700">
-          Draft: {draftVersion ? `v${draftVersion.version}` : "none"} | Active: {activeVersion ? `v${activeVersion.version}` : "none"}
-        </p>
+      <header className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-xl font-semibold">{details.name}</h2>
+            <p className="text-sm text-stone-700">
+              key: {details.key} ({details.environment})
+            </p>
+            <p className="text-sm text-stone-700">
+              Draft: {draftVersion ? `v${draftVersion.version}` : "none"} | Active: {activeVersion ? `v${activeVersion.version}` : "none"}
+            </p>
+          </div>
+          <StatusBadge status={(draftVersion?.status ?? activeVersion?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "ARCHIVED"} />
+        </div>
+
+        <EditorActionBar
+          statusLabel={`${details.environment} / ${draftVersion?.status ?? activeVersion?.status ?? "DRAFT"}`}
+          lastSavedAt={lastSavedAt}
+        canSave={canWrite}
+        canValidate={canValidate}
+        showActivate={hasPermission("stack.activate")}
+        canActivate={canActivate}
+          activateDisabledReason={activateDisabledReason}
+          onSave={() => void saveDraft()}
+          onValidate={() => void validateDraft()}
+          onActivate={() => void activate()}
+          moreActions={[
+            {
+              key: "create-draft",
+              label: "Create Draft From Active",
+              onClick: () => void ensureDraft(),
+              hidden: !canWrite
+            },
+            { key: "format", label: "Format JSON", onClick: formatJson, hidden: tab !== "advanced" },
+            {
+              key: "archive",
+              label: "Archive",
+              onClick: () => void archive(),
+              hidden: !canArchive,
+              danger: true
+            }
+          ]}
+        />
       </header>
 
       <div className="panel flex flex-wrap gap-2 p-4 text-sm">
@@ -303,34 +351,8 @@ export default function StackEditorClient({
         >
           JSON (Advanced)
         </button>
-        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void ensureDraft()}>
+        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void ensureDraft()} disabled={!canWrite} title={!canWrite ? "Insufficient permission." : undefined}>
           Create Draft From Active
-        </button>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
-          onClick={() => void saveDraft()}
-          disabled={!hasPermission("stack.write")}
-        >
-          Save Draft
-        </button>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
-          onClick={() => void validateDraft()}
-          disabled={!hasPermission("stack.write")}
-        >
-          Validate
-        </button>
-        {hasPermission("stack.activate") ? (
-          <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void activate()}>
-            Activate
-          </button>
-        ) : null}
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-50"
-          onClick={() => void archive()}
-          disabled={!hasPermission("stack.archive")}
-        >
-          Archive
         </button>
       </div>
 

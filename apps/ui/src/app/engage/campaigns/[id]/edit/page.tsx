@@ -14,8 +14,10 @@ import type {
   InAppPlacement,
   InAppTemplate
 } from "@decisioning/shared";
+import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
 import { apiClient } from "../../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
+import { usePermissions } from "../../../../../lib/permissions";
 
 type VariantEditor = {
   variantKey: string;
@@ -143,12 +145,14 @@ export default function InAppCampaignEditPage() {
   const campaignId = String(params.id ?? "");
   const isCreateMode = campaignId === "new";
   const router = useRouter();
+  const { hasPermission } = usePermissions();
 
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"basic" | "variants" | "bindings" | "governance">("basic");
 
   const [campaign, setCampaign] = useState<InAppCampaign | null>(null);
@@ -188,6 +192,10 @@ export default function InAppCampaignEditPage() {
   const [reviewComment, setReviewComment] = useState("");
   const [rollbackVersion, setRollbackVersion] = useState("");
   const [bindingSampleJson, setBindingSampleJson] = useState('{\n  "profile": {\n    "firstName": "Alex"\n  }\n}\n');
+  const canWrite = hasPermission("engage.campaign.write");
+  const canActivatePermission = hasPermission("engage.campaign.activate");
+  const canArchive = hasPermission("engage.campaign.archive");
+  const canPromote = hasPermission("promotion.create");
 
   const load = async () => {
     setLoading(true);
@@ -482,10 +490,12 @@ export default function InAppCampaignEditPage() {
       if (isCreateMode) {
         const created = await apiClient.inapp.campaigns.create(payload);
         setMessage("Campaign created.");
+        setLastSavedAt(new Date().toISOString());
         router.replace(`/engage/campaigns/${created.item.id}/edit`);
       } else {
         await apiClient.inapp.campaigns.update(campaignId, payload);
         setMessage("Campaign saved.");
+        setLastSavedAt(new Date().toISOString());
       }
       setError(null);
       if (!isCreateMode) {
@@ -597,6 +607,14 @@ export default function InAppCampaignEditPage() {
       setError(rollbackError instanceof Error ? rollbackError.message : "Rollback failed");
     }
   };
+  const canActivate = Boolean(!isCreateMode && canActivatePermission && (activationPreview?.canActivate ?? true));
+  const activateDisabledReason = !canActivatePermission
+    ? "Insufficient permission."
+    : isCreateMode
+      ? "Create campaign first."
+      : activationPreview && !activationPreview.canActivate
+        ? `Campaign cannot be activated from ${activationPreview.status}.`
+        : undefined;
 
   return (
     <section className="space-y-4">
@@ -646,6 +664,52 @@ export default function InAppCampaignEditPage() {
         >
           Governance
         </button>
+        <div className="ml-auto">
+          <EditorActionBar
+            statusLabel={status}
+            lastSavedAt={lastSavedAt}
+            isSaving={saving}
+            canSave={canWrite}
+            canValidate={canWrite}
+            showActivate={canActivatePermission}
+            canActivate={canActivate}
+            activateDisabledReason={activateDisabledReason}
+            onSave={() => void save()}
+            onValidate={() => void validate()}
+            onActivate={() => void activate()}
+            moreActions={[
+              { key: "submit", label: "Submit For Approval", onClick: () => void submitForApproval(), hidden: !canWrite || isCreateMode },
+              { key: "approve", label: "Approve + Activate", onClick: () => void approveAndActivate(), hidden: !canActivatePermission || isCreateMode },
+              { key: "reject", label: "Reject To Draft", onClick: () => void rejectToDraft(), hidden: !canWrite || isCreateMode },
+              {
+                key: "rollback",
+                label: "Rollback",
+                onClick: () => void rollback(),
+                hidden: !canWrite || isCreateMode,
+                disabled: !rollbackVersion.trim(),
+                disabledReason: "Set rollback version first."
+              },
+              { key: "archive", label: "Archive", onClick: () => void archive(), hidden: !canArchive || isCreateMode, danger: true },
+              {
+                key: "export",
+                label: "Export JSON",
+                onClick: () => {
+                  const payload = buildPayload();
+                  void navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+                  setMessage("Campaign JSON copied.");
+                }
+              },
+              {
+                key: "promote",
+                label: "Promote",
+                onClick: () => {
+                  window.location.href = "/releases";
+                },
+                hidden: !canPromote || isCreateMode
+              }
+            ]}
+          />
+        </div>
       </div>
 
       {activeTab === "basic" ? (
@@ -1251,30 +1315,6 @@ export default function InAppCampaignEditPage() {
           ) : null}
         </article>
       ) : null}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void validate()} disabled={saving || loading}>
-          Validate
-        </button>
-        <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void save()} disabled={saving || loading}>
-          {saving ? (isCreateMode ? "Creating..." : "Saving...") : isCreateMode ? "Create" : "Save"}
-        </button>
-        {!isCreateMode ? (
-          <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void activate()} disabled={saving || loading}>
-            Activate
-          </button>
-        ) : null}
-        {!isCreateMode ? (
-          <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void archive()} disabled={saving || loading}>
-            Archive
-          </button>
-        ) : null}
-        {!isCreateMode ? (
-          <Link className="rounded-md border border-stone-300 px-3 py-2 text-sm" href="/releases">
-            Promote...
-          </Link>
-        ) : null}
-      </div>
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}

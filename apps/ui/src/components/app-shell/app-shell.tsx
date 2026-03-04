@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import EnvironmentSelector from "../environment-selector";
 import { cn } from "../../lib/cn";
+import { apiClient } from "../../lib/api";
 import { usePermissions } from "../../lib/permissions";
 
 type NavItem = {
@@ -62,14 +63,12 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/engage/campaigns", label: "Campaigns" },
       { href: "/engage/experiments", label: "Experiments" },
-      { href: "/engagement/inapp/experiment-playground", label: "Experiment Playground" },
-      { href: "/engagement/inapp/apps", label: "Apps" },
-      { href: "/engagement/inapp/placements", label: "Placements" },
-      { href: "/engagement/inapp/templates", label: "Templates" },
-      { href: "/engagement/inapp/reports", label: "Reports" },
-      { href: "/engagement/inapp/events", label: "Events" },
-      { href: "/engagement/inapp/decide-debugger", label: "Decide Debugger" },
-      { href: "/engagement/inapp/events-monitor", label: "Events Monitor" }
+      { href: "/engage/apps", label: "Apps" },
+      { href: "/engage/placements", label: "Placements" },
+      { href: "/engage/templates", label: "Templates" },
+      { href: "/engage/reports", label: "Reports" },
+      { href: "/engage/events", label: "Events" },
+      { href: "/engage/tools", label: "Tools" }
     ]
   },
   {
@@ -116,15 +115,18 @@ const navPermissionByHref: Record<string, string> = {
   "/catalog/content": "catalog.content.read",
   "/engage/campaigns": "engage.campaign.read",
   "/engage/experiments": "experiment.read",
+  "/engage/apps": "engage.app.read",
+  "/engage/placements": "engage.placement.read",
+  "/engage/templates": "engage.template.read",
+  "/engage/reports": "engage.campaign.read",
+  "/engage/events": "engage.campaign.read",
+  "/engage/tools": "engage.campaign.read",
   "/engagement/inapp/experiments": "experiment.read",
-  "/engagement/inapp/experiment-playground": "experiment.read",
   "/engagement/inapp/apps": "engage.app.read",
   "/engagement/inapp/placements": "engage.placement.read",
   "/engagement/inapp/templates": "engage.template.read",
   "/engagement/inapp/reports": "engage.campaign.read",
   "/engagement/inapp/events": "engage.campaign.read",
-  "/engagement/inapp/decide-debugger": "engage.campaign.read",
-  "/engagement/inapp/events-monitor": "engage.campaign.read",
   "/execution/webhooks": "settings.webhooks.read",
   "/settings/integrations/pipes": "settings.pipes.read",
   "/settings/integrations/pipes-callback": "settings.pipes.read",
@@ -137,8 +139,17 @@ const navPermissionByHref: Record<string, string> = {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { hasPermission, loading, me } = usePermissions();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickQuery, setQuickQuery] = useState("");
+  const [quickLoading, setQuickLoading] = useState(false);
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const [quickDecisions, setQuickDecisions] = useState<Array<{ id: string; key: string; name: string }>>([]);
+  const [quickStacks, setQuickStacks] = useState<Array<{ id: string; key: string; name: string }>>([]);
+  const [quickCampaigns, setQuickCampaigns] = useState<Array<{ id: string; key: string; name: string }>>([]);
+  const [quickActiveIndex, setQuickActiveIndex] = useState(0);
   const shouldFilterNav = !loading && Boolean(me);
   const visibleGroups = NAV_GROUPS.map((group) => ({
     ...group,
@@ -158,6 +169,87 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setGroupOpen((previous) => (previous[activeGroup] ? previous : { ...previous, [activeGroup]: true }));
   }, [activeGroup]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setQuickOpen(true);
+      }
+      if (event.key === "Escape") {
+        setQuickOpen(false);
+      }
+      if (!quickOpen) {
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setQuickActiveIndex((current) => current + 1);
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setQuickActiveIndex((current) => Math.max(0, current - 1));
+      }
+      if (event.key === "Enter") {
+        const target = quickItems[Math.min(quickActiveIndex, Math.max(0, quickItems.length - 1))];
+        if (target) {
+          event.preventDefault();
+          setQuickOpen(false);
+          router.push(target.href);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [quickOpen, quickActiveIndex, router]);
+
+  useEffect(() => {
+    if (!quickOpen) {
+      return;
+    }
+    const timeout = window.setTimeout(async () => {
+      setQuickLoading(true);
+      try {
+        const [decisionsResponse, stacksResponse, campaignsResponse] = await Promise.all([
+          hasPermission("decision.read")
+            ? apiClient.decisions.list({ page: 1, limit: 50, q: quickQuery.trim() || undefined })
+            : Promise.resolve({ items: [] }),
+          hasPermission("stack.read")
+            ? apiClient.stacks.list({ page: 1, limit: 50, q: quickQuery.trim() || undefined })
+            : Promise.resolve({ items: [] }),
+          hasPermission("engage.campaign.read")
+            ? apiClient.inapp.campaigns.list({ limit: 50, q: quickQuery.trim() || undefined })
+            : Promise.resolve({ items: [] })
+        ]);
+        setQuickDecisions(decisionsResponse.items.map((item) => ({ id: item.decisionId, key: item.key, name: item.name })));
+        setQuickStacks(stacksResponse.items.map((item) => ({ id: item.stackId, key: item.key, name: item.name })));
+        setQuickCampaigns(campaignsResponse.items.map((item) => ({ id: item.id, key: item.key, name: item.name })));
+        setQuickError(null);
+      } catch (error) {
+        setQuickError(error instanceof Error ? error.message : "Failed to load quick-jump options");
+      } finally {
+        setQuickLoading(false);
+      }
+    }, 150);
+    return () => window.clearTimeout(timeout);
+  }, [quickOpen, quickQuery, hasPermission]);
+
+  const normalizedQuick = quickQuery.trim().toLowerCase();
+  const filteredDecisions = useMemo(() => quickDecisions.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickDecisions]);
+  const filteredStacks = useMemo(() => quickStacks.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickStacks]);
+  const filteredCampaigns = useMemo(() => quickCampaigns.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickCampaigns]);
+  const quickItems = useMemo(
+    () => [
+      ...filteredDecisions.map((item) => ({ type: "decision" as const, id: item.id, key: item.key, name: item.name, href: `/decisions/${item.id}` })),
+      ...filteredStacks.map((item) => ({ type: "stack" as const, id: item.id, key: item.key, name: item.name, href: `/stacks/${item.id}` })),
+      ...filteredCampaigns.map((item) => ({ type: "campaign" as const, id: item.id, key: item.key, name: item.name, href: `/engage/campaigns/${item.id}` }))
+    ],
+    [filteredCampaigns, filteredDecisions, filteredStacks]
+  );
+
+  useEffect(() => {
+    setQuickActiveIndex(0);
+  }, [quickQuery, quickOpen]);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1400px] gap-4 px-3 py-4 md:px-6 md:py-6">
@@ -242,6 +334,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => setQuickOpen(true)}>
+              Cmd/Ctrl+K
+            </button>
             <EnvironmentSelector />
             <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/login">
               Switch User
@@ -259,6 +354,69 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <main className="flex-1">{children}</main>
       </div>
+
+      {quickOpen ? (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/25 p-4 pt-16" onClick={() => setQuickOpen(false)}>
+          <div className="w-full max-w-2xl rounded-lg border border-stone-300 bg-white p-3" onClick={(event) => event.stopPropagation()}>
+            <input
+              autoFocus
+              className="w-full rounded border border-stone-300 px-3 py-2 text-sm"
+              placeholder="Jump to decisions, stacks, campaigns..."
+              value={quickQuery}
+              onChange={(event) => setQuickQuery(event.target.value)}
+            />
+            {quickError ? <p className="mt-2 text-sm text-rose-700">{quickError}</p> : null}
+            {quickLoading ? <p className="mt-2 text-sm text-stone-600">Loading...</p> : null}
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-stone-500">Decisions</p>
+                <div className="space-y-1">
+                  {filteredDecisions.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/decisions/${item.id}`}
+                      className={`block rounded px-2 py-1 text-sm hover:bg-stone-100 ${quickItems[quickActiveIndex]?.href === `/decisions/${item.id}` ? "bg-stone-100" : ""}`}
+                      onClick={() => setQuickOpen(false)}
+                    >
+                      {item.name} <span className="text-xs text-stone-500">({item.key})</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-stone-500">Stacks</p>
+                <div className="space-y-1">
+                  {filteredStacks.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/stacks/${item.id}`}
+                      className={`block rounded px-2 py-1 text-sm hover:bg-stone-100 ${quickItems[quickActiveIndex]?.href === `/stacks/${item.id}` ? "bg-stone-100" : ""}`}
+                      onClick={() => setQuickOpen(false)}
+                    >
+                      {item.name} <span className="text-xs text-stone-500">({item.key})</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-stone-500">Campaigns</p>
+                <div className="space-y-1">
+                  {filteredCampaigns.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/engage/campaigns/${item.id}`}
+                      className={`block rounded px-2 py-1 text-sm hover:bg-stone-100 ${quickItems[quickActiveIndex]?.href === `/engage/campaigns/${item.id}` ? "bg-stone-100" : ""}`}
+                      onClick={() => setQuickOpen(false)}
+                    >
+                      {item.name} <span className="text-xs text-stone-500">({item.key})</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

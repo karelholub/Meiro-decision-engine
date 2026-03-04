@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ExperimentInventoryItem } from "@decisioning/shared";
+import { EndsSoonBadge, HasDraftBadge, NoTrafficBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
@@ -28,13 +29,6 @@ const placementLabel = (placements: string[]) => {
     return placements.join(", ") || "-";
   }
   return `${placements.slice(0, 2).join(", ")} +${placements.length - 2}`;
-};
-
-const statusBadge = (status: string) => {
-  if (status === "ACTIVE") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "DRAFT") return "border-indigo-200 bg-indigo-50 text-indigo-700";
-  if (status === "PAUSED") return "border-amber-200 bg-amber-50 text-amber-700";
-  return "border-stone-200 bg-stone-50 text-stone-700";
 };
 
 const toKeySet = (values: string[]) => new Set(values);
@@ -383,12 +377,12 @@ export default function ExperimentsInventoryPage() {
                       <Link className="font-medium text-ink underline" href={`/engage/experiments/${encodeURIComponent(item.key)}`}>{item.name}</Link>
                       <div className="text-xs text-stone-500">{item.key}</div>
                       <div className="mt-1 flex gap-1 text-[10px]">
-                        {item.hasDraft ? <span className="rounded border border-indigo-200 bg-indigo-50 px-1">Has draft</span> : null}
-                        {endsSoon(item.endAt, 7) ? <span className="rounded border border-amber-200 bg-amber-50 px-1">Ends soon</span> : null}
+                        {item.hasDraft ? <HasDraftBadge /> : null}
+                        {endsSoon(item.endAt, 7) ? <EndsSoonBadge /> : null}
                       </div>
                     </td>
                   ) : null}
-                  {activeColumns.status ? <td className="border-b border-stone-100 px-2 py-2"><span className={`rounded border px-2 py-0.5 text-xs ${statusBadge(item.status)}`}>{item.status}</span></td> : null}
+                  {activeColumns.status ? <td className="border-b border-stone-100 px-2 py-2"><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"} /></td> : null}
                   {activeColumns.appKey ? <td className="border-b border-stone-100 px-2 py-2">{item.appKey ?? "-"}</td> : null}
                   {activeColumns.placements ? <td className="border-b border-stone-100 px-2 py-2">{placementLabel(item.placements)}</td> : null}
                   {activeColumns.variants ? <td className="border-b border-stone-100 px-2 py-2">{formatVariantsSummary(item)}</td> : null}
@@ -400,7 +394,7 @@ export default function ExperimentsInventoryPage() {
                   ) : null}
                   {activeColumns.updated ? <td className="border-b border-stone-100 px-2 py-2">{new Date(item.updatedAt).toLocaleString()}</td> : null}
                   {activeColumns.activeVersion ? <td className="border-b border-stone-100 px-2 py-2">active v{item.activeVersion ?? "-"} / draft v{item.draftVersion ?? "-"}</td> : null}
-                  {activeColumns.health ? <td className="border-b border-stone-100 px-2 py-2 text-xs">No traffic</td> : null}
+                  {activeColumns.health ? <td className="border-b border-stone-100 px-2 py-2 text-xs"><NoTrafficBadge /></td> : null}
                   <td className="border-b border-stone-100 px-2 py-2">
                     <div className="flex flex-wrap gap-1 text-xs">
                       <Link className="rounded border border-stone-300 px-2 py-1" href={`/engage/experiments/${encodeURIComponent(item.key)}`}>Open</Link>

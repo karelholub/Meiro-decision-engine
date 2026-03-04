@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { CatalogContentBlock, CatalogOffer, ExperimentDetails, InAppApplication, InAppPlacement } from "@decisioning/shared";
 import { ConditionBuilder } from "../../../../../components/decision-builder/ConditionBuilder";
+import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
+import { StatusBadge } from "../../../../../components/ui/status-badges";
 import { fieldRegistry } from "../../../../../components/decision-builder/field-registry";
 import { apiClient } from "../../../../../lib/api";
 import { usePermissions } from "../../../../../lib/permissions";
@@ -299,6 +301,17 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   };
 
   const canActivate = Boolean(canActivatePermission && details?.key && validation?.valid && weightSum === 100 && previewRan);
+  const activateDisabledReason = !canActivatePermission
+    ? "Insufficient permission."
+    : !validation
+      ? "Run Validate before activating."
+      : !validation.valid
+        ? "Validation must pass before activation."
+        : weightSum !== 100
+          ? "Weights must sum to 100."
+          : !previewRan
+            ? "Run at least one preview first."
+            : undefined;
 
   const activate = async () => {
     if (!details?.key) return;
@@ -369,6 +382,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
             <p className="text-sm text-stone-600">Focused builder for {isCreateMode ? "new experiment" : details?.key ?? experimentKey}.</p>
           </div>
           <div className="flex gap-2">
+            <StatusBadge status={(details?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"} />
             <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href={isCreateMode ? "/engage/experiments" : `/engage/experiments/${encodeURIComponent(details?.key ?? experimentKey)}`}>
               Back to details
             </Link>
@@ -389,19 +403,23 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
             ))}
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button className="rounded border border-stone-300 px-3 py-1 text-sm" onClick={() => void save()} disabled={!canWrite || saving}>Save</button>
-            <button className="rounded border border-stone-300 px-3 py-1 text-sm" onClick={() => void validate()} disabled={!canWrite || saving}>Validate</button>
-            <button className="rounded border border-emerald-400 px-3 py-1 text-sm text-emerald-700 disabled:opacity-50" onClick={() => void activate()} disabled={!canActivate}>Activate</button>
-            <div className="group relative">
-              <button className="rounded border border-stone-300 px-3 py-1 text-sm">More</button>
-              <div className="invisible absolute right-0 z-10 mt-1 w-44 rounded border border-stone-200 bg-white p-1 text-sm shadow group-hover:visible">
-                <button className="w-full rounded px-2 py-1 text-left hover:bg-stone-100" onClick={() => void pause()} disabled={!canWrite}>Pause</button>
-                <button className="w-full rounded px-2 py-1 text-left hover:bg-stone-100" onClick={() => void archive()} disabled={!canArchive}>Archive</button>
-                <button className="w-full rounded px-2 py-1 text-left hover:bg-stone-100" onClick={() => navigator.clipboard.writeText(advancedJsonText)}>Export JSON</button>
-              </div>
-            </div>
-          </div>
+          <EditorActionBar
+            statusLabel={details?.status ?? form.status ?? "DRAFT"}
+            canSave={canWrite}
+            canValidate={canWrite}
+            showActivate={canActivatePermission}
+            canActivate={canActivate}
+            activateDisabledReason={activateDisabledReason}
+            isSaving={saving}
+            onSave={() => void save()}
+            onValidate={() => void validate()}
+            onActivate={() => void activate()}
+            moreActions={[
+              { key: "pause", label: "Pause", onClick: () => void pause(), hidden: !canWrite },
+              { key: "archive", label: "Archive", onClick: () => void archive(), hidden: !canArchive, danger: true },
+              { key: "export", label: "Export JSON", onClick: () => void navigator.clipboard.writeText(advancedJsonText) }
+            ]}
+          />
         </div>
       </section>
 
