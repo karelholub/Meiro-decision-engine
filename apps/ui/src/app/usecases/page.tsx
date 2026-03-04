@@ -61,7 +61,7 @@ const USE_CASES: UseCase[] = [
       { href: "/engagement/inapp/templates", label: "Templates", requiredPermission: "engage.template.read" },
       { href: "/engagement/inapp/apps", label: "Apps", requiredPermission: "engage.app.read" },
       { href: "/engagement/inapp/placements", label: "Placements", requiredPermission: "engage.placement.read" },
-      { href: "/engagement/inapp/campaigns", label: "Campaigns", requiredPermission: "engage.campaign.read" },
+      { href: "/engage/campaigns", label: "Campaigns", requiredPermission: "engage.campaign.read" },
       { href: "/engagement/inapp/reports", label: "Reports", requiredPermission: "engage.campaign.read" }
     ]
   },

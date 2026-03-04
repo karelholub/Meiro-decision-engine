@@ -793,8 +793,16 @@ export const apiClient = {
         })
     },
     campaigns: {
-      list: (params: { appKey?: string; placementKey?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED" } = {}) =>
-        apiFetch<{ items: InAppCampaign[] }>(`/v1/inapp/campaigns${toQuery(params)}`),
+      list: (params: {
+        appKey?: string;
+        placementKey?: string;
+        status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED";
+        q?: string;
+        limit?: number;
+        cursor?: string;
+        sort?: "updated_desc" | "status" | "name" | "end_at";
+      } = {}) =>
+        apiFetch<{ items: InAppCampaign[]; nextCursor?: string | null }>(`/v1/inapp/campaigns${toQuery(params)}`),
       get: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}`),
       activationPreview: (id: string) =>
         apiFetch<{ item: InAppCampaignActivationPreview }>(`/v1/inapp/campaigns/${id}/activation-preview`),

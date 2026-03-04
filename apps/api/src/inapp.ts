@@ -180,7 +180,11 @@ const inAppCampaignUpsertSchema = z
 const inAppCampaignListQuerySchema = z.object({
   appKey: z.string().optional(),
   placementKey: z.string().optional(),
-  status: z.nativeEnum(InAppCampaignStatus).optional()
+  status: z.nativeEnum(InAppCampaignStatus).optional(),
+  q: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+  sort: z.enum(["updated_desc", "status", "name", "end_at"]).optional()
 });
 
 const templateValidateSchema = z.object({
@@ -1361,21 +1365,59 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
     }
 
+    const limit = parsed.data.limit ?? 100;
+    const offset = parsed.data.cursor ? Number.parseInt(parsed.data.cursor, 10) : 0;
+    const safeOffset = Number.isFinite(offset) && offset > 0 ? offset : 0;
+    const q = parsed.data.q?.trim();
+
+    const orderBy =
+      parsed.data.sort === "status"
+        ? [{ status: "asc" as const }, { name: "asc" as const }]
+        : parsed.data.sort === "name"
+          ? [{ name: "asc" as const }]
+          : parsed.data.sort === "end_at"
+            ? [{ endAt: "asc" as const }, { updatedAt: "desc" as const }]
+            : [{ updatedAt: "desc" as const }];
+
     const items = await prisma.inAppCampaign.findMany({
       where: {
         environment,
         ...(parsed.data.appKey ? { appKey: parsed.data.appKey } : {}),
         ...(parsed.data.placementKey ? { placementKey: parsed.data.placementKey } : {}),
-        ...(parsed.data.status ? { status: parsed.data.status } : {})
+        ...(parsed.data.status ? { status: parsed.data.status } : {}),
+        ...(q
+          ? {
+              OR: [
+                {
+                  key: {
+                    contains: q,
+                    mode: "insensitive" as const
+                  }
+                },
+                {
+                  name: {
+                    contains: q,
+                    mode: "insensitive" as const
+                  }
+                }
+              ]
+            }
+          : {})
       },
       include: {
         variants: true
       },
-      orderBy: [{ priority: "desc" }, { updatedAt: "desc" }]
+      orderBy,
+      skip: safeOffset,
+      take: limit + 1
     });
 
+    const pageItems = items.slice(0, limit);
+    const nextCursor = items.length > limit ? String(safeOffset + limit) : null;
+
     return {
-      items: items.map((item) => serializeCampaign(item))
+      items: pageItems.map((item) => serializeCampaign(item)),
+      nextCursor
     };
   });
 

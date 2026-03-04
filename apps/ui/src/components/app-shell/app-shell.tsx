@@ -60,7 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Engage",
     hint: "In-app campaign lifecycle",
     items: [
-      { href: "/engagement/inapp/campaigns", label: "Campaigns" },
+      { href: "/engage/campaigns", label: "Campaigns" },
       { href: "/engage/experiments", label: "Experiments" },
       { href: "/engagement/inapp/experiment-playground", label: "Experiment Playground" },
       { href: "/engagement/inapp/apps", label: "Apps" },
@@ -114,7 +114,7 @@ const navPermissionByHref: Record<string, string> = {
   "/simulate": "simulator.run",
   "/catalog/offers": "catalog.offer.read",
   "/catalog/content": "catalog.content.read",
-  "/engagement/inapp/campaigns": "engage.campaign.read",
+  "/engage/campaigns": "engage.campaign.read",
   "/engage/experiments": "experiment.read",
   "/engagement/inapp/experiments": "experiment.read",
   "/engagement/inapp/experiment-playground": "experiment.read",
