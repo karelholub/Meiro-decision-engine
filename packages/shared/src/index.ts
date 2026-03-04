@@ -772,3 +772,24 @@ export interface InAppCampaignReport {
   to: string | null;
   series: InAppCampaignSeriesPoint[];
 }
+
+export interface AppEnumSettings {
+  channels: string[];
+  lookupAttributes: string[];
+  locales: string[];
+  deviceTypes: string[];
+  defaultContextAllowlistKeys: string[];
+  commonAudiences: string[];
+}
+
+export interface AppEnumSettingsResponse {
+  environment: DecisionEnvironment;
+  appKey: string | null;
+  defaults: AppEnumSettings;
+  global: AppEnumSettings | null;
+  override: AppEnumSettings | null;
+  effective: AppEnumSettings;
+  updatedAt: string | null;
+}
+
+export * from "./references";

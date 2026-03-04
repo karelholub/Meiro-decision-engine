@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import AppShell from "../components/app-shell/app-shell";
 import { PermissionProvider } from "../lib/permissions";
+import { RegistryProvider } from "../lib/registry";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +14,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en">
       <body>
         <PermissionProvider>
-          <AppShell>{children}</AppShell>
+          <RegistryProvider>
+            <AppShell>{children}</AppShell>
+          </RegistryProvider>
         </PermissionProvider>
       </body>
     </html>

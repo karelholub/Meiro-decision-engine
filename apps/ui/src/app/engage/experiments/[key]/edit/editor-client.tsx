@@ -2,13 +2,18 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { CatalogContentBlock, CatalogOffer, ExperimentDetails, InAppApplication, InAppPlacement } from "@decisioning/shared";
+import type { ExperimentDetails } from "@decisioning/shared";
 import { ConditionBuilder } from "../../../../../components/decision-builder/ConditionBuilder";
 import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
+import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
+import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { StatusBadge } from "../../../../../components/ui/status-badges";
 import { fieldRegistry } from "../../../../../components/decision-builder/field-registry";
 import { apiClient } from "../../../../../lib/api";
+import { useAppEnumSettings } from "../../../../../lib/app-enum-settings";
+import { validateExperimentDependencies } from "../../../../../lib/dependencies";
 import { usePermissions } from "../../../../../lib/permissions";
+import { useRegistry } from "../../../../../lib/registry";
 import {
   applyWeightPreset,
   createEmptyExperimentForm,
@@ -57,13 +62,6 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   const [validation, setValidation] = useState<{ valid: boolean; errors: string[]; warnings: string[] } | null>(null);
   const [lastStepErrors, setLastStepErrors] = useState<Record<string, string>>({});
 
-  const [contentBlocks, setContentBlocks] = useState<CatalogContentBlock[]>([]);
-  const [offers, setOffers] = useState<CatalogOffer[]>([]);
-  const [allContentVersions, setAllContentVersions] = useState<CatalogContentBlock[]>([]);
-  const [allOfferVersions, setAllOfferVersions] = useState<CatalogOffer[]>([]);
-  const [placements, setPlacements] = useState<InAppPlacement[]>([]);
-  const [apps, setApps] = useState<InAppApplication[]>([]);
-
   const [previewIdentityType, setPreviewIdentityType] = useState<"profileId" | "anonymousId" | "lookup">("profileId");
   const [previewIdentityValue, setPreviewIdentityValue] = useState("preview_profile");
   const [previewLookupAttribute, setPreviewLookupAttribute] = useState("email");
@@ -75,28 +73,12 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   const canWrite = hasPermission("experiment.write");
   const canActivatePermission = hasPermission("experiment.activate");
   const canArchive = hasPermission("experiment.archive");
-
-  const loadCatalog = async () => {
-    const [appsResponse, placementsResponse, activeContentResponse, activeOffersResponse, allContentResponse, allOffersResponse] = await Promise.all([
-      apiClient.inapp.apps.list(),
-      apiClient.inapp.placements.list(),
-      apiClient.catalog.content.list({ status: "ACTIVE" }),
-      apiClient.catalog.offers.list({ status: "ACTIVE" }),
-      apiClient.catalog.content.list(),
-      apiClient.catalog.offers.list()
-    ]);
-    setApps(appsResponse.items);
-    setPlacements(placementsResponse.items);
-    setContentBlocks(activeContentResponse.items);
-    setOffers(activeOffersResponse.items);
-    setAllContentVersions(allContentResponse.items);
-    setAllOfferVersions(allOffersResponse.items);
-  };
+  const registry = useRegistry();
+  const { settings: enumSettings } = useAppEnumSettings(form.scope.appKey || undefined);
 
   const load = async () => {
     setLoading(true);
     try {
-      await loadCatalog();
       if (!isCreateMode) {
         const response = await apiClient.experiments.getByKey(experimentKey);
         setDetails(response.item);
@@ -129,36 +111,6 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
     void load();
   }, [experimentKey]);
 
-  const contentVersionsByKey = useMemo(() => {
-    const grouped = new Map<string, number[]>();
-    for (const item of allContentVersions) {
-      const list = grouped.get(item.key) ?? [];
-      if (!list.includes(item.version)) {
-        list.push(item.version);
-      }
-      grouped.set(item.key, list);
-    }
-    for (const list of grouped.values()) {
-      list.sort((a, b) => b - a);
-    }
-    return grouped;
-  }, [allContentVersions]);
-
-  const offerVersionsByKey = useMemo(() => {
-    const grouped = new Map<string, number[]>();
-    for (const item of allOfferVersions) {
-      const list = grouped.get(item.key) ?? [];
-      if (!list.includes(item.version)) {
-        list.push(item.version);
-      }
-      grouped.set(item.key, list);
-    }
-    for (const list of grouped.values()) {
-      list.sort((a, b) => b - a);
-    }
-    return grouped;
-  }, [allOfferVersions]);
-
   const validateStepLight = (step: StepId): Record<string, string> => {
     const errors: Record<string, string> = {};
     if (step === "basics") {
@@ -176,7 +128,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
         errors.weights = "Weights must sum to 100";
       }
       form.variants.forEach((variant, index) => {
-        if (!variant.treatment.contentBlock.key.trim()) {
+        if (!variant.treatment.contentRef.key.trim()) {
           errors[`variant.${index}.content`] = "Content block required";
         }
       });
@@ -372,6 +324,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   };
 
   const containsAdvancedOnlyFields = hasAdvancedOnlyFields(form.advancedExtras);
+  const dependencyItems = useMemo(() => validateExperimentDependencies(registry, formToExperimentJson(form)), [registry, form]);
 
   return (
     <div className="space-y-4">
@@ -451,20 +404,20 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
                   <label className="text-sm">App Key
                     <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={form.scope.appKey} onChange={(event) => setForm((current) => ({ ...current, scope: { ...current.scope, appKey: event.target.value } }))}>
                       <option value="">Select app</option>
-                      {apps.map((app) => <option key={app.id} value={app.key}>{app.name} ({app.key})</option>)}
+                      {registry.list("app").map((app) => <option key={app.key} value={app.key}>{app.name} ({app.key})</option>)}
                     </select>
                   </label>
                   <div className="text-sm">Channels
                     <div className="mt-1 flex gap-3">
-                      {(["inapp", "web", "app"] as const).map((channel) => (
+                      {enumSettings.channels.map((channel) => (
                         <label key={channel} className="flex items-center gap-1"><input type="checkbox" checked={form.scope.channels.includes(channel)} onChange={(event) => setForm((current) => ({ ...current, scope: { ...current.scope, channels: event.target.checked ? [...new Set([...current.scope.channels, channel])] : current.scope.channels.filter((entry) => entry !== channel) } }))} />{channel}</label>
                       ))}
                     </div>
                   </div>
                 </div>
                 <div className="max-h-48 overflow-auto rounded border border-stone-200 p-2">
-                  {placements.map((placement) => (
-                    <label key={placement.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.scope.placements.includes(placement.key)} onChange={(event) => setForm((current) => ({ ...current, scope: { ...current.scope, placements: event.target.checked ? [...new Set([...current.scope.placements, placement.key])] : current.scope.placements.filter((entry) => entry !== placement.key) } }))} />{placement.name} ({placement.key})</label>
+                  {registry.list("placement").map((placement) => (
+                    <label key={placement.key} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.scope.placements.includes(placement.key)} onChange={(event) => setForm((current) => ({ ...current, scope: { ...current.scope, placements: event.target.checked ? [...new Set([...current.scope.placements, placement.key])] : current.scope.placements.filter((entry) => entry !== placement.key) } }))} />{placement.name} ({placement.key})</label>
                   ))}
                 </div>
                 {lastStepErrors.placements ? <p className="text-xs text-rose-700">{lastStepErrors.placements}</p> : null}
@@ -496,36 +449,38 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
                       <label className="text-sm">Weight<input type="number" className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={variant.weight} onChange={(event) => setForm((current) => ({ ...current, variants: current.variants.map((entry, entryIndex) => entryIndex === index ? { ...entry, weight: Number(event.target.value) || 0 } : entry) }))} /></label>
                     </div>
                     <label className="block text-sm">Content block
-                      <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={variant.treatment.contentBlock.key} onChange={(event) => setForm((current) => ({ ...current, variants: current.variants.map((entry, entryIndex) => entryIndex === index ? { ...entry, treatment: { ...entry.treatment, contentBlock: { ...entry.treatment.contentBlock, key: event.target.value } } } : entry) }))}>
-                        <option value="">Select content</option>
-                        {contentBlocks.map((content) => <option key={content.id} value={content.key}>{content.name} ({content.key}) v{content.version}</option>)}
-                      </select>
-                    </label>
-                    <label className="block text-xs">Pin content version
-                      <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={variant.treatment.contentBlock.version ?? ""} onChange={(event) => setForm((current) => ({ ...current, variants: current.variants.map((entry, entryIndex) => {
-                        if (entryIndex !== index) return entry;
-                        const version = event.target.value ? Number(event.target.value) : undefined;
-                        return { ...entry, treatment: { ...entry.treatment, contentBlock: { key: entry.treatment.contentBlock.key, ...(version ? { version } : {}) } } };
-                      }) }))}>
-                        <option value="">Active</option>
-                        {(contentVersionsByKey.get(variant.treatment.contentBlock.key) ?? []).map((version) => <option key={version} value={version}>v{version}</option>)}
-                      </select>
+                      <RefSelect
+                        type="content"
+                        value={variant.treatment.contentRef}
+                        onChange={(nextRef) =>
+                          setForm((current) => ({
+                            ...current,
+                            variants: current.variants.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? { ...entry, treatment: { ...entry.treatment, contentRef: nextRef ?? { type: "content", key: "" } } }
+                                : entry
+                            )
+                          }))
+                        }
+                        filter={{ status: "ACTIVE" }}
+                        allowVersionPin
+                      />
                     </label>
                     <label className="block text-sm">Offer (optional)
-                      <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={variant.treatment.offer?.key ?? ""} onChange={(event) => setForm((current) => ({ ...current, variants: current.variants.map((entry, entryIndex) => entryIndex === index ? { ...entry, treatment: { ...entry.treatment, offer: event.target.value ? { key: event.target.value } : undefined } } : entry) }))}>
-                        <option value="">None</option>
-                        {offers.map((offer) => <option key={offer.id} value={offer.key}>{offer.name} ({offer.key}) v{offer.version}</option>)}
-                      </select>
-                    </label>
-                    <label className="block text-xs">Pin offer version
-                      <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={variant.treatment.offer?.version ?? ""} onChange={(event) => setForm((current) => ({ ...current, variants: current.variants.map((entry, entryIndex) => {
-                        if (entryIndex !== index || !entry.treatment.offer?.key) return entry;
-                        const version = event.target.value ? Number(event.target.value) : undefined;
-                        return { ...entry, treatment: { ...entry.treatment, offer: { key: entry.treatment.offer.key, ...(version ? { version } : {}) } } };
-                      }) }))} disabled={!variant.treatment.offer?.key}>
-                        <option value="">Active</option>
-                        {(offerVersionsByKey.get(variant.treatment.offer?.key ?? "") ?? []).map((version) => <option key={version} value={version}>v{version}</option>)}
-                      </select>
+                      <RefSelect
+                        type="offer"
+                        value={variant.treatment.offerRef ?? null}
+                        onChange={(nextRef) =>
+                          setForm((current) => ({
+                            ...current,
+                            variants: current.variants.map((entry, entryIndex) =>
+                              entryIndex === index ? { ...entry, treatment: { ...entry.treatment, offerRef: nextRef ?? undefined } } : entry
+                            )
+                          }))
+                        }
+                        filter={{ status: "ACTIVE" }}
+                        allowVersionPin
+                      />
                     </label>
                     <label className="block text-sm">Tags<input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={variant.treatment.tags.join(", ")} onChange={(event) => setForm((current) => ({ ...current, variants: current.variants.map((entry, entryIndex) => entryIndex === index ? { ...entry, treatment: { ...entry.treatment, tags: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } } : entry) }))} /></label>
                     <div className="flex gap-2">
@@ -533,7 +488,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
                     </div>
                   </article>
                 ))}
-                <button className="rounded border border-stone-300 px-3 py-1 text-sm" onClick={() => setForm((current) => ({ ...current, variants: [...current.variants, { id: variantLabel(current.variants.length), weight: 0, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } }] }))}>Add variant</button>
+                <button className="rounded border border-stone-300 px-3 py-1 text-sm" onClick={() => setForm((current) => ({ ...current, variants: [...current.variants, { id: variantLabel(current.variants.length), weight: 0, treatment: { type: "inapp_message", contentRef: { type: "content", key: "" }, tags: [] } }] }))}>Add variant</button>
                 {lastStepErrors.weights ? <p className="text-xs text-rose-700">{lastStepErrors.weights}</p> : null}
               </div>
             ) : null}
@@ -599,6 +554,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
               <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={nextStep} disabled={activeStep === "review"}>Next</button>
             </div>
           </main>
+          <DependenciesPanel items={dependencyItems} />
         </section>
       ) : null}
 
@@ -631,7 +587,15 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
                 <option value="lookup">lookup</option>
               </select>
             </label>
-            {previewIdentityType === "lookup" ? <label className="text-sm">Lookup attribute<input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={previewLookupAttribute} onChange={(event) => setPreviewLookupAttribute(event.target.value)} /></label> : null}
+            {previewIdentityType === "lookup" ? (
+              <label className="text-sm">Lookup attribute
+                <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={previewLookupAttribute} onChange={(event) => setPreviewLookupAttribute(event.target.value)}>
+                  {enumSettings.lookupAttributes.map((attribute) => (
+                    <option key={attribute} value={attribute}>{attribute}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <label className="text-sm">Identity value<input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={previewIdentityValue} onChange={(event) => setPreviewIdentityValue(event.target.value)} /></label>
           </div>
           <label className="block text-sm">Context JSON<textarea className="mt-1 h-28 w-full rounded border border-stone-300 px-2 py-1 font-mono text-xs" value={previewContextText} onChange={(event) => setPreviewContextText(event.target.value)} /></label>

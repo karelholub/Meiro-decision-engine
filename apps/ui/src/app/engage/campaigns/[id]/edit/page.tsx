@@ -4,20 +4,21 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type {
-  CatalogContentBlock,
-  CatalogOffer,
-  InAppApplication,
   InAppAuditLog,
   InAppCampaign,
   InAppCampaignActivationPreview,
   InAppCampaignVersion,
-  InAppPlacement,
-  InAppTemplate
+  Ref
 } from "@decisioning/shared";
+import { parseLegacyKey, toLegacyKey } from "@decisioning/shared";
+import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
+import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
 import { apiClient } from "../../../../../lib/api";
+import { validateCampaignDependencies } from "../../../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
 import { usePermissions } from "../../../../../lib/permissions";
+import { useRegistry } from "../../../../../lib/registry";
 
 type VariantEditor = {
   variantKey: string;
@@ -156,23 +157,18 @@ export default function InAppCampaignEditPage() {
   const [activeTab, setActiveTab] = useState<"basic" | "variants" | "bindings" | "governance">("basic");
 
   const [campaign, setCampaign] = useState<InAppCampaign | null>(null);
-  const [apps, setApps] = useState<InAppApplication[]>([]);
-  const [placements, setPlacements] = useState<InAppPlacement[]>([]);
-  const [templates, setTemplates] = useState<InAppTemplate[]>([]);
-  const [contentBlocks, setContentBlocks] = useState<CatalogContentBlock[]>([]);
-  const [offers, setOffers] = useState<CatalogOffer[]>([]);
 
   const [key, setKey] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<"DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED">("DRAFT");
-  const [appKey, setAppKey] = useState("");
-  const [placementKey, setPlacementKey] = useState("");
-  const [templateKey, setTemplateKey] = useState("");
-  const [contentKey, setContentKey] = useState("");
-  const [offerKey, setOfferKey] = useState("");
+  const [appRef, setAppRef] = useState<Ref | null>(null);
+  const [placementRef, setPlacementRef] = useState<Ref | null>(null);
+  const [templateRef, setTemplateRef] = useState<Ref | null>(null);
+  const [contentRef, setContentRef] = useState<Ref | null>(null);
+  const [offerRef, setOfferRef] = useState<Ref | null>(null);
   const [experimentMode, setExperimentMode] = useState<"static" | "experiment">("static");
-  const [experimentKey, setExperimentKey] = useState("");
+  const [experimentRef, setExperimentRef] = useState<Ref | null>(null);
   const [priority, setPriority] = useState("0");
   const [ttlSeconds, setTtlSeconds] = useState("3600");
   const [holdoutEnabled, setHoldoutEnabled] = useState(false);
@@ -196,23 +192,23 @@ export default function InAppCampaignEditPage() {
   const canActivatePermission = hasPermission("engage.campaign.activate");
   const canArchive = hasPermission("engage.campaign.archive");
   const canPromote = hasPermission("promotion.create");
+  const registry = useRegistry();
+  const dependencyItems = useMemo(
+    () =>
+      validateCampaignDependencies(registry, {
+        placementKey: placementRef ? toLegacyKey(placementRef) : "",
+        templateKey: templateRef ? toLegacyKey(templateRef) : "",
+        contentKey: experimentMode === "static" ? (contentRef ? toLegacyKey(contentRef) : null) : null,
+        offerKey: experimentMode === "static" ? (offerRef ? toLegacyKey(offerRef) : null) : null,
+        experimentKey: experimentMode === "experiment" ? (experimentRef ? toLegacyKey(experimentRef) : null) : null
+      }),
+    [registry, placementRef, templateRef, contentRef, offerRef, experimentMode, experimentRef]
+  );
 
   const load = async () => {
     setLoading(true);
     try {
-      const [appsResponse, placementsResponse, templatesResponse, contentResponse, offersResponse] = await Promise.all([
-        apiClient.inapp.apps.list(),
-        apiClient.inapp.placements.list(),
-        apiClient.inapp.templates.list(),
-        apiClient.catalog.content.list(),
-        apiClient.catalog.offers.list()
-      ]);
-
-      setApps(appsResponse.items);
-      setPlacements(placementsResponse.items);
-      setTemplates(templatesResponse.items);
-      setContentBlocks(contentResponse.items);
-      setOffers(offersResponse.items);
+      await registry.loadAll();
       if (isCreateMode) {
         setCampaign(null);
         setVersions([]);
@@ -222,13 +218,16 @@ export default function InAppCampaignEditPage() {
         setName("");
         setDescription("");
         setStatus("DRAFT");
-        setAppKey(appsResponse.items[0]?.key ?? "");
-        setPlacementKey(placementsResponse.items[0]?.key ?? "");
-        setTemplateKey(templatesResponse.items[0]?.key ?? "");
-        setContentKey("");
-        setOfferKey("");
+        const firstApp = registry.list("app")[0];
+        const firstPlacement = registry.list("placement")[0];
+        const firstTemplate = registry.list("template")[0];
+        setAppRef(firstApp ? { type: "app", key: firstApp.key } : null);
+        setPlacementRef(firstPlacement ? { type: "placement", key: firstPlacement.key } : null);
+        setTemplateRef(firstTemplate ? { type: "template", key: firstTemplate.key } : null);
+        setContentRef(null);
+        setOfferRef(null);
         setExperimentMode("static");
-        setExperimentKey("");
+        setExperimentRef(null);
         setPriority("0");
         setTtlSeconds("3600");
         setHoldoutEnabled(false);
@@ -266,13 +265,13 @@ export default function InAppCampaignEditPage() {
         setName(item.name);
         setDescription(item.description ?? "");
         setStatus(item.status);
-        setAppKey(item.appKey);
-        setPlacementKey(item.placementKey);
-        setTemplateKey(item.templateKey);
-        setContentKey(item.contentKey ?? "");
-        setOfferKey(item.offerKey ?? "");
+        setAppRef(parseLegacyKey("app", item.appKey));
+        setPlacementRef(parseLegacyKey("placement", item.placementKey));
+        setTemplateRef(parseLegacyKey("template", item.templateKey));
+        setContentRef(item.contentKey ? parseLegacyKey("content", item.contentKey) : null);
+        setOfferRef(item.offerKey ? parseLegacyKey("offer", item.offerKey) : null);
         setExperimentMode(item.experimentKey ? "experiment" : "static");
-        setExperimentKey(item.experimentKey ?? "");
+        setExperimentRef(item.experimentKey ? parseLegacyKey("experiment", item.experimentKey) : null);
         setPriority(String(item.priority));
         setTtlSeconds(String(item.ttlSeconds));
         setHoldoutEnabled(item.holdoutEnabled);
@@ -414,12 +413,12 @@ export default function InAppCampaignEditPage() {
       name: name.trim(),
       description: description.trim() || undefined,
       status,
-      appKey: appKey.trim(),
-      placementKey: placementKey.trim(),
-      templateKey: templateKey.trim(),
-      contentKey: experimentMode === "static" ? contentKey.trim() || undefined : undefined,
-      offerKey: experimentMode === "static" ? offerKey.trim() || undefined : undefined,
-      experimentKey: experimentMode === "experiment" ? experimentKey.trim() || undefined : undefined,
+      appKey: appRef ? toLegacyKey(appRef) : "",
+      placementKey: placementRef ? toLegacyKey(placementRef) : "",
+      templateKey: templateRef ? toLegacyKey(templateRef) : "",
+      contentKey: experimentMode === "static" ? (contentRef ? toLegacyKey(contentRef) : undefined) : undefined,
+      offerKey: experimentMode === "static" ? (offerRef ? toLegacyKey(offerRef) : undefined) : undefined,
+      experimentKey: experimentMode === "experiment" ? (experimentRef ? toLegacyKey(experimentRef) : undefined) : undefined,
       priority: Number.parseInt(priority, 10) || 0,
       ttlSeconds: Number.parseInt(ttlSeconds, 10) || 3600,
       holdoutEnabled,
@@ -713,8 +712,9 @@ export default function InAppCampaignEditPage() {
       </div>
 
       {activeTab === "basic" ? (
-        <article className="panel grid gap-3 p-4 md:grid-cols-3">
-          <label className="flex flex-col gap-1 text-sm">
+        <>
+          <article className="panel grid gap-3 p-4 md:grid-cols-3">
+            <label className="flex flex-col gap-1 text-sm">
             Key
             <input value={key} onChange={(event) => setKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
           </label>
@@ -738,44 +738,15 @@ export default function InAppCampaignEditPage() {
 
           <label className="flex flex-col gap-1 text-sm">
             App
-            <select value={appKey} onChange={(event) => setAppKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
-              <option value="">Select app</option>
-              {apps.map((app) => (
-                <option key={app.id} value={app.key}>
-                  {app.key}
-                </option>
-              ))}
-            </select>
+            <RefSelect type="app" value={appRef} onChange={setAppRef} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Placement
-            <select
-              value={placementKey}
-              onChange={(event) => setPlacementKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            >
-              <option value="">Select placement</option>
-              {placements.map((placement) => (
-                <option key={placement.id} value={placement.key}>
-                  {placement.key}
-                </option>
-              ))}
-            </select>
+            <RefSelect type="placement" value={placementRef} onChange={setPlacementRef} filter={{ appKey: appRef?.key }} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Template
-            <select
-              value={templateKey}
-              onChange={(event) => setTemplateKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            >
-              <option value="">Select template</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.key}>
-                  {template.key}
-                </option>
-              ))}
-            </select>
+            <RefSelect type="template" value={templateRef} onChange={setTemplateRef} />
           </label>
           <div className="md:col-span-3 rounded-md border border-stone-200 bg-stone-50 p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Content Mode</p>
@@ -802,46 +773,31 @@ export default function InAppCampaignEditPage() {
           {experimentMode === "experiment" ? (
             <label className="flex flex-col gap-1 text-sm">
               Experiment Key
-              <input
-                value={experimentKey}
-                onChange={(event) => setExperimentKey(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
-                placeholder="home_top_banner_exp"
-              />
+              <RefSelect type="experiment" value={experimentRef} onChange={setExperimentRef} filter={{ status: "ACTIVE", appKey: appRef?.key }} />
             </label>
           ) : null}
 
           <label className="flex flex-col gap-1 text-sm">
             Content Key (optional)
-            <select
-              value={contentKey}
-              onChange={(event) => setContentKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+            <RefSelect
+              type="content"
+              value={contentRef}
+              onChange={setContentRef}
+              filter={{ status: "ACTIVE" }}
               disabled={experimentMode === "experiment"}
-            >
-              <option value="">None (use variants)</option>
-              {[...new Set(contentBlocks.map((item) => item.key))].map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))}
-            </select>
+              allowVersionPin
+            />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Offer Key (optional)
-            <select
-              value={offerKey}
-              onChange={(event) => setOfferKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+            <RefSelect
+              type="offer"
+              value={offerRef}
+              onChange={setOfferRef}
+              filter={{ status: "ACTIVE" }}
               disabled={experimentMode === "experiment"}
-            >
-              <option value="">None</option>
-              {[...new Set(offers.map((item) => item.key))].map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))}
-            </select>
+              allowVersionPin
+            />
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
@@ -926,7 +882,7 @@ export default function InAppCampaignEditPage() {
             />
           </label>
 
-          <label className="flex flex-col gap-1 text-sm md:col-span-3">
+            <label className="flex flex-col gap-1 text-sm md:col-span-3">
             Description
             <textarea
               value={description}
@@ -934,7 +890,9 @@ export default function InAppCampaignEditPage() {
               className="min-h-24 rounded-md border border-stone-300 px-2 py-1"
             />
           </label>
-        </article>
+          </article>
+          <DependenciesPanel items={dependencyItems} />
+        </>
       ) : null}
 
       {activeTab === "variants" ? (

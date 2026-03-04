@@ -1,5 +1,7 @@
 import { getEnvironment } from "./environment";
 import type {
+  AppEnumSettings,
+  AppEnumSettingsResponse,
   ActivationPreviewResponse,
   CatalogTagsResponse,
   CatalogContentBlock,
@@ -1235,6 +1237,13 @@ export const apiClient = {
       }>(`/v1/dlq/metrics`)
   },
   settings: {
+    getAppSettings: (params: { appKey?: string } = {}) =>
+      apiFetch<AppEnumSettingsResponse>(`/v1/settings/app${toQuery(params)}`),
+    saveAppSettings: (settings: AppEnumSettings, appKey?: string) =>
+      apiFetch<AppEnumSettingsResponse>(`/v1/settings/app`, {
+        method: "PUT",
+        body: JSON.stringify({ settings, ...(appKey?.trim() ? { appKey: appKey.trim() } : {}) })
+      }),
     getRuntimeSettings: () => apiFetch<RuntimeSettingsResponse>(`/v1/settings/runtime`),
     saveRuntimeSettings: (settings: RuntimeSettingsPayload) =>
       apiFetch<RuntimeSettingsResponse>(`/v1/settings/runtime`, {

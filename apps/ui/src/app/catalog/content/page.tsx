@@ -2,9 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { CatalogContentBlock } from "@decisioning/shared";
+import { DependenciesPanel } from "../../../components/registry/DependenciesPanel";
 import { apiClient } from "../../../lib/api";
+import { useAppEnumSettings } from "../../../lib/app-enum-settings";
+import { validateContentDependencies } from "../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
+import { useRegistry } from "../../../lib/registry";
 import { Button } from "../../../components/ui/button";
 import { CatalogActionBar, ContentBlockEditor, PreviewPane, type TokenBindingRow } from "../../../components/catalog";
 import {
@@ -79,6 +83,7 @@ const parsePayloadOrThrow = (editor: ContentEditorState) => {
 
 export default function CatalogContentPage() {
   const { hasPermission } = usePermissions();
+  const registry = useRegistry();
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [items, setItems] = useState<CatalogContentBlock[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -106,6 +111,7 @@ export default function CatalogContentPage() {
 
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [archiveConfirmKey, setArchiveConfirmKey] = useState("");
+  const { settings: enumSettings } = useAppEnumSettings();
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -145,6 +151,10 @@ export default function CatalogContentPage() {
   }, [environment]);
 
   const selectedItem = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
+  const dependencyItems = useMemo(
+    () => validateContentDependencies(registry, { templateId: editor.templateId }),
+    [registry, editor.templateId]
+  );
 
   const versionsForKey = useMemo(() => {
     const key = editor.key.trim();
@@ -516,7 +526,9 @@ export default function CatalogContentPage() {
           advancedReasons={advancedReasons}
           showAdvanced={showAdvanced}
           onToggleAdvanced={() => setShowAdvanced((current) => !current)}
+          localeOptions={enumSettings.locales}
         />
+        <DependenciesPanel items={dependencyItems} />
       </div>
 
       <PreviewPane

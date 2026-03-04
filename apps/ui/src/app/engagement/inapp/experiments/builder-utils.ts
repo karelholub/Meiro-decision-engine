@@ -1,4 +1,5 @@
-import type { ExperimentDefinition } from "@decisioning/shared";
+import type { ExperimentDefinition, Ref } from "@decisioning/shared";
+import { parseLegacyKey, toLegacyKey } from "@decisioning/shared";
 import type { ConditionRow } from "../../../../components/decision-builder/types";
 import { createUuid } from "../../../../components/decision-builder/wizard-utils";
 
@@ -10,7 +11,7 @@ export interface ExperimentDraftForm {
   scope: {
     appKey: string;
     placements: string[];
-    channels: Array<"inapp" | "web" | "app">;
+    channels: string[];
   };
   population: {
     audiencesAny: string[];
@@ -27,8 +28,8 @@ export interface ExperimentDraftForm {
     weight: number;
     treatment: {
       type: "inapp_message";
-      contentBlock: { key: string; version?: number };
-      offer?: { key: string; version?: number };
+      contentRef: Ref;
+      offerRef?: Ref;
       tags: string[];
     };
   }>;
@@ -93,13 +94,15 @@ export const hasAdvancedOnlyFields = (extras: Record<string, unknown> | undefine
 
 const defaultVariantId = (index: number) => String.fromCharCode(65 + index) || `V${index + 1}`;
 
+const emptyContentRef = (): Ref => ({ type: "content", key: "" });
+
 const defaultVariants = () => [
   {
     id: "A",
     weight: 50,
     treatment: {
       type: "inapp_message" as const,
-      contentBlock: { key: "" },
+      contentRef: emptyContentRef(),
       tags: []
     }
   },
@@ -108,7 +111,7 @@ const defaultVariants = () => [
     weight: 50,
     treatment: {
       type: "inapp_message" as const,
-      contentBlock: { key: "" },
+      contentRef: emptyContentRef(),
       tags: []
     }
   }
@@ -210,14 +213,14 @@ export const experimentJsonToForm = (json: unknown): ExperimentDraftForm => {
         weight: toNumber(variant.weight, 0),
         treatment: {
           type: "inapp_message" as const,
-          contentBlock: {
-            key: typeof treatment.contentKey === "string" ? treatment.contentKey : "",
+          contentRef: {
+            ...parseLegacyKey("content", typeof treatment.contentKey === "string" ? treatment.contentKey : ""),
             ...(Number.isFinite(contentVersion) ? { version: contentVersion } : {})
           },
           ...(typeof treatment.offerKey === "string"
             ? {
-                offer: {
-                  key: treatment.offerKey,
+                offerRef: {
+                  ...parseLegacyKey("offer", treatment.offerKey),
                   ...(Number.isFinite(offerVersion) ? { version: offerVersion } : {})
                 }
               }
@@ -280,7 +283,7 @@ export const experimentJsonToForm = (json: unknown): ExperimentDraftForm => {
     scope: {
       appKey: typeof scope.appKey === "string" ? scope.appKey : "",
       placements: toStringArray(scope.placements),
-      channels: toStringArray(scope.channels).filter((entry): entry is "inapp" | "web" | "app" => ["inapp", "web", "app"].includes(entry))
+      channels: toStringArray(scope.channels)
     },
     population: {
       audiencesAny: toStringArray(eligibility.audiencesAny),
@@ -370,10 +373,10 @@ export const formToExperimentJson = (form: ExperimentDraftForm): ExperimentDefin
         weight: Number(variant.weight) || 0,
         treatment: {
           type: "inapp_message",
-          contentKey: variant.treatment.contentBlock.key,
-          ...(variant.treatment.contentBlock.version ? { contentVersion: variant.treatment.contentBlock.version } : {}),
-          ...(variant.treatment.offer?.key ? { offerKey: variant.treatment.offer.key } : {}),
-          ...(variant.treatment.offer?.version ? { offerVersion: variant.treatment.offer.version } : {}),
+          contentKey: toLegacyKey(variant.treatment.contentRef),
+          ...(variant.treatment.contentRef.version ? { contentVersion: variant.treatment.contentRef.version } : {}),
+          ...(variant.treatment.offerRef?.key ? { offerKey: toLegacyKey(variant.treatment.offerRef) } : {}),
+          ...(variant.treatment.offerRef?.version ? { offerVersion: variant.treatment.offerRef.version } : {}),
           tags: variant.treatment.tags
         }
       };
@@ -439,20 +442,20 @@ export const normalizeWeights = (variants: ExperimentDraftForm["variants"]): Exp
 export const applyWeightPreset = (preset: "ab_50_50" | "abc_33" | "80_20"): ExperimentDraftForm["variants"] => {
   if (preset === "ab_50_50") {
     return [
-      { id: "A", weight: 50, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } },
-      { id: "B", weight: 50, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } }
+      { id: "A", weight: 50, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } },
+      { id: "B", weight: 50, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } }
     ];
   }
   if (preset === "80_20") {
     return [
-      { id: "A", weight: 80, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } },
-      { id: "B", weight: 20, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } }
+      { id: "A", weight: 80, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } },
+      { id: "B", weight: 20, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } }
     ];
   }
   return [
-    { id: "A", weight: 34, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } },
-    { id: "B", weight: 33, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } },
-    { id: "C", weight: 33, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } }
+    { id: "A", weight: 34, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } },
+    { id: "B", weight: 33, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } },
+    { id: "C", weight: 33, treatment: { type: "inapp_message", contentRef: emptyContentRef(), tags: [] } }
   ];
 };
 

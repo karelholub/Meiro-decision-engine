@@ -9,6 +9,7 @@ type LocaleTabsEditorProps = {
   schemaFields: SchemaField[];
   localesJson: Record<string, unknown>;
   activeLocale: string;
+  localeOptions?: string[];
   advancedOnly: boolean;
   onActiveLocaleChange: (locale: string) => void;
   onLocalesChange: (next: Record<string, unknown>) => void;
@@ -18,6 +19,7 @@ export function LocaleTabsEditor({
   schemaFields,
   localesJson,
   activeLocale,
+  localeOptions,
   advancedOnly,
   onActiveLocaleChange,
   onLocalesChange
@@ -64,12 +66,20 @@ export function LocaleTabsEditor({
         <input
           id="locale-add-input"
           aria-label="Add locale (de, fr)"
+          list="catalog-content-locale-options"
           value={pendingLocale}
           onChange={(event) => setPendingLocale(event.target.value)}
           className="rounded-md border border-stone-300 px-2 py-1 text-sm"
           placeholder="Add locale (de, fr)"
           disabled={advancedOnly}
         />
+        {localeOptions && localeOptions.length > 0 ? (
+          <datalist id="catalog-content-locale-options">
+            {localeOptions.map((locale) => (
+              <option key={locale} value={locale} />
+            ))}
+          </datalist>
+        ) : null}
         <Button
           variant="outline"
           type="button"

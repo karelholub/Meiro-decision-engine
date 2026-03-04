@@ -7,6 +7,7 @@ import EnvironmentSelector from "../environment-selector";
 import { cn } from "../../lib/cn";
 import { apiClient } from "../../lib/api";
 import { usePermissions } from "../../lib/permissions";
+import { RegistryHealthWidget } from "../registry/RegistryHealthWidget";
 
 type NavItem = {
   href: string;
@@ -417,6 +418,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       ) : null}
+      <RegistryHealthWidget />
     </div>
   );
 }

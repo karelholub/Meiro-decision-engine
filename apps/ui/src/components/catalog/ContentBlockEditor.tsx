@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, type KeyboardEvent } from "react";
+import { parseLegacyKey } from "@decisioning/shared";
 import type { CatalogContentBlock } from "@decisioning/shared";
+import { RefSelect } from "../registry/RefSelect";
 import type { SchemaField } from "./utils";
 import { LocaleTabsEditor } from "./LocaleTabsEditor";
 import { TokenBindingsTable, type TokenBindingRow } from "./TokenBindingsTable";
@@ -40,6 +42,7 @@ type ContentBlockEditorProps = {
   advancedReasons: string[];
   showAdvanced: boolean;
   onToggleAdvanced: () => void;
+  localeOptions?: string[];
 };
 
 export function ContentBlockEditor({
@@ -63,7 +66,8 @@ export function ContentBlockEditor({
   advancedOnly,
   advancedReasons,
   showAdvanced,
-  onToggleAdvanced
+  onToggleAdvanced,
+  localeOptions
 }: ContentBlockEditorProps) {
   const [pendingTag, setPendingTag] = useState("");
 
@@ -129,10 +133,11 @@ export function ContentBlockEditor({
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Template ID
-          <input
-            value={value.templateId}
-            onChange={(event) => onChange({ templateId: event.target.value })}
-            className="rounded-md border border-stone-300 px-2 py-1"
+          <RefSelect
+            type="template"
+            value={value.templateId ? parseLegacyKey("template", value.templateId) : null}
+            onChange={(nextRef) => onChange({ templateId: nextRef?.key ?? "" })}
+            filter={{ status: "ACTIVE" }}
             disabled={readOnly}
           />
         </label>
@@ -204,6 +209,7 @@ export function ContentBlockEditor({
         schemaFields={schemaFields}
         localesJson={localeData}
         activeLocale={activeLocale}
+        localeOptions={localeOptions}
         advancedOnly={advancedOnly || Boolean(readOnly)}
         onActiveLocaleChange={onActiveLocaleChange}
         onLocalesChange={onLocaleDataChange}

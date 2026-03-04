@@ -96,8 +96,8 @@ describe("weights utils", () => {
 
   it("handles zero totals", () => {
     const adjusted = normalizeWeights([
-      { id: "A", weight: 0, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } },
-      { id: "B", weight: 0, treatment: { type: "inapp_message", contentBlock: { key: "" }, tags: [] } }
+      { id: "A", weight: 0, treatment: { type: "inapp_message", contentRef: { type: "content", key: "" }, tags: [] } },
+      { id: "B", weight: 0, treatment: { type: "inapp_message", contentRef: { type: "content", key: "" }, tags: [] } }
     ]);
     expect(getWeightsSum(adjusted)).toBe(100);
     expect(adjusted[0]?.weight).toBe(50);

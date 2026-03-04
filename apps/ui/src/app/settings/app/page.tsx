@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { AppEnumSettings } from "@decisioning/shared";
 import {
   getDecisionWizardEnabled,
   getDecisionWizardEnvDefaultValue,
@@ -12,6 +13,7 @@ import {
   setDecisionWizardMode,
   type DecisionWizardMode
 } from "../../../lib/app-settings";
+import { DEFAULT_APP_ENUM_SETTINGS, normalizeAppEnumSettings } from "../../../lib/app-enum-settings";
 import { apiClient, type RuntimeSettingsPayload } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 
@@ -32,6 +34,16 @@ interface RuntimeSettingsForm {
   precomputeConcurrency: string;
   precomputeMaxRetries: string;
   precomputeLookupDelayMs: string;
+}
+
+interface AppEnumSettingsForm {
+  appKey: string;
+  channels: string;
+  lookupAttributes: string;
+  locales: string;
+  deviceTypes: string;
+  defaultContextAllowlistKeys: string;
+  commonAudiences: string;
 }
 
 const toCsv = (items: string[]): string => items.join(", ");
@@ -67,6 +79,27 @@ const toForm = (settings: RuntimeSettingsPayload): RuntimeSettingsForm => ({
   precomputeMaxRetries: String(settings.precompute.maxRetries),
   precomputeLookupDelayMs: String(settings.precompute.lookupDelayMs)
 });
+
+const appEnumToForm = (settings: AppEnumSettings, appKey = ""): AppEnumSettingsForm => ({
+  appKey,
+  channels: toCsv(settings.channels),
+  lookupAttributes: toCsv(settings.lookupAttributes),
+  locales: toCsv(settings.locales),
+  deviceTypes: toCsv(settings.deviceTypes),
+  defaultContextAllowlistKeys: toCsv(settings.defaultContextAllowlistKeys),
+  commonAudiences: toCsv(settings.commonAudiences)
+});
+
+const appEnumFormToPayload = (form: AppEnumSettingsForm): AppEnumSettings => {
+  return normalizeAppEnumSettings({
+    channels: parseCsv(form.channels, DEFAULT_APP_ENUM_SETTINGS.channels),
+    lookupAttributes: parseCsv(form.lookupAttributes, DEFAULT_APP_ENUM_SETTINGS.lookupAttributes),
+    locales: parseCsv(form.locales, DEFAULT_APP_ENUM_SETTINGS.locales),
+    deviceTypes: parseCsv(form.deviceTypes, DEFAULT_APP_ENUM_SETTINGS.deviceTypes),
+    defaultContextAllowlistKeys: parseCsv(form.defaultContextAllowlistKeys, DEFAULT_APP_ENUM_SETTINGS.defaultContextAllowlistKeys),
+    commonAudiences: parseCsv(form.commonAudiences, [])
+  });
+};
 
 const toPayload = (form: RuntimeSettingsForm, fallback: RuntimeSettingsPayload): RuntimeSettingsPayload => ({
   decisionDefaults: {
@@ -105,6 +138,11 @@ export default function AppSettingsPage() {
   const [runtimeFeedback, setRuntimeFeedback] = useState<string | null>(null);
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [runtimeSaving, setRuntimeSaving] = useState(false);
+  const [enumForm, setEnumForm] = useState<AppEnumSettingsForm>(appEnumToForm(DEFAULT_APP_ENUM_SETTINGS));
+  const [enumFeedback, setEnumFeedback] = useState<string | null>(null);
+  const [enumUpdatedAt, setEnumUpdatedAt] = useState<string | null>(null);
+  const [enumLoading, setEnumLoading] = useState(true);
+  const [enumSaving, setEnumSaving] = useState(false);
 
   useEffect(() => {
     setWizardMode(getDecisionWizardMode());
@@ -137,6 +175,25 @@ export default function AppSettingsPage() {
 
   useEffect(() => {
     void loadRuntimeSettings();
+  }, [environment]);
+
+  const loadEnumSettings = async (appKey?: string) => {
+    setEnumLoading(true);
+    try {
+      const response = await apiClient.settings.getAppSettings(appKey?.trim() ? { appKey: appKey.trim() } : {});
+      setEnumForm(appEnumToForm(response.effective, appKey ?? ""));
+      setEnumUpdatedAt(response.updatedAt);
+      setEnumFeedback(null);
+    } catch (error) {
+      setEnumForm(appEnumToForm(DEFAULT_APP_ENUM_SETTINGS, appKey ?? ""));
+      setEnumFeedback(error instanceof Error ? error.message : "Failed to load app enum settings");
+    } finally {
+      setEnumLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadEnumSettings();
   }, [environment]);
 
   const wizardEnabled = useMemo(() => getDecisionWizardEnabled(), [wizardMode]);
@@ -173,6 +230,21 @@ export default function AppSettingsPage() {
       setRuntimeFeedback(error instanceof Error ? error.message : "Failed to reset runtime settings");
     } finally {
       setRuntimeSaving(false);
+    }
+  };
+
+  const saveEnumSettings = async () => {
+    setEnumSaving(true);
+    try {
+      const payload = appEnumFormToPayload(enumForm);
+      const response = await apiClient.settings.saveAppSettings(payload, enumForm.appKey.trim() || undefined);
+      setEnumForm(appEnumToForm(response.effective, enumForm.appKey.trim()));
+      setEnumUpdatedAt(response.updatedAt);
+      setEnumFeedback(enumForm.appKey.trim() ? `Saved override for app '${enumForm.appKey.trim()}'.` : "Saved global enum defaults.");
+    } catch (error) {
+      setEnumFeedback(error instanceof Error ? error.message : "Failed to save app enum settings");
+    } finally {
+      setEnumSaving(false);
     }
   };
 
@@ -264,6 +336,73 @@ export default function AppSettingsPage() {
             Reset personal defaults
           </button>
         </div>
+      </article>
+
+      <article className="panel space-y-3 p-4">
+        <div>
+          <h3 className="font-semibold">App Enumerations ({environment})</h3>
+          <p className="text-sm text-stone-700">Source of truth for channels, lookup attributes, locales, and device types.</p>
+          {enumUpdatedAt ? <p className="text-xs text-stone-600">Last updated: {new Date(enumUpdatedAt).toLocaleString()}</p> : null}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+            Optional app override (leave blank for global)
+            <input
+              value={enumForm.appKey}
+              onChange={(event) => setEnumForm((current) => ({ ...current, appKey: event.target.value }))}
+              className="rounded-md border border-stone-300 px-2 py-1"
+              placeholder="my_app_key"
+              disabled={enumSaving}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Channels (csv)
+            <input value={enumForm.channels} onChange={(event) => setEnumForm((current) => ({ ...current, channels: event.target.value }))} className="rounded-md border border-stone-300 px-2 py-1" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Lookup attributes (csv)
+            <input value={enumForm.lookupAttributes} onChange={(event) => setEnumForm((current) => ({ ...current, lookupAttributes: event.target.value }))} className="rounded-md border border-stone-300 px-2 py-1" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Locales (csv)
+            <input value={enumForm.locales} onChange={(event) => setEnumForm((current) => ({ ...current, locales: event.target.value }))} className="rounded-md border border-stone-300 px-2 py-1" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Device types (csv)
+            <input value={enumForm.deviceTypes} onChange={(event) => setEnumForm((current) => ({ ...current, deviceTypes: event.target.value }))} className="rounded-md border border-stone-300 px-2 py-1" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Context allowlist keys (csv)
+            <input value={enumForm.defaultContextAllowlistKeys} onChange={(event) => setEnumForm((current) => ({ ...current, defaultContextAllowlistKeys: event.target.value }))} className="rounded-md border border-stone-300 px-2 py-1" />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Common audiences (csv)
+            <input value={enumForm.commonAudiences} onChange={(event) => setEnumForm((current) => ({ ...current, commonAudiences: event.target.value }))} className="rounded-md border border-stone-300 px-2 py-1" />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void saveEnumSettings()} disabled={enumSaving || enumLoading} type="button">
+            Save enumerations
+          </button>
+          <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void loadEnumSettings(enumForm.appKey)} disabled={enumSaving} type="button">
+            Reload
+          </button>
+          <button
+            className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            onClick={() => {
+              setEnumForm(appEnumToForm(DEFAULT_APP_ENUM_SETTINGS, enumForm.appKey));
+              setEnumFeedback("Reset form to defaults (not saved).");
+            }}
+            disabled={enumSaving}
+            type="button"
+          >
+            Reset form
+          </button>
+        </div>
+
+        {enumFeedback ? <p className="text-sm text-stone-700">{enumFeedback}</p> : null}
       </article>
 
       <article className="panel space-y-3 p-4">

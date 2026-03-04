@@ -103,6 +103,16 @@ import {
   parseRuntimeSettings,
   type RuntimeSettings
 } from "./settings/runtimeSettings";
+import {
+  APP_ENUM_SETTINGS_DEFAULTS,
+  APP_ENUM_SETTINGS_GLOBAL_KEY,
+  APP_ENUM_SETTINGS_APP_PREFIX,
+  appEnumSettingsBodySchema,
+  appEnumSettingsKey,
+  appEnumSettingsQuerySchema,
+  mergeAppEnumSettings,
+  normalizeAppEnumSettings
+} from "./settings/appEnumSettings";
 import { createCatalogResolver } from "./services/catalogResolver";
 import { buildActionDescriptor, type RuntimeActionDescriptor } from "./services/actionDescriptor";
 import { createOrchestrationService } from "./services/orchestrationService";
@@ -2612,6 +2622,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     if (route.startsWith("/v1/results")) return method === "GET" ? "results.read" : "precompute.run";
     if (route.startsWith("/v1/settings/wbs-mapping")) return method === "GET" ? "settings.wbsMapping.read" : "settings.wbsMapping.write";
     if (route.startsWith("/v1/settings/wbs")) return method === "GET" ? "settings.wbs.read" : "settings.wbs.write";
+    if (route.startsWith("/v1/settings/app")) return method === "GET" ? "settings.app.read" : "settings.app.write";
     if (route.startsWith("/v1/settings/runtime")) return method === "GET" ? "settings.app.read" : "settings.app.write";
     if (route.startsWith("/v1/settings/pipes-callback")) return method === "GET" ? "settings.pipes.read" : "settings.pipes.write";
     if (route.startsWith("/v1/settings/webhook-rules")) return method === "GET" ? "settings.webhooks.read" : "settings.webhooks.write";
@@ -3308,6 +3319,132 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     });
     return {
       items
+    };
+  });
+
+  app.get("/v1/settings/app", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    if (!hasAppSettingsStorage) {
+      return buildResponseError(reply, 409, "App settings storage unavailable");
+    }
+
+    const query = appEnumSettingsQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+
+    const appKey = query.data.appKey?.trim() || null;
+    const globalRow = await prisma.appSetting.findFirst({
+      where: {
+        environment,
+        key: APP_ENUM_SETTINGS_GLOBAL_KEY
+      }
+    });
+    const appRow = appKey
+      ? await prisma.appSetting.findFirst({
+          where: {
+            environment,
+            key: appEnumSettingsKey(appKey)
+          }
+        })
+      : null;
+
+    const globalSettings = globalRow ? normalizeAppEnumSettings(globalRow.valueJson, APP_ENUM_SETTINGS_DEFAULTS) : null;
+    const appSettings = appRow ? normalizeAppEnumSettings(appRow.valueJson, APP_ENUM_SETTINGS_DEFAULTS) : null;
+    const effective = mergeAppEnumSettings(
+      mergeAppEnumSettings(APP_ENUM_SETTINGS_DEFAULTS, globalSettings),
+      appSettings
+    );
+    const latestUpdatedAt = [globalRow?.updatedAt?.getTime(), appRow?.updatedAt?.getTime()]
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      .sort((a, b) => b - a)[0];
+
+    return {
+      environment,
+      appKey,
+      defaults: APP_ENUM_SETTINGS_DEFAULTS,
+      global: globalSettings,
+      override: appSettings,
+      effective,
+      updatedAt: latestUpdatedAt ? new Date(latestUpdatedAt).toISOString() : null
+    };
+  });
+
+  app.put("/v1/settings/app", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    if (!hasAppSettingsStorage) {
+      return buildResponseError(reply, 409, "App settings storage unavailable");
+    }
+
+    const parsed = appEnumSettingsBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const appKey = parsed.data.appKey?.trim() || null;
+    const settingKey = appEnumSettingsKey(appKey);
+    const normalized = normalizeAppEnumSettings(parsed.data.settings, APP_ENUM_SETTINGS_DEFAULTS);
+    const existing = await prisma.appSetting.findFirst({
+      where: {
+        environment,
+        key: settingKey
+      }
+    });
+
+    if (existing) {
+      await prisma.appSetting.update({
+        where: { id: existing.id },
+        data: { valueJson: normalized as unknown as Prisma.InputJsonValue }
+      });
+    } else {
+      await prisma.appSetting.create({
+        data: {
+          environment,
+          key: settingKey,
+          valueJson: normalized as unknown as Prisma.InputJsonValue
+        }
+      });
+    }
+
+    const globalRow = await prisma.appSetting.findFirst({
+      where: {
+        environment,
+        key: APP_ENUM_SETTINGS_GLOBAL_KEY
+      }
+    });
+    const appRow = appKey
+      ? await prisma.appSetting.findFirst({
+          where: {
+            environment,
+            key: `${APP_ENUM_SETTINGS_APP_PREFIX}${appKey}`
+          }
+        })
+      : null;
+
+    const globalSettings = globalRow ? normalizeAppEnumSettings(globalRow.valueJson, APP_ENUM_SETTINGS_DEFAULTS) : null;
+    const appSettings = appRow ? normalizeAppEnumSettings(appRow.valueJson, APP_ENUM_SETTINGS_DEFAULTS) : null;
+    const effective = mergeAppEnumSettings(
+      mergeAppEnumSettings(APP_ENUM_SETTINGS_DEFAULTS, globalSettings),
+      appSettings
+    );
+    const latestUpdatedAt = [globalRow?.updatedAt?.getTime(), appRow?.updatedAt?.getTime()]
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      .sort((a, b) => b - a)[0];
+
+    return {
+      environment,
+      appKey,
+      defaults: APP_ENUM_SETTINGS_DEFAULTS,
+      global: globalSettings,
+      override: appSettings,
+      effective,
+      updatedAt: latestUpdatedAt ? new Date(latestUpdatedAt).toISOString() : null
     };
   });
 
