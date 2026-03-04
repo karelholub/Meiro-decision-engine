@@ -16,6 +16,7 @@ export default function InAppExperimentsPage() {
 
   const [items, setItems] = useState<ExperimentVersionSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [details, setDetails] = useState<ExperimentDetails | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<"" | "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED">("");
@@ -32,6 +33,20 @@ export default function InAppExperimentsPage() {
 
   const selectedKey = details?.key ?? "";
 
+  const resetEditorForNew = () => {
+    setSelectedId("");
+    setIsCreatingNew(true);
+    setDetails(null);
+    setKey("");
+    setName("");
+    setDescription("");
+    setStartAt("");
+    setEndAt("");
+    setJsonDraft("{}");
+    setError(null);
+    setMessage(null);
+  };
+
   const loadList = async () => {
     setLoading(true);
     try {
@@ -42,7 +57,7 @@ export default function InAppExperimentsPage() {
         ...(search.trim() ? { q: search.trim() } : {})
       });
       setItems(response.items);
-      if (!selectedId && response.items[0]) {
+      if (!selectedId && !isCreatingNew && response.items[0]) {
         setSelectedId(response.items[0].id);
       }
       setError(null);
@@ -88,8 +103,10 @@ export default function InAppExperimentsPage() {
   useEffect(() => {
     if (selectedId) {
       void loadDetails(selectedId);
+    } else if (!isCreatingNew) {
+      setDetails(null);
     }
-  }, [selectedId, environment]);
+  }, [selectedId, environment, isCreatingNew]);
 
   const parsedJson = useMemo(() => {
     try {
@@ -121,6 +138,7 @@ export default function InAppExperimentsPage() {
       });
       setMessage(response.validation?.valid === false ? `Created with validation issues: ${response.validation.errors.join(" | ")}` : "Draft created.");
       setSelectedId(response.item.id);
+      setIsCreatingNew(false);
       await loadList();
       await loadDetails(response.item.id);
       setError(null);
@@ -291,7 +309,7 @@ export default function InAppExperimentsPage() {
         <div className="rounded-lg border border-stone-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-semibold">Experiments</h3>
-            <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" onClick={() => setSelectedId("")}>New</button>
+            <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" onClick={resetEditorForNew}>New</button>
           </div>
           <div className="max-h-[560px] overflow-auto">
             <table className="w-full text-sm">
@@ -308,7 +326,10 @@ export default function InAppExperimentsPage() {
                   <tr
                     key={item.id}
                     className={`cursor-pointer ${item.id === selectedId ? "bg-stone-100" : "hover:bg-stone-50"}`}
-                    onClick={() => setSelectedId(item.id)}
+                    onClick={() => {
+                      setIsCreatingNew(false);
+                      setSelectedId(item.id);
+                    }}
                   >
                     <td className="border-b border-stone-100 px-2 py-2">{item.key}</td>
                     <td className="border-b border-stone-100 px-2 py-2">{item.status}</td>
