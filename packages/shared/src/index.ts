@@ -683,6 +683,57 @@ export interface ExperimentDetails extends ExperimentVersionSummary {
   experimentJson: ExperimentDefinition;
 }
 
+export interface ExperimentInventoryItem {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  version: number;
+  status: ExperimentStatus;
+  name: string;
+  description: string | null;
+  updatedAt: string;
+  activatedAt: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  appKey: string | null;
+  placements: string[];
+  channels: string[];
+  holdoutPct: number;
+  variantsSummary: string;
+  activeVersion: number | null;
+  draftVersion: number | null;
+  hasDraft: boolean;
+}
+
+export interface ExperimentVersionRow {
+  id: string;
+  version: number;
+  status: ExperimentStatus;
+  name: string;
+  updatedAt: string;
+  activatedAt: string | null;
+}
+
+export interface ExperimentSummaryDetails {
+  key: string;
+  name: string;
+  status: ExperimentStatus;
+  environment: DecisionEnvironment;
+  updatedAt: string;
+  description: string | null;
+  appKey: string | null;
+  placements: string[];
+  channels: string[];
+  variantsSummary: string;
+  holdoutPct: number;
+  startAt: string | null;
+  endAt: string | null;
+  activeVersion: number | null;
+  draftVersion: number | null;
+  latestVersion: number;
+  versions: ExperimentVersionRow[];
+}
+
 export interface InAppOverviewGroup {
   campaignKey: string;
   variantKey: string;

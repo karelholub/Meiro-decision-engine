@@ -61,7 +61,7 @@ const NAV_GROUPS: NavGroup[] = [
     hint: "In-app campaign lifecycle",
     items: [
       { href: "/engagement/inapp/campaigns", label: "Campaigns" },
-      { href: "/engagement/inapp/experiments", label: "Experiments" },
+      { href: "/engage/experiments", label: "Experiments" },
       { href: "/engagement/inapp/experiment-playground", label: "Experiment Playground" },
       { href: "/engagement/inapp/apps", label: "Apps" },
       { href: "/engagement/inapp/placements", label: "Placements" },
@@ -115,6 +115,7 @@ const navPermissionByHref: Record<string, string> = {
   "/catalog/offers": "catalog.offer.read",
   "/catalog/content": "catalog.content.read",
   "/engagement/inapp/campaigns": "engage.campaign.read",
+  "/engage/experiments": "experiment.read",
   "/engagement/inapp/experiments": "experiment.read",
   "/engagement/inapp/experiment-playground": "experiment.read",
   "/engagement/inapp/apps": "engage.app.read",

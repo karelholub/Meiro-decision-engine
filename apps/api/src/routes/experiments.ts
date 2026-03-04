@@ -17,7 +17,10 @@ const listQuerySchema = z.object({
   status: experimentStatusSchema.optional(),
   appKey: z.string().optional(),
   placement: z.string().optional(),
-  q: z.string().optional()
+  q: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  cursor: z.string().optional(),
+  sort: z.enum(["updated_desc", "status_asc", "name_asc", "endAt_asc"]).optional()
 });
 
 const createBodySchema = z.object({
@@ -46,6 +49,10 @@ const keyParamsSchema = z.object({
   key: z.string().min(1)
 });
 
+const summaryParamsSchema = z.object({
+  key: z.string().min(1)
+});
+
 const activateBodySchema = z.object({
   version: z.number().int().positive().optional()
 });
@@ -61,6 +68,10 @@ const previewBodySchema = z.object({
     .optional(),
   context: z.record(z.unknown()).optional(),
   version: z.number().int().positive().optional()
+});
+
+const createDraftFromKeyBodySchema = z.object({
+  fromVersion: z.number().int().positive().optional()
 });
 
 const previewProfileFromBody = (body: z.infer<typeof previewBodySchema>) => {
@@ -160,6 +171,60 @@ const defaultExperiment = (input: { key: string; name: string; description?: str
   activation: {}
 });
 
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const encodeCursor = (value: { updatedAt: Date; key: string }) =>
+  Buffer.from(JSON.stringify({ updatedAt: value.updatedAt.toISOString(), key: value.key })).toString("base64");
+
+const decodeCursor = (cursor: string): { updatedAt: Date; key: string } | null => {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64").toString("utf8")) as { updatedAt?: string; key?: string };
+    if (!parsed.updatedAt || !parsed.key) {
+      return null;
+    }
+    const updatedAt = new Date(parsed.updatedAt);
+    if (Number.isNaN(updatedAt.getTime())) {
+      return null;
+    }
+    return { updatedAt, key: parsed.key };
+  } catch {
+    return null;
+  }
+};
+
+const buildVariantsSummary = (experimentJson: unknown): string => {
+  if (!isRecord(experimentJson) || !Array.isArray(experimentJson.variants)) {
+    return "-";
+  }
+  const variants = experimentJson.variants
+    .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+    .map((variant) => ({
+      id: typeof variant.id === "string" ? variant.id : "?",
+      weight: typeof variant.weight === "number" ? variant.weight : 0
+    }));
+  if (variants.length === 0) {
+    return "-";
+  }
+  return variants.map((variant) => `${variant.id} ${variant.weight}%`).join(" / ");
+};
+
+const summarizeForInventory = (row: any) => {
+  const summary = serializeExperimentSummary(row);
+  const json = isRecord(row.experimentJson) ? row.experimentJson : {};
+  const scope = isRecord(json.scope) ? json.scope : {};
+  const holdout = isRecord(json.holdout) ? json.holdout : {};
+  const channels = Array.isArray(scope.channels) ? scope.channels.filter((entry: unknown): entry is string => typeof entry === "string") : [];
+  const holdoutPct = typeof holdout.percentage === "number" ? holdout.percentage : 0;
+  return {
+    ...summary,
+    appKey: summary.appKey ?? (typeof scope.appKey === "string" ? scope.appKey : null),
+    placements: summary.placements.length > 0 ? summary.placements : Array.isArray(scope.placements) ? scope.placements : [],
+    channels,
+    variantsSummary: buildVariantsSummary(row.experimentJson),
+    holdoutPct
+  };
+};
+
 const computeValidation = async (input: {
   prisma: PrismaClient;
   environment: Environment;
@@ -251,6 +316,47 @@ export const registerExperimentRoutes = async (deps: {
 }) => {
   const { app, prisma, now, resolveEnvironment, buildResponseError, requireWriteAuth } = deps;
   const catalogResolver = createCatalogResolver({ prisma, now });
+  const loadSummaryByKey = async (input: { key: string; environment: Environment }) => {
+    const versions = await (prisma as any).experimentVersion.findMany({
+      where: {
+        environment: input.environment,
+        key: input.key
+      },
+      orderBy: [{ version: "desc" }]
+    });
+    if (versions.length === 0) {
+      return null;
+    }
+    const latest = versions[0];
+    const active = versions.find((entry: any) => entry.status === "ACTIVE") ?? null;
+    const draft = versions.find((entry: any) => entry.status === "DRAFT") ?? null;
+    const latestSummary = summarizeForInventory(latest);
+    return {
+      key: latest.key,
+      name: latest.name,
+      status: latest.status,
+      environment: latest.environment,
+      updatedAt: latest.updatedAt,
+      description: latest.description,
+      appKey: latestSummary.appKey,
+      placements: latestSummary.placements,
+      channels: latestSummary.channels,
+      variantsSummary: latestSummary.variantsSummary,
+      holdoutPct: latestSummary.holdoutPct,
+      startAt: latest.startAt,
+      endAt: latest.endAt,
+      activeVersion: active?.version ?? null,
+      draftVersion: draft?.version ?? null,
+      latestVersion: latest.version,
+      versions: versions.slice(0, 30).map((entry: any) => ({
+        id: entry.id,
+        version: entry.version,
+        status: entry.status,
+        updatedAt: entry.updatedAt,
+        activatedAt: entry.activatedAt
+      }))
+    };
+  };
 
   app.get("/v1/experiments", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
@@ -266,7 +372,6 @@ export const registerExperimentRoutes = async (deps: {
     const rows = await (prisma as any).experimentVersion.findMany({
       where: {
         environment,
-        ...(parsed.data.status ? { status: parsed.data.status } : {}),
         ...(parsed.data.q
           ? {
               OR: [
@@ -279,9 +384,46 @@ export const registerExperimentRoutes = async (deps: {
       orderBy: [{ updatedAt: "desc" }, { key: "asc" }, { version: "desc" }]
     });
 
-    const items = rows
-      .map((item: any) => serializeExperimentSummary(item))
-      .filter((item: any) => {
+    const byKey = new Map<
+      string,
+      {
+        latest: any;
+        activeVersion: number | null;
+        draftVersion: number | null;
+      }
+    >();
+    for (const row of rows) {
+      const current = byKey.get(row.key);
+      if (!current) {
+        byKey.set(row.key, {
+          latest: row,
+          activeVersion: row.status === "ACTIVE" ? row.version : null,
+          draftVersion: row.status === "DRAFT" ? row.version : null
+        });
+        continue;
+      }
+      if (row.status === "ACTIVE" && (current.activeVersion === null || row.version > current.activeVersion)) {
+        current.activeVersion = row.version;
+      }
+      if (row.status === "DRAFT" && (current.draftVersion === null || row.version > current.draftVersion)) {
+        current.draftVersion = row.version;
+      }
+    }
+
+    let items = [...byKey.values()]
+      .map((entry) => {
+        const summary = summarizeForInventory(entry.latest);
+        return {
+          ...summary,
+          activeVersion: entry.activeVersion,
+          draftVersion: entry.draftVersion,
+          hasDraft: entry.draftVersion !== null
+        };
+      })
+      .filter((item) => {
+        if (parsed.data.status && item.status !== parsed.data.status) {
+          return false;
+        }
         if (parsed.data.appKey && item.appKey !== parsed.data.appKey) {
           return false;
         }
@@ -291,7 +433,57 @@ export const registerExperimentRoutes = async (deps: {
         return true;
       });
 
-    return { items };
+    const sort = parsed.data.sort ?? "updated_desc";
+    if (sort === "status_asc") {
+      items = items.sort((a, b) => a.status.localeCompare(b.status) || a.key.localeCompare(b.key));
+    } else if (sort === "name_asc") {
+      items = items.sort((a, b) => a.name.localeCompare(b.name) || b.updatedAt.localeCompare(a.updatedAt));
+    } else if (sort === "endAt_asc") {
+      items = items.sort((a, b) => {
+        const aTime = a.endAt ? new Date(a.endAt).getTime() : Number.POSITIVE_INFINITY;
+        const bTime = b.endAt ? new Date(b.endAt).getTime() : Number.POSITIVE_INFINITY;
+        if (aTime === bTime) {
+          return b.updatedAt.localeCompare(a.updatedAt);
+        }
+        return aTime - bTime;
+      });
+    } else {
+      items = items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.key.localeCompare(b.key));
+    }
+
+    const cursor = parsed.data.cursor ? decodeCursor(parsed.data.cursor) : null;
+    if (parsed.data.cursor && !cursor) {
+      return buildResponseError(reply, 400, "Invalid cursor");
+    }
+    if (cursor) {
+      items = items.filter((item) => {
+        const updatedAt = new Date(item.updatedAt).getTime();
+        const cursorUpdatedAt = cursor.updatedAt.getTime();
+        if (updatedAt < cursorUpdatedAt) {
+          return true;
+        }
+        if (updatedAt === cursorUpdatedAt) {
+          return item.key > cursor.key;
+        }
+        return false;
+      });
+    }
+
+    const limit = parsed.data.limit ?? 50;
+    const pageItems = items.slice(0, limit);
+    const lastItem = pageItems[pageItems.length - 1];
+    const nextCursor =
+      items.length > limit && lastItem
+        ? encodeCursor({
+            updatedAt: new Date(lastItem.updatedAt),
+            key: lastItem.key
+          })
+        : null;
+
+    return {
+      items: pageItems,
+      nextCursor
+    };
   });
 
   app.post("/v1/experiments", { preHandler: requireWriteAuth }, async (request, reply) => {
@@ -375,6 +567,89 @@ export const registerExperimentRoutes = async (deps: {
     };
   });
 
+  app.get("/v1/experiments/key/:key", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const params = keyParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid key", params.error.flatten());
+    }
+
+    const item = await (prisma as any).experimentVersion.findFirst({
+      where: {
+        environment,
+        key: params.data.key,
+        status: "DRAFT"
+      },
+      orderBy: { version: "desc" }
+    });
+    const fallback =
+      item ??
+      (await (prisma as any).experimentVersion.findFirst({
+        where: {
+          environment,
+          key: params.data.key
+        },
+        orderBy: { version: "desc" }
+      }));
+    if (!fallback) {
+      return buildResponseError(reply, 404, "Experiment not found");
+    }
+
+    return {
+      item: {
+        ...serializeExperimentSummary(fallback),
+        experimentJson: fallback.experimentJson
+      }
+    };
+  });
+
+  app.get("/v1/experiments/:key/summary", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const params = summaryParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid key", params.error.flatten());
+    }
+    const summary = await loadSummaryByKey({ key: params.data.key, environment });
+    if (!summary) {
+      return buildResponseError(reply, 404, "Experiment not found");
+    }
+    return { item: summary };
+  });
+
+  app.get("/v1/experiments/:key/versions", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const params = summaryParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid key", params.error.flatten());
+    }
+    const rows = await (prisma as any).experimentVersion.findMany({
+      where: {
+        environment,
+        key: params.data.key
+      },
+      orderBy: [{ version: "desc" }]
+    });
+    return {
+      items: rows.map((entry: any) => ({
+        id: entry.id,
+        version: entry.version,
+        status: entry.status,
+        name: entry.name,
+        updatedAt: entry.updatedAt,
+        activatedAt: entry.activatedAt
+      }))
+    };
+  });
+
   app.put("/v1/experiments/:id", { preHandler: requireWriteAuth }, async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -430,6 +705,79 @@ export const registerExperimentRoutes = async (deps: {
       },
       validation
     };
+  });
+
+  app.post("/v1/experiments/:key/drafts", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const params = keyParamsSchema.safeParse(request.params);
+    const body = createDraftFromKeyBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
+    }
+
+    const existingDraft = await (prisma as any).experimentVersion.findFirst({
+      where: {
+        environment,
+        key: params.data.key,
+        status: "DRAFT"
+      },
+      orderBy: { version: "desc" }
+    });
+    if (existingDraft) {
+      return buildResponseError(reply, 409, "Draft already exists", { id: existingDraft.id, version: existingDraft.version });
+    }
+
+    const source =
+      (body.data.fromVersion
+        ? await (prisma as any).experimentVersion.findFirst({
+            where: {
+              environment,
+              key: params.data.key,
+              version: body.data.fromVersion
+            }
+          })
+        : null) ??
+      (await (prisma as any).experimentVersion.findFirst({
+        where: {
+          environment,
+          key: params.data.key
+        },
+        orderBy: { version: "desc" }
+      }));
+    if (!source) {
+      return buildResponseError(reply, 404, "Experiment not found");
+    }
+
+    const latest = await (prisma as any).experimentVersion.findFirst({
+      where: {
+        environment,
+        key: params.data.key
+      },
+      orderBy: { version: "desc" }
+    });
+    const created = await (prisma as any).experimentVersion.create({
+      data: {
+        environment,
+        key: source.key,
+        version: (latest?.version ?? source.version) + 1,
+        status: "DRAFT",
+        name: source.name,
+        description: source.description,
+        experimentJson: source.experimentJson,
+        startAt: source.startAt,
+        endAt: source.endAt
+      }
+    });
+
+    return reply.code(201).send({
+      item: {
+        ...serializeExperimentSummary(created),
+        experimentJson: created.experimentJson
+      }
+    });
   });
 
   app.post("/v1/experiments/:id/validate", async (request, reply) => {

@@ -13,7 +13,9 @@ import type {
   DecisionVersionSummary,
   DecideStackResponse,
   ExperimentDetails,
-  ExperimentVersionSummary,
+  ExperimentInventoryItem,
+  ExperimentSummaryDetails,
+  ExperimentVersionRow,
   InAppApplication,
   InAppAuditLog,
   InAppCampaignActivationPreview,
@@ -887,8 +889,17 @@ export const apiClient = {
     }
   },
   experiments: {
-    list: (params: { status?: "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"; appKey?: string; placement?: string; q?: string } = {}) =>
-      apiFetch<{ items: ExperimentVersionSummary[] }>(`/v1/experiments${toQuery(params)}`),
+    list: (
+      params: {
+        status?: "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+        appKey?: string;
+        placement?: string;
+        q?: string;
+        limit?: number;
+        cursor?: string;
+        sort?: "updated_desc" | "status_asc" | "name_asc" | "endAt_asc";
+      } = {}
+    ) => apiFetch<{ items: ExperimentInventoryItem[]; nextCursor?: string | null }>(`/v1/experiments${toQuery(params)}`),
     create: (input: {
       key: string;
       name: string;
@@ -902,6 +913,14 @@ export const apiClient = {
         body: JSON.stringify(input)
       }),
     get: (id: string) => apiFetch<{ item: ExperimentDetails }>(`/v1/experiments/${id}`),
+    getByKey: (key: string) => apiFetch<{ item: ExperimentDetails }>(`/v1/experiments/key/${encodeURIComponent(key)}`),
+    summary: (key: string) => apiFetch<{ item: ExperimentSummaryDetails }>(`/v1/experiments/${encodeURIComponent(key)}/summary`),
+    versions: (key: string) => apiFetch<{ items: ExperimentVersionRow[] }>(`/v1/experiments/${encodeURIComponent(key)}/versions`),
+    createDraft: (key: string, fromVersion?: number) =>
+      apiFetch<{ item: ExperimentDetails }>(`/v1/experiments/${encodeURIComponent(key)}/drafts`, {
+        method: "POST",
+        body: JSON.stringify(fromVersion ? { fromVersion } : {})
+      }),
     update: (id: string, input: Record<string, unknown>) =>
       apiFetch<{ item: ExperimentDetails; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/experiments/${id}`, {
         method: "PUT",
