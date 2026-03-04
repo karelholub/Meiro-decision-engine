@@ -10,6 +10,7 @@ export default function InAppPlacementsPage() {
   const [items, setItems] = useState<InAppPlacement[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [key, setKey] = useState("home_top");
@@ -53,6 +54,7 @@ export default function InAppPlacementsPage() {
         defaultTtlSeconds: Number.parseInt(defaultTtlSeconds, 10)
       });
       setShowCreate(false);
+      setMessage("Placement created.");
       await load();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create placement");
@@ -61,18 +63,20 @@ export default function InAppPlacementsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Engagement / In-App / Placements</h2>
+      <header className="rounded-lg border border-stone-200 bg-white p-4">
+        <h2 className="text-xl font-semibold">Placement Inventory</h2>
         <p className="text-sm text-stone-700">Configure placement keys, template allow-lists, and TTL defaults. Environment: {environment}</p>
       </header>
 
-      <div className="flex items-center gap-2">
+      <div className="rounded-lg border border-stone-200 bg-white p-3">
+        <div className="flex items-center gap-2">
         <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => setShowCreate((prev) => !prev)}>
           {showCreate ? "Close" : "Create Placement"}
         </button>
         <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
           Refresh
         </button>
+        </div>
       </div>
 
       {showCreate ? (
@@ -117,8 +121,9 @@ export default function InAppPlacementsPage() {
         </article>
       ) : null}
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
-      {loading ? <p className="text-sm">Loading...</p> : null}
+      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
+      {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
 
       <div className="panel overflow-auto">
         <table className="w-full border-collapse text-sm">

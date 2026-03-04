@@ -124,7 +124,7 @@ export default function InAppCampaignReportPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
+      <header className="rounded-lg border border-stone-200 bg-white p-4">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h2 className="text-xl font-semibold">Campaign Report: {campaignKey}</h2>
@@ -173,7 +173,7 @@ export default function InAppCampaignReportPage() {
         </label>
       </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
 
       {compareDeltaSummary ? (
         <div className="grid gap-3 md:grid-cols-3">

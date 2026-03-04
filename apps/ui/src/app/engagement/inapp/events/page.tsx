@@ -80,8 +80,8 @@ export default function InAppEventsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Engagement / In-App / Events</h2>
+      <header className="rounded-lg border border-stone-200 bg-white p-4">
+        <h2 className="text-xl font-semibold">Event Inventory</h2>
         <p className="text-sm text-stone-700">Recent event stream in {environment}.</p>
       </header>
 
@@ -125,7 +125,7 @@ export default function InAppEventsPage() {
         </div>
       </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
 
       <article className="panel overflow-auto">
         <table className="w-full border-collapse text-sm">

@@ -309,8 +309,8 @@ export default function ExperimentPlaygroundPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Engagement / In-App / Experiment Playground</h2>
+      <header className="rounded-lg border border-stone-200 bg-white p-4">
+        <h2 className="text-xl font-semibold">Experiment Playground</h2>
         <p className="text-sm text-stone-700">Run live assignments and preview what variant content looks like on a website-like surface.</p>
         <p className="text-xs text-stone-500">Environment: {environment}</p>
       </header>

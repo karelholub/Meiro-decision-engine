@@ -38,8 +38,8 @@ export default function InAppEventsMonitorPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">In-app / Events Monitor (v2)</h2>
+      <header className="rounded-lg border border-stone-200 bg-white p-4">
+        <h2 className="text-xl font-semibold">Events Monitor (v2)</h2>
         <p className="text-sm text-stone-700">Stream lag and worker health for async tracking ingest in {environment}.</p>
       </header>
 
@@ -49,7 +49,7 @@ export default function InAppEventsMonitorPage() {
         </button>
       </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
 
       {snapshot ? (
         <>
