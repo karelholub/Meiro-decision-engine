@@ -4,22 +4,28 @@ import { sha256 } from "../lib/cacheKey";
 
 const operatorSchema = z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "exists"]);
 
-const experimentAttributePredicateSchema = z.object({
-  field: z.string().min(1),
-  op: operatorSchema,
-  value: z.unknown().optional()
-});
-
-const experimentVariantSchema = z.object({
-  id: z.string().min(1),
-  weight: z.number().nonnegative(),
-  treatment: z.object({
-    type: z.literal("inapp_message"),
-    contentKey: z.string().min(1),
-    offerKey: z.string().min(1).optional(),
-    tags: z.array(z.string()).optional()
+const experimentAttributePredicateSchema = z
+  .object({
+    field: z.string().min(1),
+    op: operatorSchema,
+    value: z.unknown().optional()
   })
-});
+  .passthrough();
+
+const experimentVariantSchema = z
+  .object({
+    id: z.string().min(1),
+    weight: z.number().nonnegative(),
+    treatment: z
+      .object({
+        type: z.literal("inapp_message"),
+        contentKey: z.string().min(1),
+        offerKey: z.string().min(1).optional(),
+        tags: z.array(z.string()).optional()
+      })
+      .passthrough()
+  })
+  .passthrough();
 
 export const experimentSpecSchema = z
   .object({
@@ -31,6 +37,7 @@ export const experimentSpecSchema = z
         placements: z.array(z.string().min(1)).optional(),
         channels: z.array(z.string().min(1)).optional()
       })
+      .passthrough()
       .default({}),
     population: z
       .object({
@@ -39,20 +46,25 @@ export const experimentSpecSchema = z
             audiencesAny: z.array(z.string().min(1)).optional(),
             attributes: z.array(experimentAttributePredicateSchema).optional()
           })
+          .passthrough()
           .optional()
       })
+      .passthrough()
       .optional(),
-    assignment: z.object({
-      unit: z.enum(["profileId", "anonymousId", "stitching_id"]),
-      salt: z.string().min(1),
-      stickiness: z
-        .object({
-          mode: z.enum(["ttl", "static"]).default("ttl"),
-          ttl_seconds: z.number().int().positive().optional()
-        })
-        .optional(),
-      weights: z.literal("static").optional()
-    }),
+    assignment: z
+      .object({
+        unit: z.enum(["profileId", "anonymousId", "stitching_id"]),
+        salt: z.string().min(1),
+        stickiness: z
+          .object({
+            mode: z.enum(["ttl", "static"]).default("ttl"),
+            ttl_seconds: z.number().int().positive().optional()
+          })
+          .passthrough()
+          .optional(),
+        weights: z.literal("static").optional()
+      })
+      .passthrough(),
     variants: z.array(experimentVariantSchema).min(1),
     holdout: z
       .object({
@@ -60,14 +72,17 @@ export const experimentSpecSchema = z
         percentage: z.number().min(0).max(100),
         behavior: z.enum(["noop"]).optional()
       })
+      .passthrough()
       .optional(),
     activation: z
       .object({
         startAt: z.string().datetime().optional(),
         endAt: z.string().datetime().optional()
       })
+      .passthrough()
       .optional()
   })
+  .passthrough()
   .superRefine((value, ctx) => {
     const seenIds = new Set<string>();
     for (const [index, variant] of value.variants.entries()) {
