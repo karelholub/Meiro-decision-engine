@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ExperimentVersionSummary, InAppApplication, InAppPlacement } from "@decisioning/shared";
 import { apiClient, type InAppV2DecideResponse } from "../../../../lib/api";
+import { useAppEnumSettings } from "../../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
-import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../../lib/lookup-attributes";
+
+const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
 type IdentityMode = "profile" | "anonymous" | "lookup";
 type PlaygroundMode = "runtime" | "experiment";
@@ -129,7 +131,9 @@ export default function ExperimentPlaygroundPage() {
   const [anonymousId, setAnonymousId] = useState("anon-visitor-001");
   const [lookupAttribute, setLookupAttribute] = useState("email");
   const [lookupValue, setLookupValue] = useState("tester@example.com");
-  const lookupAttributeSelectValue = isCommonLookupAttribute(lookupAttribute) ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const { settings: enumSettings } = useAppEnumSettings();
+  const isPresetLookupAttribute = enumSettings.lookupAttributes.includes(lookupAttribute);
+  const lookupAttributeSelectValue = isPresetLookupAttribute ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   const [contextText, setContextText] = useState('{"locale":"en-US","deviceType":"ios","audiences":["preview"]}');
 
@@ -401,7 +405,7 @@ export default function ExperimentPlaygroundPage() {
                   onChange={(event) => {
                     const next = event.target.value;
                     if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                      if (isCommonLookupAttribute(lookupAttribute)) {
+                      if (isPresetLookupAttribute) {
                         setLookupAttribute("");
                       }
                       return;
@@ -409,7 +413,7 @@ export default function ExperimentPlaygroundPage() {
                     setLookupAttribute(next);
                   }}
                 >
-                  {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                  {enumSettings.lookupAttributes.map((attribute) => (
                     <option key={attribute} value={attribute}>
                       {attribute}
                     </option>

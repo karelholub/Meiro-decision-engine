@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api";
+import { useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
-import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../lib/lookup-attributes";
+
+const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
 export default function DecisionResultsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -16,7 +18,9 @@ export default function DecisionResultsPage() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const lookupAttributeSelectValue = isCommonLookupAttribute(lookupAttribute) ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const { settings: enumSettings } = useAppEnumSettings();
+  const isPresetLookupAttribute = enumSettings.lookupAttributes.includes(lookupAttribute);
+  const lookupAttributeSelectValue = isPresetLookupAttribute ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -114,7 +118,7 @@ export default function DecisionResultsPage() {
                 onChange={(event) => {
                   const next = event.target.value;
                   if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                    if (isCommonLookupAttribute(lookupAttribute)) {
+                    if (isPresetLookupAttribute) {
                       setLookupAttribute("");
                     }
                     return;
@@ -122,7 +126,7 @@ export default function DecisionResultsPage() {
                   setLookupAttribute(next);
                 }}
               >
-                {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                {enumSettings.lookupAttributes.map((attribute) => (
                   <option key={attribute} value={attribute}>
                     {attribute}
                   </option>

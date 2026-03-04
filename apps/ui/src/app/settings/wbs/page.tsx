@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WbsInstanceSettings } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
+import { useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
-import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../lib/lookup-attributes";
 import { Button } from "../../../components/ui/button";
 import { TestResultPanel, validateWbsSettingsForm } from "../../../components/configure";
+
+const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
 type WbsTestResult = {
   requestUrl?: string | null;
@@ -33,8 +35,10 @@ export default function WbsSettingsPage() {
   const [testSegmentValue, setTestSegmentValue] = useState("107");
   const [loading, setLoading] = useState(true);
   const [testResult, setTestResult] = useState<WbsTestResult | null>(null);
+  const { settings: enumSettings } = useAppEnumSettings();
 
-  const testAttributeSelectValue = isCommonLookupAttribute(testAttribute) ? testAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const isPresetLookupAttribute = enumSettings.lookupAttributes.includes(testAttribute);
+  const testAttributeSelectValue = isPresetLookupAttribute ? testAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -227,7 +231,7 @@ export default function WbsSettingsPage() {
             onChange={(event) => {
               const next = event.target.value;
               if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                if (isCommonLookupAttribute(testAttribute)) {
+                if (isPresetLookupAttribute) {
                   setTestAttribute("");
                 }
                 return;
@@ -236,7 +240,7 @@ export default function WbsSettingsPage() {
             }}
             className="rounded-md border border-stone-300 px-2 py-1"
           >
-            {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+            {enumSettings.lookupAttributes.map((attribute) => (
               <option key={attribute} value={attribute}>{attribute}</option>
             ))}
             <option value={CUSTOM_LOOKUP_ATTRIBUTE}>Custom...</option>

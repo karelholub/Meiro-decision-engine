@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DecisionStackVersionSummary, DecisionVersionSummary, InAppApplication, InAppPlacement } from "@decisioning/shared";
 import { apiClient, type InAppV2DecideResponse } from "../../../../lib/api";
+import { useAppEnumSettings } from "../../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
-import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../../../lib/lookup-attributes";
+
+const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
 const toPrettyJson = (value: unknown) => JSON.stringify(value, null, 2);
 
@@ -75,7 +77,9 @@ export default function InAppDecideDebuggerPage() {
 
   const decisionKeyOptions = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
   const stackKeyOptions = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
-  const lookupAttributeSelectValue = isCommonLookupAttribute(lookupAttribute) ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const { settings: enumSettings } = useAppEnumSettings();
+  const isPresetLookupAttribute = enumSettings.lookupAttributes.includes(lookupAttribute);
+  const lookupAttributeSelectValue = isPresetLookupAttribute ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   const context = useMemo(() => {
     try {
@@ -229,7 +233,7 @@ export default function InAppDecideDebuggerPage() {
                 onChange={(event) => {
                   const next = event.target.value;
                   if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                    if (isCommonLookupAttribute(lookupAttribute)) {
+                    if (isPresetLookupAttribute) {
                       setLookupAttribute("");
                     }
                     return;
@@ -237,7 +241,7 @@ export default function InAppDecideDebuggerPage() {
                   setLookupAttribute(next);
                 }}
               >
-                {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                {enumSettings.lookupAttributes.map((attribute) => (
                   <option key={attribute} value={attribute}>
                     {attribute}
                   </option>

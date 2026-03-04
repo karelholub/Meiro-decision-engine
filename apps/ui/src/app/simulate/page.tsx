@@ -9,8 +9,10 @@ import type {
   InAppPlacement
 } from "@decisioning/shared";
 import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
+import { useAppEnumSettings } from "../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
-import { COMMON_LOOKUP_ATTRIBUTES, CUSTOM_LOOKUP_ATTRIBUTE, isCommonLookupAttribute } from "../../lib/lookup-attributes";
+
+const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
 type SimulationProfile = {
   profileId: string;
@@ -138,6 +140,7 @@ export default function SimulatePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveProfileNotice, setSaveProfileNotice] = useState<string | null>(null);
+  const { settings: enumSettings } = useAppEnumSettings();
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -575,13 +578,12 @@ export default function SimulatePage() {
 
   const activeDecisionKeys = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
   const activeStackKeys = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
-  const decideLookupAttributeSelectValue = isCommonLookupAttribute(lookupAttribute) ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
-  const stackLookupAttributeSelectValue = isCommonLookupAttribute(stackLookupAttribute)
-    ? stackLookupAttribute
-    : CUSTOM_LOOKUP_ATTRIBUTE;
-  const inAppLookupAttributeSelectValue = isCommonLookupAttribute(inAppLookupAttribute)
-    ? inAppLookupAttribute
-    : CUSTOM_LOOKUP_ATTRIBUTE;
+  const isPresetDecideLookupAttribute = enumSettings.lookupAttributes.includes(lookupAttribute);
+  const isPresetStackLookupAttribute = enumSettings.lookupAttributes.includes(stackLookupAttribute);
+  const isPresetInAppLookupAttribute = enumSettings.lookupAttributes.includes(inAppLookupAttribute);
+  const decideLookupAttributeSelectValue = isPresetDecideLookupAttribute ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const stackLookupAttributeSelectValue = isPresetStackLookupAttribute ? stackLookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
+  const inAppLookupAttributeSelectValue = isPresetInAppLookupAttribute ? inAppLookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
   const copyJson = async (value: unknown) => {
     try {
@@ -741,7 +743,7 @@ export default function SimulatePage() {
                         onChange={(event) => {
                           const next = event.target.value;
                           if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                            if (isCommonLookupAttribute(lookupAttribute)) {
+                            if (isPresetDecideLookupAttribute) {
                               setLookupAttribute("");
                             }
                             return;
@@ -750,7 +752,7 @@ export default function SimulatePage() {
                         }}
                         className="rounded-md border border-stone-300 px-2 py-1"
                       >
-                        {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                        {enumSettings.lookupAttributes.map((attribute) => (
                           <option key={attribute} value={attribute}>
                             {attribute}
                           </option>
@@ -826,7 +828,7 @@ export default function SimulatePage() {
                     onChange={(event) => {
                       const next = event.target.value;
                       if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                        if (isCommonLookupAttribute(stackLookupAttribute)) {
+                        if (isPresetStackLookupAttribute) {
                           setStackLookupAttribute("");
                         }
                         return;
@@ -835,7 +837,7 @@ export default function SimulatePage() {
                     }}
                     className="rounded-md border border-stone-300 px-2 py-1"
                   >
-                    {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                    {enumSettings.lookupAttributes.map((attribute) => (
                       <option key={attribute} value={attribute}>
                         {attribute}
                       </option>
@@ -929,7 +931,7 @@ export default function SimulatePage() {
                     onChange={(event) => {
                       const next = event.target.value;
                       if (next === CUSTOM_LOOKUP_ATTRIBUTE) {
-                        if (isCommonLookupAttribute(inAppLookupAttribute)) {
+                        if (isPresetInAppLookupAttribute) {
                           setInAppLookupAttribute("");
                         }
                         return;
@@ -938,7 +940,7 @@ export default function SimulatePage() {
                     }}
                     className="rounded-md border border-stone-300 px-2 py-1"
                   >
-                    {COMMON_LOOKUP_ATTRIBUTES.map((attribute) => (
+                    {enumSettings.lookupAttributes.map((attribute) => (
                       <option key={attribute} value={attribute}>
                         {attribute}
                       </option>
