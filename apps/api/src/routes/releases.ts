@@ -10,6 +10,7 @@ const releaseEntityTypeSchema = z.enum([
   "stack",
   "offer",
   "content",
+  "experiment",
   "campaign",
   "policy",
   "template",
@@ -90,6 +91,7 @@ const topLevelDiffSummary = (source: unknown, target: unknown): string => {
 const extractDecisionRefs = (definition: unknown) => {
   const contentKeys = new Set<string>();
   const offerKeys = new Set<string>();
+  const experimentKeys = new Set<string>();
 
   const walk = (value: unknown) => {
     if (Array.isArray(value)) {
@@ -117,6 +119,9 @@ const extractDecisionRefs = (definition: unknown) => {
     if (typeof value.contentKey === "string" && value.contentKey.trim()) {
       contentKeys.add(value.contentKey.trim());
     }
+    if (typeof value.experimentKey === "string" && value.experimentKey.trim()) {
+      experimentKeys.add(value.experimentKey.trim());
+    }
 
     for (const nested of Object.values(value)) {
       walk(nested);
@@ -126,7 +131,8 @@ const extractDecisionRefs = (definition: unknown) => {
   walk(definition);
   return {
     contentKeys: [...contentKeys],
-    offerKeys: [...offerKeys]
+    offerKeys: [...offerKeys],
+    experimentKeys: [...experimentKeys]
   };
 };
 
@@ -349,6 +355,26 @@ export const registerReleaseRoutes = async (deps: {
           record: content
         };
       }
+      case "experiment": {
+        const experiment = await (prisma as any).experimentVersion.findFirst({
+          where: {
+            environment: sourceEnv,
+            key: selection.key,
+            ...(selection.version ? { version: selection.version } : { status: "ACTIVE" })
+          },
+          orderBy: { version: "desc" }
+        });
+        if (!experiment) {
+          return null;
+        }
+        return {
+          type: selection.type,
+          key: selection.key,
+          version: experiment.version as number,
+          sourceSnapshot: experiment.experimentJson,
+          record: experiment
+        };
+      }
       case "campaign": {
         const campaign = await (prisma as any).inAppCampaign.findFirst({
           where: {
@@ -515,6 +541,25 @@ export const registerReleaseRoutes = async (deps: {
         }
         return { action: "update_new_version" as const, targetVersion: (versions[0]?.version ?? 0) + 1, existingSnapshot: versions[0] };
       }
+      case "experiment": {
+        const versions = await (prisma as any).experimentVersion.findMany({
+          where: { environment: targetEnv, key: item.key },
+          orderBy: { version: "desc" },
+          take: 20
+        });
+        if (versions.length === 0) {
+          return { action: "create_new" as const, targetVersion: 1, existingSnapshot: null };
+        }
+        const same = versions.find((version: any) => valueDigest(version.experimentJson) === valueDigest(item.sourceSnapshot));
+        if (same) {
+          return { action: "noop" as const, targetVersion: same.version as number, existingSnapshot: same.experimentJson };
+        }
+        return {
+          action: "update_new_version" as const,
+          targetVersion: (versions[0]?.version ?? 0) + 1,
+          existingSnapshot: versions[0]?.experimentJson ?? null
+        };
+      }
       case "policy": {
         const versions = await (prisma as any).orchestrationPolicy.findMany({
           where: { environment: targetEnv, key: item.key },
@@ -677,6 +722,9 @@ export const registerReleaseRoutes = async (deps: {
         for (const offerKey of refs.offerKeys) {
           await addSelection({ type: "offer", key: offerKey }, newItem);
         }
+        for (const experimentKey of refs.experimentKeys) {
+          await addSelection({ type: "experiment", key: experimentKey }, newItem);
+        }
       }
 
       if (source.type === "stack") {
@@ -708,6 +756,26 @@ export const registerReleaseRoutes = async (deps: {
         }
         if (typeof snapshot.offerKey === "string" && snapshot.offerKey.trim()) {
           await addSelection({ type: "offer", key: snapshot.offerKey.trim() }, newItem);
+        }
+        if (typeof snapshot.experimentKey === "string" && snapshot.experimentKey.trim()) {
+          await addSelection({ type: "experiment", key: snapshot.experimentKey.trim() }, newItem);
+        }
+      }
+
+      if (source.type === "experiment") {
+        const snapshot = source.sourceSnapshot as Record<string, unknown>;
+        const variants = Array.isArray(snapshot.variants) ? snapshot.variants : [];
+        for (const variant of variants) {
+          if (!isObject(variant) || !isObject(variant.treatment)) {
+            continue;
+          }
+          const treatment = variant.treatment;
+          if (typeof treatment.contentKey === "string" && treatment.contentKey.trim()) {
+            await addSelection({ type: "content", key: treatment.contentKey.trim() }, newItem);
+          }
+          if (typeof treatment.offerKey === "string" && treatment.offerKey.trim()) {
+            await addSelection({ type: "offer", key: treatment.offerKey.trim() }, newItem);
+          }
         }
       }
 
@@ -831,6 +899,7 @@ export const registerReleaseRoutes = async (deps: {
       if (type === "stack") return "stack.activate";
       if (type === "offer") return "catalog.offer.activate";
       if (type === "content") return "catalog.content.activate";
+      if (type === "experiment") return "experiment.activate";
       if (type === "campaign") return "engage.campaign.activate";
       if (type === "policy") return "engage.campaign.activate";
       return null;
@@ -845,7 +914,7 @@ export const registerReleaseRoutes = async (deps: {
       }
     }
 
-    const applyOrder = ["offer", "content", "template", "placement", "app", "decision", "stack", "policy", "campaign"];
+    const applyOrder = ["offer", "content", "template", "placement", "app", "decision", "stack", "policy", "experiment", "campaign"];
     const sorted = [...items].sort((left, right) => applyOrder.indexOf(left.type) - applyOrder.indexOf(right.type));
 
     try {
@@ -871,6 +940,12 @@ export const registerReleaseRoutes = async (deps: {
           beforeActiveSnapshot.push({ type: item.type, key: item.key, activeVersion: active?.version ?? null });
         } else if (item.type === "content") {
           const active = await (prisma as any).contentBlock.findFirst({
+            where: { environment: releaseRecord.targetEnv, key: item.key, status: "ACTIVE" },
+            orderBy: { version: "desc" }
+          });
+          beforeActiveSnapshot.push({ type: item.type, key: item.key, activeVersion: active?.version ?? null });
+        } else if (item.type === "experiment") {
+          const active = await (prisma as any).experimentVersion.findFirst({
             where: { environment: releaseRecord.targetEnv, key: item.key, status: "ACTIVE" },
             orderBy: { version: "desc" }
           });
@@ -954,6 +1029,19 @@ export const registerReleaseRoutes = async (deps: {
               schemaJson: source.schemaJson,
               localesJson: source.localesJson,
               tokenBindings: source.tokenBindings
+            }
+          });
+        } else if (item.type === "experiment") {
+          const source = item.sourceSnapshot as any;
+          await (prisma as any).experimentVersion.create({
+            data: {
+              environment: releaseRecord.targetEnv,
+              key: item.key,
+              name: source.name ?? item.key,
+              description: source.description ?? null,
+              version: item.targetVersion,
+              status: "DRAFT",
+              experimentJson: source
             }
           });
         } else if (item.type === "policy") {
@@ -1050,6 +1138,7 @@ export const registerReleaseRoutes = async (deps: {
               templateKey: source.templateKey,
               contentKey: source.contentKey,
               offerKey: source.offerKey,
+              experimentKey: source.experimentKey,
               priority: source.priority,
               ttlSeconds: source.ttlSeconds,
               startAt: source.startAt,
@@ -1073,6 +1162,7 @@ export const registerReleaseRoutes = async (deps: {
               templateKey: source.templateKey,
               contentKey: source.contentKey,
               offerKey: source.offerKey,
+              experimentKey: source.experimentKey,
               priority: source.priority,
               ttlSeconds: source.ttlSeconds,
               startAt: source.startAt,
@@ -1155,6 +1245,15 @@ export const registerReleaseRoutes = async (deps: {
               data: { status: "ARCHIVED" }
             });
             await (prisma as any).contentBlock.updateMany({
+              where: { environment: releaseRecord.targetEnv, key: item.key, version: item.targetVersion },
+              data: { status: "ACTIVE", activatedAt: new Date() }
+            });
+          } else if (item.type === "experiment") {
+            await (prisma as any).experimentVersion.updateMany({
+              where: { environment: releaseRecord.targetEnv, key: item.key, status: "ACTIVE" },
+              data: { status: "ARCHIVED" }
+            });
+            await (prisma as any).experimentVersion.updateMany({
               where: { environment: releaseRecord.targetEnv, key: item.key, version: item.targetVersion },
               data: { status: "ACTIVE", activatedAt: new Date() }
             });

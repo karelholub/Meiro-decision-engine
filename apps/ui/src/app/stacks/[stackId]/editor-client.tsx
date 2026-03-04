@@ -44,7 +44,7 @@ export default function StackEditorClient({
   const [maxSteps, setMaxSteps] = useState("10");
   const [maxTotalMs, setMaxTotalMs] = useState("250");
   const [finalOutputMode, setFinalOutputMode] = useState<"FIRST_NON_NOOP" | "LAST_MATCH" | "EXPLICIT">("FIRST_NON_NOOP");
-  const [defaultActionType, setDefaultActionType] = useState<"noop" | "personalize" | "message" | "suppress">("noop");
+  const [defaultActionType, setDefaultActionType] = useState<"noop" | "personalize" | "message" | "suppress" | "experiment">("noop");
   const [defaultPayload, setDefaultPayload] = useState("{}");
   const [steps, setSteps] = useState<StepForm[]>([]);
 
@@ -145,7 +145,7 @@ export default function StackEditorClient({
         decisionKey: step.decisionKey.trim(),
         enabled: step.enabled,
         stopOnMatch: step.stopOnMatch,
-        stopOnActionTypes: parseCommaList(step.stopOnActionTypes) as Array<"noop" | "personalize" | "message" | "suppress">,
+        stopOnActionTypes: parseCommaList(step.stopOnActionTypes) as Array<"noop" | "personalize" | "message" | "suppress" | "experiment">,
         continueOnNoMatch: step.continueOnNoMatch,
         when:
           step.whenEnabled && step.whenLeft.trim()
@@ -399,13 +399,14 @@ export default function StackEditorClient({
               Default action type
               <select
                 value={defaultActionType}
-                onChange={(event) => setDefaultActionType(event.target.value as "noop" | "personalize" | "message" | "suppress")}
+                onChange={(event) => setDefaultActionType(event.target.value as "noop" | "personalize" | "message" | "suppress" | "experiment")}
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
                 <option value="noop">noop</option>
                 <option value="personalize">personalize</option>
                 <option value="message">message</option>
                 <option value="suppress">suppress</option>
+                <option value="experiment">experiment</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">

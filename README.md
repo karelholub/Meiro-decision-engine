@@ -55,6 +55,13 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
 - `/v2/inapp/decide` runtime endpoint with deterministic varianting, holdout, token rendering, tracking payload, Redis cache, timeout fallback, and rate limiting
 - In-App measurement ingest (`IMPRESSION`, `CLICK`, `DISMISS`) and reporting APIs (overview, campaign series, CSV export)
 - In-App governance workflow (RBAC roles, approval actions, campaign versions, audit log, rollback, env promotion)
+- Experiments v1:
+  - versioned experiments (`DRAFT`, `ACTIVE`, `PAUSED`, `ARCHIVED`)
+  - A/B + weighted multivariate assignment
+  - deterministic sticky allocation (`profileId`, `anonymousId`, or `stitching_id`) with TTL bucket support
+  - optional experiment holdout behavior (`noop`) for clean lift measurement
+  - campaign-level integration via `experimentKey`
+  - tracking fields on decide/events (`experiment_id`, `experiment_version`, `variant_id`, `allocation_id`, `is_holdout`)
 - DSL validation + formatting with Zod
 - Deterministic engine:
   - eligibility checks (audiences, attributes, consent)
@@ -103,6 +110,15 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `GET /v1/inapp/reports/overview`
   - `GET /v1/inapp/reports/campaign/:key`
   - `GET /v1/inapp/reports/export.csv`
+  - `GET /v1/experiments`
+  - `POST /v1/experiments`
+  - `GET /v1/experiments/:id`
+  - `PUT /v1/experiments/:id`
+  - `POST /v1/experiments/:id/validate`
+  - `POST /v1/experiments/:key/activate`
+  - `POST /v1/experiments/:key/pause`
+  - `POST /v1/experiments/:key/archive`
+  - `POST /v1/experiments/:key/preview`
   - `GET /v1/cache/stats`
   - `POST /v1/cache/invalidate`
   - `POST /v1/precompute`
@@ -1268,3 +1284,25 @@ Recommended promotion workflow:
 - New In-App Messaging module adds admin CRUD, runtime decisioning (`/v2/inapp/decide`), in-app logs, simulator support, and DEV seed data.
 - Legacy runtime endpoints `POST /v1/inapp/decide` and `POST /v1/inapp/events` now return `410` and should be replaced with v2 endpoints.
 - CI includes release smoke gating for in-app runtime (`pnpm --filter @decisioning/api smoke:inapp`).
+
+## Experiments v1 Event Mapping
+
+For analytics pipelines (for example GTM -> GA4), emit in-app events using the tracking object returned by `/v2/inapp/decide`.
+
+Recommended event names:
+- `deci_inapp_impression`
+- `deci_inapp_click`
+- `deci_inapp_dismiss`
+
+Recommended parameters:
+- `campaign_id`
+- `message_id`
+- `variant_id`
+- `experiment_id` (optional)
+- `experiment_version` (optional)
+- `allocation_id` (optional)
+- `is_holdout` (optional)
+
+Stickiness guidance:
+- Use `assignment.unit = stitching_id` when your client can provide a stable anon->known stitched identity.
+- Otherwise use `profileId` for known users and `anonymousId` for anonymous users.

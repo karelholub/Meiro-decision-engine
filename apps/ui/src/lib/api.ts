@@ -12,6 +12,8 @@ import type {
   DecisionValidationResponse,
   DecisionVersionSummary,
   DecideStackResponse,
+  ExperimentDetails,
+  ExperimentVersionSummary,
   InAppApplication,
   InAppAuditLog,
   InAppCampaignActivationPreview,
@@ -131,6 +133,10 @@ export type InAppV2DecideResponse = {
     campaign_id: string;
     message_id: string;
     variant_id: string;
+    experiment_id?: string;
+    experiment_version?: number;
+    is_holdout?: boolean;
+    allocation_id?: string;
   };
   payload: Record<string, unknown>;
   debug: {
@@ -263,7 +269,7 @@ export type MeResponse = {
 export type DevLoginProfile = "viewer" | "builder" | "publisher" | "operator" | "admin";
 
 export type ReleasePlanItem = {
-  type: "decision" | "stack" | "offer" | "content" | "campaign" | "policy" | "template" | "placement" | "app";
+  type: "decision" | "stack" | "offer" | "content" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";
   key: string;
   version: number;
   action: "create_new" | "update_new_version" | "noop";
@@ -880,6 +886,64 @@ export const apiClient = {
         apiFetchText(`/v1/inapp/reports/export.csv${toQuery(params)}`)
     }
   },
+  experiments: {
+    list: (params: { status?: "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"; appKey?: string; placement?: string; q?: string } = {}) =>
+      apiFetch<{ items: ExperimentVersionSummary[] }>(`/v1/experiments${toQuery(params)}`),
+    create: (input: {
+      key: string;
+      name: string;
+      description?: string;
+      experimentJson?: Record<string, unknown>;
+      startAt?: string | null;
+      endAt?: string | null;
+    }) =>
+      apiFetch<{ item: ExperimentDetails; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/experiments`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
+    get: (id: string) => apiFetch<{ item: ExperimentDetails }>(`/v1/experiments/${id}`),
+    update: (id: string, input: Record<string, unknown>) =>
+      apiFetch<{ item: ExperimentDetails; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/experiments/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(input)
+      }),
+    validate: (id: string) =>
+      apiFetch<{ valid: boolean; errors: string[]; warnings: string[] }>(`/v1/experiments/${id}/validate`, {
+        method: "POST"
+      }),
+    activate: (key: string, version?: number) =>
+      apiFetch<{ item: ExperimentDetails }>(`/v1/experiments/${encodeURIComponent(key)}/activate`, {
+        method: "POST",
+        body: JSON.stringify(version ? { version } : {})
+      }),
+    pause: (key: string) =>
+      apiFetch<{ item: ExperimentDetails | null }>(`/v1/experiments/${encodeURIComponent(key)}/pause`, {
+        method: "POST"
+      }),
+    archive: (key: string) =>
+      apiFetch<{ item: ExperimentDetails | null }>(`/v1/experiments/${encodeURIComponent(key)}/archive`, {
+        method: "POST"
+      }),
+    preview: (key: string, input: Record<string, unknown>) =>
+      apiFetch<{
+        item: ExperimentDetails;
+        preview: {
+          eligible: boolean;
+          assignment: {
+            variantId: string | null;
+            isHoldout: boolean;
+            allocationId: string;
+          };
+          treatment: Record<string, unknown> | null;
+          payload: Record<string, unknown> | null;
+          tracking: Record<string, unknown>;
+        };
+        debug: Record<string, unknown>;
+      }>(`/v1/experiments/${encodeURIComponent(key)}/preview`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      })
+  },
   execution: {
     cache: {
       stats: () => apiFetch<RealtimeCacheStatsResponse>(`/v1/cache/stats`),
@@ -1279,7 +1343,7 @@ export const apiClient = {
       sourceEnv: "DEV" | "STAGE" | "PROD";
       targetEnv: "DEV" | "STAGE" | "PROD";
       selection: Array<{
-        type: "decision" | "stack" | "offer" | "content" | "campaign" | "policy" | "template" | "placement" | "app";
+        type: "decision" | "stack" | "offer" | "content" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";
         key: string;
         version?: number;
       }>;

@@ -447,6 +447,7 @@ export interface InAppCampaign {
   templateKey: string;
   contentKey: string | null;
   offerKey: string | null;
+  experimentKey: string | null;
   priority: number;
   ttlSeconds: number;
   startAt: string | null;
@@ -597,11 +598,89 @@ export interface InAppEvent {
   placement: string;
   campaignKey: string;
   variantKey: string;
+  experimentKey: string | null;
+  experimentVersion: number | null;
+  isHoldout: boolean;
+  allocationId: string | null;
   messageId: string;
   profileId: string | null;
   lookupAttribute: string | null;
   lookupValueHash: string | null;
   context: Record<string, unknown> | null;
+}
+
+export type ExperimentStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+
+export interface ExperimentVariantTreatment {
+  type: "inapp_message";
+  contentKey: string;
+  offerKey?: string;
+  tags?: string[];
+}
+
+export interface ExperimentVariant {
+  id: string;
+  weight: number;
+  treatment: ExperimentVariantTreatment;
+}
+
+export interface ExperimentDefinition {
+  schemaVersion: "experiment.v1";
+  key: string;
+  scope: {
+    appKey?: string;
+    placements?: string[];
+    channels?: string[];
+  };
+  population?: {
+    eligibility?: {
+      audiencesAny?: string[];
+      attributes?: Array<{
+        field: string;
+        op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "contains" | "exists";
+        value?: unknown;
+      }>;
+    };
+  };
+  assignment: {
+    unit: "profileId" | "anonymousId" | "stitching_id";
+    salt: string;
+    stickiness?: {
+      mode?: "ttl" | "static";
+      ttl_seconds?: number;
+    };
+    weights?: "static";
+  };
+  variants: ExperimentVariant[];
+  holdout?: {
+    enabled: boolean;
+    percentage: number;
+    behavior?: "noop";
+  };
+  activation?: {
+    startAt?: string;
+    endAt?: string;
+  };
+}
+
+export interface ExperimentVersionSummary {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  version: number;
+  status: ExperimentStatus;
+  name: string;
+  description: string | null;
+  updatedAt: string;
+  activatedAt: string | null;
+  startAt: string | null;
+  endAt: string | null;
+  appKey: string | null;
+  placements: string[];
+}
+
+export interface ExperimentDetails extends ExperimentVersionSummary {
+  experimentJson: ExperimentDefinition;
 }
 
 export interface InAppOverviewGroup {

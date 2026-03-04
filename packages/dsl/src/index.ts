@@ -3,7 +3,7 @@ import { z } from "zod";
 export const DecisionStatusSchema = z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]);
 export type DecisionStatus = z.infer<typeof DecisionStatusSchema>;
 
-export const ActionTypeSchema = z.enum(["noop", "personalize", "message", "suppress"]);
+export const ActionTypeSchema = z.enum(["noop", "personalize", "message", "suppress", "experiment"]);
 export type ActionType = z.infer<typeof ActionTypeSchema>;
 
 export const OutcomeSchema = z.enum(["ELIGIBLE", "IN_HOLDOUT", "CAPPED", "NOT_ELIGIBLE", "ERROR"]);

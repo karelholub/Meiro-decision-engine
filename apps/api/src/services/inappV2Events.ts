@@ -27,6 +27,10 @@ export interface InAppV2EventBody {
     campaign_id: string;
     message_id: string;
     variant_id: string;
+    experiment_id?: string;
+    experiment_version?: number;
+    is_holdout?: boolean;
+    allocation_id?: string;
   };
   profileId?: string;
   lookup?: {
@@ -96,6 +100,11 @@ export const createInAppV2EventsService = (deps: InAppV2EventsDeps) => {
         campaign_id: input.body.tracking.campaign_id,
         message_id: input.body.tracking.message_id,
         variant_id: input.body.tracking.variant_id,
+        experiment_id: input.body.tracking.experiment_id ?? "",
+        experiment_version:
+          typeof input.body.tracking.experiment_version === "number" ? String(input.body.tracking.experiment_version) : "",
+        is_holdout: input.body.tracking.is_holdout ? "1" : "0",
+        allocation_id: input.body.tracking.allocation_id ?? "",
         profileId: input.body.profileId ?? "",
         lookupAttribute: input.body.lookup?.attribute ?? "",
         lookupValueHash,

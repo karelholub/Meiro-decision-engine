@@ -48,6 +48,10 @@ const defaultPayloadByAction: Record<ActionType, Record<string, unknown>> = {
   personalize: {
     variant: "A",
     reason: ""
+  },
+  experiment: {
+    experimentKey: "",
+    placement: "home_top"
   }
 };
 
@@ -55,7 +59,8 @@ const actionHints: Record<ActionType, string> = {
   noop: "Use for safe default behavior or intentional no-op paths.",
   suppress: "Use when user should not receive treatment. Provide a clear reason for reporting/debugging.",
   message: "Use for in-app messaging outcomes with placement/template/ttl and tracking metadata.",
-  personalize: "Use for deterministic variant selection and downstream personalization."
+  personalize: "Use for deterministic variant selection and downstream personalization.",
+  experiment: "Use to resolve an active experiment into a concrete in-app treatment at runtime."
 };
 
 const ensureObjectPayload = (output: DecisionOutput): DecisionOutput => {
@@ -277,6 +282,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
           <option value="suppress">suppress</option>
           <option value="message">inapp_message</option>
           <option value="personalize">personalize</option>
+          <option value="experiment">experiment</option>
         </select>
         {actionTypeError ? <span className="text-red-700">{actionTypeError}</span> : null}
       </label>
@@ -482,6 +488,29 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
               </label>
             </>
           ) : null}
+        </div>
+      ) : null}
+
+      {safeValue.actionType === "experiment" ? (
+        <div className="grid gap-3 rounded-md border border-stone-200 p-3">
+          <label className="flex flex-col gap-1 text-xs">
+            experimentKey
+            <input
+              className="rounded border border-stone-300 px-2 py-1 font-mono text-xs"
+              value={typeof payload.experimentKey === "string" ? payload.experimentKey : ""}
+              onChange={(event) => updatePayload({ experimentKey: event.target.value })}
+              placeholder="home_top_banner_exp"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            placement (optional)
+            <input
+              className="rounded border border-stone-300 px-2 py-1 font-mono text-xs"
+              value={typeof payload.placement === "string" ? payload.placement : ""}
+              onChange={(event) => updatePayload({ placement: event.target.value })}
+              placeholder="home_top"
+            />
+          </label>
         </div>
       ) : null}
 

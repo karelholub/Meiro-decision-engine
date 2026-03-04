@@ -89,6 +89,7 @@ import { registerOrchestrationRoutes } from "./routes/orchestration";
 import { registerPrecomputeRoutes } from "./routes/precompute";
 import { registerPipesCallbackRoutes } from "./routes/pipesCallback";
 import { registerReleaseRoutes } from "./routes/releases";
+import { registerExperimentRoutes } from "./routes/experiments";
 import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
 import {
   processPipesWebhook,
@@ -105,6 +106,7 @@ import {
 import { createCatalogResolver } from "./services/catalogResolver";
 import { buildActionDescriptor, type RuntimeActionDescriptor } from "./services/actionDescriptor";
 import { createOrchestrationService } from "./services/orchestrationService";
+import { chooseVariant, evaluateEligibilityForExperiment, loadActiveExperiment } from "./services/experiments";
 import { allPermissions, defaultRolePermissions } from "./lib/permissions";
 
 interface PolicyHook {
@@ -550,7 +552,7 @@ const getFallbackOutputByKey = (definition: DecisionDefinition, key: string): De
   }
   const parsed = z
     .object({
-      actionType: z.enum(["noop", "personalize", "message", "suppress"]),
+      actionType: z.enum(["noop", "personalize", "message", "suppress", "experiment"]),
       payload: z.record(z.unknown()).default({})
     })
     .safeParse(output);
@@ -892,7 +894,7 @@ const isExposureAction = (actionType: string): boolean => {
 };
 
 const normalizeEngineActionType = (value: string): DecisionOutput["actionType"] => {
-  if (value === "message" || value === "noop" || value === "personalize" || value === "suppress") {
+  if (value === "message" || value === "noop" || value === "personalize" || value === "suppress" || value === "experiment") {
     return value;
   }
   return "noop";
@@ -2588,6 +2590,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       if (route.includes("/archive")) return "engage.campaign.archive";
       return method === "GET" ? "engage.campaign.read" : "engage.campaign.write";
     }
+    if (route.startsWith("/v1/experiments")) {
+      if (route.includes("/activate")) return "experiment.activate";
+      if (route.includes("/archive")) return "experiment.archive";
+      return method === "GET" ? "experiment.read" : "experiment.write";
+    }
     if (route.startsWith("/v1/orchestration/policies")) {
       if (route.includes("/activate")) return "decision.activate";
       if (route.includes("/archive")) return "decision.archive";
@@ -3003,6 +3010,15 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     resolveAuth: resolveAuthContext,
     requirePermission,
     requireAnyPermission
+  });
+
+  await registerExperimentRoutes({
+    app,
+    prisma,
+    now,
+    resolveEnvironment,
+    buildResponseError,
+    requireWriteAuth
   });
 
   await registerWebhooksRoutes({
@@ -6921,26 +6937,176 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
               }
             : engineResult;
 
+      let preOrchestrationActionType = finalResult.actionType;
+      let preOrchestrationPayload = finalResult.payload as Record<string, unknown>;
+      let preOrchestrationOutcome = finalResult.outcome;
+      const experimentReasons: Array<{ code: string; detail?: string }> = [];
+      let experimentTrace:
+        | {
+            experimentKey: string;
+            experimentVersion: number;
+            variantId: string;
+            allocationId: string;
+            unitHash: string;
+            timeBucket: string;
+          }
+        | null = null;
+
+      if (finalResult.outcome === "ELIGIBLE" && finalResult.actionType === "experiment") {
+        const experimentPayload = isPlainObject(finalResult.payload) ? finalResult.payload : {};
+        const experimentKey =
+          typeof experimentPayload.experimentKey === "string" && experimentPayload.experimentKey.trim().length > 0
+            ? experimentPayload.experimentKey.trim()
+            : null;
+        if (!experimentKey) {
+          preOrchestrationActionType = "noop";
+          preOrchestrationPayload = {};
+          preOrchestrationOutcome = "NOT_ELIGIBLE";
+          experimentReasons.push({ code: "EXPERIMENT_KEY_MISSING" });
+        } else {
+          const activeExperiment = await loadActiveExperiment({
+            prisma,
+            environment,
+            key: experimentKey
+          });
+          if (!activeExperiment) {
+            preOrchestrationActionType = "noop";
+            preOrchestrationPayload = {};
+            preOrchestrationOutcome = "NOT_ELIGIBLE";
+            experimentReasons.push({ code: "EXPERIMENT_NOT_ACTIVE" });
+          } else {
+            const spec = activeExperiment.experimentJson;
+            const eligible = evaluateEligibilityForExperiment({
+              spec,
+              profile: {
+                audiences: profile.audiences,
+                attributes: profile.attributes
+              },
+              audiences: profile.audiences,
+              context: context as unknown as Record<string, unknown>
+            });
+            if (!eligible) {
+              preOrchestrationActionType = "noop";
+              preOrchestrationPayload = {};
+              preOrchestrationOutcome = "NOT_ELIGIBLE";
+              experimentReasons.push({ code: "EXPERIMENT_NOT_ELIGIBLE" });
+            } else {
+              const lookupUnit = parsed.data.lookup
+                ? `${parsed.data.lookup.attribute}:${hashSha256(parsed.data.lookup.value)}`
+                : null;
+              const unitValue =
+                spec.assignment.unit === "profileId"
+                  ? profile.profileId
+                  : spec.assignment.unit === "anonymousId"
+                    ? (typeof (context as unknown as Record<string, unknown>).anonymousId === "string"
+                        ? ((context as unknown as Record<string, unknown>).anonymousId as string)
+                        : profile.profileId)
+                    : typeof (context as unknown as Record<string, unknown>).stitching_id === "string"
+                      ? ((context as unknown as Record<string, unknown>).stitching_id as string)
+                      : lookupUnit ?? profile.profileId;
+              const assignment = chooseVariant(spec, unitValue, nowDate);
+              if (assignment.isHoldout || !assignment.variantId) {
+                preOrchestrationActionType = "noop";
+                preOrchestrationPayload = {};
+                preOrchestrationOutcome = "NOT_ELIGIBLE";
+                experimentReasons.push({ code: "EXPERIMENT_HOLDOUT" });
+              } else {
+                const variant = spec.variants.find((entry) => entry.id === assignment.variantId) ?? null;
+                if (!variant) {
+                  preOrchestrationActionType = "noop";
+                  preOrchestrationPayload = {};
+                  preOrchestrationOutcome = "NOT_ELIGIBLE";
+                  experimentReasons.push({ code: "EXPERIMENT_VARIANT_NOT_FOUND" });
+                } else {
+                  const resolvedOffer = variant.treatment.offerKey
+                    ? await catalogResolver.resolveOffer({
+                        environment,
+                        offerKey: variant.treatment.offerKey,
+                        now: nowDate
+                      })
+                    : null;
+                  const resolvedContent = await catalogResolver.resolveContent({
+                    environment,
+                    contentKey: variant.treatment.contentKey,
+                    locale: typeof context.locale === "string" ? context.locale : "en",
+                    profile,
+                    context: {
+                      ...(context as unknown as Record<string, unknown>),
+                      ...(resolvedOffer?.valid ? { offer: resolvedOffer.value } : {})
+                    },
+                    now: nowDate
+                  });
+
+                  if (!resolvedContent) {
+                    preOrchestrationActionType = "noop";
+                    preOrchestrationPayload = {};
+                    preOrchestrationOutcome = "NOT_ELIGIBLE";
+                    experimentReasons.push({ code: "EXPERIMENT_CONTENT_NOT_FOUND" });
+                  } else {
+                    const payload =
+                      typeof resolvedContent.payload === "object" && resolvedContent.payload && !Array.isArray(resolvedContent.payload)
+                        ? ({ ...(resolvedContent.payload as Record<string, unknown>) } as Record<string, unknown>)
+                        : { value: resolvedContent.payload };
+                    if (resolvedOffer?.valid) {
+                      payload.offer = {
+                        key: resolvedOffer.key,
+                        version: resolvedOffer.version,
+                        type: resolvedOffer.type,
+                        value: resolvedOffer.value,
+                        constraints: resolvedOffer.constraints
+                      };
+                    }
+                    payload.tracking = {
+                      ...(isPlainObject(payload.tracking) ? payload.tracking : {}),
+                      experiment_id: activeExperiment.key,
+                      experiment_version: activeExperiment.version,
+                      variant_id: variant.id,
+                      allocation_id: assignment.allocationId,
+                      is_holdout: false
+                    };
+                    payload.tags = [...new Set([...(resolvedContent.tags ?? []), ...(resolvedOffer?.tags ?? []), ...(variant.treatment.tags ?? [])])];
+                    preOrchestrationActionType = "message";
+                    preOrchestrationPayload = payload;
+                    preOrchestrationOutcome = "ELIGIBLE";
+                    experimentTrace = {
+                      experimentKey: activeExperiment.key,
+                      experimentVersion: activeExperiment.version,
+                      variantId: variant.id,
+                      allocationId: assignment.allocationId,
+                      unitHash: assignment.bucketInfo.unitHash,
+                      timeBucket: assignment.bucketInfo.timeBucket
+                    };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
       const resolvedPayloadRef = await catalogResolver.resolvePayloadRef({
         environment,
-        actionType: finalResult.actionType,
-        payload: finalResult.payload,
+        actionType: preOrchestrationActionType,
+        payload: preOrchestrationPayload,
         locale: typeof context.locale === "string" ? context.locale : undefined,
         profile,
         context,
         now: nowDate
       });
       const resolvedFinalPayload = resolvedPayloadRef.payload;
-      let runtimeActionType = finalResult.actionType;
+      let runtimeActionType = preOrchestrationActionType;
       let runtimePayload = resolvedFinalPayload;
-      let runtimeOutcome = finalResult.outcome;
-      const responseReasons = [...finalResult.reasons];
+      let runtimeOutcome = preOrchestrationOutcome;
+      const responseReasons = [...finalResult.reasons, ...experimentReasons];
       const integrationTrace: Record<string, unknown> = { ...lookupDebugTrace };
+      if (experimentTrace) {
+        integrationTrace.experiment = experimentTrace;
+      }
 
       const orchestrationDescriptor = await buildActionDescriptor(
         {
-          actionType: finalResult.actionType,
-          payload: finalResult.payload,
+          actionType: preOrchestrationActionType,
+          payload: preOrchestrationPayload,
           tags: resolvedPayloadRef.tags
         },
         {

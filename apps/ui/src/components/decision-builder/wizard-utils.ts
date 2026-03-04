@@ -30,7 +30,7 @@ const SUPPORTED_OPERATORS = new Set<AttributeOperator>([
   "exists"
 ]);
 
-export const supportedWizardActionTypes: ActionType[] = ["noop", "suppress", "message", "personalize"];
+export const supportedWizardActionTypes: ActionType[] = ["noop", "suppress", "message", "personalize", "experiment"];
 
 const SUPPORTED_TOP_LEVEL_KEYS = new Set([
   "id",

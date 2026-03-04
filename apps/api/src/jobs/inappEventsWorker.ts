@@ -16,6 +16,10 @@ export interface InAppEventStreamPayload {
       campaign_id: string;
       message_id: string;
       variant_id: string;
+      experiment_id?: string;
+      experiment_version?: number;
+      is_holdout?: boolean;
+      allocation_id?: string;
     };
     profileId?: string;
     lookup?: {
@@ -45,6 +49,10 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
   const campaignId = input.fields.campaign_id;
   const messageId = input.fields.message_id;
   const variantId = input.fields.variant_id;
+  const experimentId = input.fields.experiment_id;
+  const experimentVersionRaw = input.fields.experiment_version;
+  const isHoldoutRaw = input.fields.is_holdout;
+  const allocationId = input.fields.allocation_id;
   if (
     !eventTypeRaw ||
     !tsRaw ||
@@ -96,7 +104,13 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
       tracking: {
         campaign_id: campaignId,
         message_id: messageId,
-        variant_id: variantId
+        variant_id: variantId,
+        ...(experimentId ? { experiment_id: experimentId } : {}),
+        ...(experimentVersionRaw && Number.isFinite(Number(experimentVersionRaw))
+          ? { experiment_version: Number.parseInt(experimentVersionRaw, 10) }
+          : {}),
+        ...(allocationId ? { allocation_id: allocationId } : {}),
+        ...(isHoldoutRaw ? { is_holdout: isHoldoutRaw === "1" || isHoldoutRaw.toLowerCase() === "true" } : {})
       },
       profileId: input.fields.profileId || undefined,
       lookup:
@@ -127,12 +141,45 @@ const toDbRow = (entry: StreamEnvelope): Prisma.InAppEventCreateManyInput => {
     placement: entry.payload.body.placement,
     campaignKey: entry.payload.body.tracking.campaign_id,
     variantKey: entry.payload.body.tracking.variant_id,
+    experimentKey: entry.payload.body.tracking.experiment_id ?? null,
+    experimentVersion: entry.payload.body.tracking.experiment_version ?? null,
+    isHoldout: entry.payload.body.tracking.is_holdout ?? false,
+    allocationId: entry.payload.body.tracking.allocation_id ?? null,
     messageId: entry.payload.body.tracking.message_id,
     sourceStreamId: entry.id,
     profileId: entry.payload.body.profileId ?? null,
     lookupAttribute: entry.payload.body.lookup?.attribute ?? null,
     lookupValueHash: lookupHash,
     contextJson: entry.payload.body.context ? (entry.payload.body.context as Prisma.InputJsonValue) : Prisma.JsonNull
+  };
+};
+
+const toExperimentExposureRow = (entry: StreamEnvelope): Record<string, unknown> | null => {
+  const experimentKey = entry.payload.body.tracking.experiment_id;
+  const experimentVersion = entry.payload.body.tracking.experiment_version;
+  if (!experimentKey || !experimentVersion) {
+    return null;
+  }
+
+  const timestamp = entry.payload.body.ts ? new Date(entry.payload.body.ts) : new Date();
+  const lookupHash = entry.payload.body.lookup?.valueHash ?? (entry.payload.body.lookup?.value ? sha256(entry.payload.body.lookup.value) : null);
+  return {
+    environment: entry.payload.environment,
+    ts: timestamp,
+    appKey: entry.payload.body.appKey,
+    placement: entry.payload.body.placement,
+    experimentKey,
+    experimentVersion,
+    variantId: entry.payload.body.tracking.variant_id,
+    isHoldout: entry.payload.body.tracking.is_holdout ?? false,
+    allocationId: entry.payload.body.tracking.allocation_id ?? null,
+    profileId: entry.payload.body.profileId ?? null,
+    unitType: entry.payload.body.profileId ? "profileId" : entry.payload.body.lookup ? "lookup" : null,
+    unitHash: lookupHash,
+    eventType: entry.payload.body.eventType,
+    messageId: entry.payload.body.tracking.message_id,
+    campaignId: entry.payload.body.tracking.campaign_id,
+    context: entry.payload.body.context ? (entry.payload.body.context as Prisma.InputJsonValue) : Prisma.JsonNull
   };
 };
 
@@ -306,6 +353,20 @@ export const createInAppEventsWorker = (input: {
         status.inserted += insertedCount;
       }
       status.lastFlushAt = new Date().toISOString();
+      const exposureRows = entriesToInsert.map((entry) => toExperimentExposureRow(entry)).filter((row): row is Record<string, unknown> => row !== null);
+      if (exposureRows.length > 0) {
+        const exposureModel = (input.prisma as any).experimentExposure;
+        if (exposureModel?.createMany) {
+          await exposureModel.createMany({
+            data: exposureRows,
+            skipDuplicates: false
+          });
+        } else if (exposureModel?.create) {
+          for (const row of exposureRows) {
+            await exposureModel.create({ data: row });
+          }
+        }
+      }
       for (const streamId of rowSourceIds) {
         await input.cache.setJson(
           processedMarkerKey(streamId),

@@ -68,6 +68,13 @@ enum DecisionResultStatus {
   ERROR
 }
 
+enum ExperimentStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
 enum DlqTopic {
   PIPES_WEBHOOK
   PRECOMPUTE_TASK
@@ -286,6 +293,7 @@ model InAppCampaign {
   templateKey           String
   contentKey            String?
   offerKey              String?
+  experimentKey         String?
   priority              Int                @default(0)
   ttlSeconds            Int                @default(3600)
   startAt               DateTime?
@@ -453,6 +461,10 @@ model InAppEvent {
   placement       String
   campaignKey     String
   variantKey      String
+  experimentKey   String?
+  experimentVersion Int?
+  isHoldout       Boolean       @default(false)
+  allocationId    String?
   messageId       String
   sourceStreamId  String?       @unique
   profileId       String?
@@ -464,8 +476,69 @@ model InAppEvent {
   @@index([environment, campaignKey, ts])
   @@index([environment, messageId])
   @@index([environment, appKey, placement, ts])
+  @@index([environment, experimentKey, ts])
   @@index([ts])
   @@map("inapp_events")
+}
+
+model ExperimentVersion {
+  id             String           @id @default(uuid())
+  environment    Environment      @default(DEV)
+  key            String
+  version        Int
+  status         ExperimentStatus
+  name           String
+  description    String?
+  experimentJson Json
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  activatedAt    DateTime?
+  startAt        DateTime?
+  endAt          DateTime?
+
+  @@unique([environment, key, version])
+  @@index([environment, key, status])
+  @@map("experiment_versions")
+}
+
+model ExperimentAssignment {
+  id            String      @id @default(uuid())
+  environment   Environment @default(DEV)
+  experimentKey String
+  unitType      String
+  unitHash      String
+  timeBucket    String
+  variantId     String
+  assignedAt    DateTime    @default(now())
+  expiresAt     DateTime?
+
+  @@unique([environment, experimentKey, unitType, unitHash, timeBucket])
+  @@index([environment, experimentKey, assignedAt])
+  @@map("experiment_assignments")
+}
+
+model ExperimentExposure {
+  id                String      @id @default(uuid())
+  environment       Environment @default(DEV)
+  ts                DateTime    @default(now())
+  appKey            String?
+  placement         String?
+  experimentKey     String
+  experimentVersion Int
+  variantId         String
+  isHoldout         Boolean     @default(false)
+  allocationId      String?
+  profileId         String?
+  unitType          String?
+  unitHash          String?
+  eventType         String
+  messageId         String?
+  campaignId        String?
+  context           Json?
+
+  @@index([environment, experimentKey, ts])
+  @@index([environment, campaignId, ts])
+  @@map("experiment_exposures")
 }
 
 model InAppUser {

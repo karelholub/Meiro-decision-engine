@@ -165,6 +165,8 @@ export default function InAppCampaignEditPage() {
   const [templateKey, setTemplateKey] = useState("");
   const [contentKey, setContentKey] = useState("");
   const [offerKey, setOfferKey] = useState("");
+  const [experimentMode, setExperimentMode] = useState<"static" | "experiment">("static");
+  const [experimentKey, setExperimentKey] = useState("");
   const [priority, setPriority] = useState("0");
   const [ttlSeconds, setTtlSeconds] = useState("3600");
   const [holdoutEnabled, setHoldoutEnabled] = useState(false);
@@ -225,6 +227,8 @@ export default function InAppCampaignEditPage() {
       setTemplateKey(item.templateKey);
       setContentKey(item.contentKey ?? "");
       setOfferKey(item.offerKey ?? "");
+      setExperimentMode(item.experimentKey ? "experiment" : "static");
+      setExperimentKey(item.experimentKey ?? "");
       setPriority(String(item.priority));
       setTtlSeconds(String(item.ttlSeconds));
       setHoldoutEnabled(item.holdoutEnabled);
@@ -368,8 +372,9 @@ export default function InAppCampaignEditPage() {
       appKey: appKey.trim(),
       placementKey: placementKey.trim(),
       templateKey: templateKey.trim(),
-      contentKey: contentKey.trim() || undefined,
-      offerKey: offerKey.trim() || undefined,
+      contentKey: experimentMode === "static" ? contentKey.trim() || undefined : undefined,
+      offerKey: experimentMode === "static" ? offerKey.trim() || undefined : undefined,
+      experimentKey: experimentMode === "experiment" ? experimentKey.trim() || undefined : undefined,
       priority: Number.parseInt(priority, 10) || 0,
       ttlSeconds: Number.parseInt(ttlSeconds, 10) || 3600,
       holdoutEnabled,
@@ -383,11 +388,14 @@ export default function InAppCampaignEditPage() {
         .split(",")
         .map((item) => item.trim())
         .filter((item) => item.length > 0),
-      variants: variants.map((variant) => ({
-        variantKey: variant.variantKey.trim(),
-        weight: Number.parseInt(variant.weight, 10) || 0,
-        contentJson: JSON.parse(variant.contentText)
-      })),
+      variants:
+        experimentMode === "experiment"
+          ? []
+          : variants.map((variant) => ({
+              variantKey: variant.variantKey.trim(),
+              weight: Number.parseInt(variant.weight, 10) || 0,
+              contentJson: JSON.parse(variant.contentText)
+            })),
       tokenBindingsJson: bindings
         .filter((binding) => binding.token.trim().length > 0)
         .reduce<Record<string, unknown>>((acc, binding) => {
@@ -415,6 +423,7 @@ export default function InAppCampaignEditPage() {
         placementKey: payload.placementKey,
         contentKey: payload.contentKey,
         offerKey: payload.offerKey,
+        experimentKey: payload.experimentKey,
         variants: payload.variants,
         tokenBindingsJson: payload.tokenBindingsJson
       });
@@ -656,12 +665,47 @@ export default function InAppCampaignEditPage() {
               ))}
             </select>
           </label>
+          <div className="md:col-span-3 rounded-md border border-stone-200 bg-stone-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Content Mode</p>
+            <div className="mt-2 flex flex-wrap gap-4 text-sm">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={experimentMode === "static"}
+                  onChange={() => setExperimentMode("static")}
+                />
+                Static content
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={experimentMode === "experiment"}
+                  onChange={() => setExperimentMode("experiment")}
+                />
+                Experiment
+              </label>
+            </div>
+          </div>
+
+          {experimentMode === "experiment" ? (
+            <label className="flex flex-col gap-1 text-sm">
+              Experiment Key
+              <input
+                value={experimentKey}
+                onChange={(event) => setExperimentKey(event.target.value)}
+                className="rounded-md border border-stone-300 px-2 py-1"
+                placeholder="home_top_banner_exp"
+              />
+            </label>
+          ) : null}
+
           <label className="flex flex-col gap-1 text-sm">
             Content Key (optional)
             <select
               value={contentKey}
               onChange={(event) => setContentKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
+              disabled={experimentMode === "experiment"}
             >
               <option value="">None (use variants)</option>
               {[...new Set(contentBlocks.map((item) => item.key))].map((key) => (
@@ -677,6 +721,7 @@ export default function InAppCampaignEditPage() {
               value={offerKey}
               onChange={(event) => setOfferKey(event.target.value)}
               className="rounded-md border border-stone-300 px-2 py-1"
+              disabled={experimentMode === "experiment"}
             >
               <option value="">None</option>
               {[...new Set(offers.map((item) => item.key))].map((key) => (

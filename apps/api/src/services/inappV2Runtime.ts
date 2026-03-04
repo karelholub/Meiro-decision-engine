@@ -14,6 +14,12 @@ import { withTimeout } from "../lib/timeout";
 import { createCatalogResolver } from "./catalogResolver";
 import { buildActionDescriptor, type RuntimeActionDescriptor } from "./actionDescriptor";
 import type { OrchestrationService } from "./orchestrationService";
+import {
+  chooseVariant,
+  evaluateEligibilityForExperiment,
+  loadActiveExperiment,
+  type ExperimentSpec
+} from "./experiments";
 
 export interface InAppV2DecideBody {
   appKey: string;
@@ -21,6 +27,7 @@ export interface InAppV2DecideBody {
   decisionKey?: string;
   stackKey?: string;
   profileId?: string;
+  anonymousId?: string;
   lookup?: {
     attribute: string;
     value: string;
@@ -37,6 +44,10 @@ export interface InAppDecideResponse {
     campaign_id: string;
     message_id: string;
     variant_id: string;
+    experiment_id?: string;
+    experiment_version?: number;
+    is_holdout?: boolean;
+    allocation_id?: string;
   };
   payload: Record<string, unknown>;
 }
@@ -342,15 +353,26 @@ const normalizeInAppResponse = (raw: unknown, fallbackPlacement: string): InAppD
     tracking: {
       campaign_id: typeof raw.tracking.campaign_id === "string" ? raw.tracking.campaign_id : "",
       message_id: typeof raw.tracking.message_id === "string" ? raw.tracking.message_id : "",
-      variant_id: typeof raw.tracking.variant_id === "string" ? raw.tracking.variant_id : ""
+      variant_id: typeof raw.tracking.variant_id === "string" ? raw.tracking.variant_id : "",
+      ...(typeof raw.tracking.experiment_id === "string" ? { experiment_id: raw.tracking.experiment_id } : {}),
+      ...(typeof raw.tracking.experiment_version === "number" ? { experiment_version: raw.tracking.experiment_version } : {}),
+      ...(typeof raw.tracking.is_holdout === "boolean" ? { is_holdout: raw.tracking.is_holdout } : {}),
+      ...(typeof raw.tracking.allocation_id === "string" ? { allocation_id: raw.tracking.allocation_id } : {})
     },
     payload: payloadRaw
   };
 };
 
-const buildInappV2IdentityKey = (input: { profileId?: string; lookup?: { attribute: string; value: string } }) => {
+const buildInappV2IdentityKey = (input: {
+  profileId?: string;
+  anonymousId?: string;
+  lookup?: { attribute: string; value: string };
+}) => {
   if (input.profileId) {
     return `profile:${input.profileId}`;
+  }
+  if (input.anonymousId) {
+    return `anonymous:${input.anonymousId}`;
   }
   if (input.lookup) {
     return `lookup:${input.lookup.attribute}=${input.lookup.value}`;
@@ -476,7 +498,8 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     const templatesByKey = new Map(templates.map((template) => [template.key, template]));
     const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((value): value is string => Boolean(value)))];
     const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((value): value is string => Boolean(value)))];
-    const [contentBlocks, offers] = await Promise.all([
+    const experimentKeys = [...new Set(campaigns.map((campaign) => campaign.experimentKey).filter((value): value is string => Boolean(value)))];
+    const [contentBlocks, offers, experiments] = await Promise.all([
       contentKeys.length
         ? deps.prisma.contentBlock.findMany({
             where: {
@@ -496,6 +519,16 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             },
             orderBy: [{ key: "asc" }, { version: "desc" }]
           })
+        : Promise.resolve([]),
+      experimentKeys.length
+        ? (deps.prisma as any).experimentVersion.findMany({
+            where: {
+              environment: input.environment,
+              key: { in: experimentKeys },
+              status: "ACTIVE"
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
         : Promise.resolve([])
     ]);
 
@@ -510,6 +543,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           templateKey: campaign.templateKey,
           contentKey: campaign.contentKey,
           offerKey: campaign.offerKey,
+          experimentKey: campaign.experimentKey,
           holdoutEnabled: campaign.holdoutEnabled,
           holdoutPercentage: campaign.holdoutPercentage,
           schedule: {
@@ -552,7 +586,14 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             version: item.version,
             updatedAt: item.updatedAt.toISOString()
           }))
-          .sort((a, b) => a.key.localeCompare(b.key))
+          .sort((a, b) => a.key.localeCompare(b.key)),
+        experiments: experiments
+          .map((item: { key: string; version: number; updatedAt: Date }) => ({
+            key: item.key,
+            version: item.version,
+            updatedAt: item.updatedAt.toISOString()
+          }))
+          .sort((a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key))
       })
     );
 
@@ -688,7 +729,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         mapping: parsedMapping.data
       });
       profile = mapped.profile;
-    } else {
+    } else if (input.body.profileId) {
       try {
         profile = await withWbsMs(() =>
           withTimeout({
@@ -707,6 +748,13 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           fallbackReason: String(error).includes("MEIRO_PROFILE_TIMEOUT") ? "WBS_TIMEOUT" : "WBS_ERROR"
         };
       }
+    } else {
+      profile = {
+        profileId: `anon:${hashSha256(input.body.anonymousId ?? "unknown").slice(0, 24)}`,
+        attributes: {},
+        audiences: [],
+        consents: []
+      } as EngineProfile;
     }
 
     const audiences = new Set(profile.audiences);
@@ -717,6 +765,14 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       | Awaited<ReturnType<NonNullable<InAppV2RuntimeDeps["orchestration"]>["evaluateAction"]>>
       | undefined;
     let selectedDescriptor: RuntimeActionDescriptor | null = null;
+    let selectedExperiment: {
+      key: string;
+      version: number;
+      allocationId: string;
+      isHoldout: boolean;
+      variantId: string | null;
+      spec: ExperimentSpec;
+    } | null = null;
     let policyBlockedReason: string | undefined;
     let policySummary:
       | {
@@ -747,6 +803,85 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         }
       }
 
+      let experimentOfferKey: string | null = null;
+      let experimentContentKey: string | null = null;
+      let experimentVariantId: string | null = null;
+      let experimentTags: string[] = [];
+      let candidateExperiment:
+        | {
+            key: string;
+            version: number;
+            allocationId: string;
+            isHoldout: boolean;
+            variantId: string | null;
+            spec: ExperimentSpec;
+          }
+        | null = null;
+      if (campaign.experimentKey) {
+        const activeExperiment = await loadActiveExperiment({
+          prisma: deps.prisma,
+          environment: input.environment,
+          key: campaign.experimentKey
+        });
+        if (!activeExperiment) {
+          continue;
+        }
+
+        if (activeExperiment.startAt && contextNow < activeExperiment.startAt) {
+          continue;
+        }
+        if (activeExperiment.endAt && contextNow > activeExperiment.endAt) {
+          continue;
+        }
+
+        const spec = activeExperiment.experimentJson;
+        if (!evaluateEligibilityForExperiment({ spec, profile, audiences: [...audiences], context: input.body.context })) {
+          continue;
+        }
+        const unitType = spec.assignment.unit;
+        const lookupUnit = input.body.lookup ? `${input.body.lookup.attribute}:${hashSha256(input.body.lookup.value)}` : null;
+        const unitValue =
+          unitType === "profileId"
+            ? profile.profileId
+            : unitType === "anonymousId"
+              ? (input.body.anonymousId ?? profile.profileId)
+              : typeof input.body.context?.stitching_id === "string" && input.body.context.stitching_id.trim().length > 0
+                ? input.body.context.stitching_id
+                : input.body.anonymousId ?? profile.profileId ?? lookupUnit ?? "unknown";
+
+        const assignment = chooseVariant(spec, unitValue, contextNow);
+        if (assignment.isHoldout || !assignment.variantId) {
+          policyBlockedReason = "EXPERIMENT_HOLDOUT";
+          selectedExperiment = {
+            key: activeExperiment.key,
+            version: activeExperiment.version,
+            allocationId: assignment.allocationId,
+            isHoldout: true,
+            variantId: null,
+            spec
+          };
+          break;
+        }
+
+        const selectedExperimentVariant = spec.variants.find((variant) => variant.id === assignment.variantId);
+        if (!selectedExperimentVariant) {
+          continue;
+        }
+
+        experimentOfferKey = selectedExperimentVariant.treatment.offerKey ?? null;
+        experimentContentKey = selectedExperimentVariant.treatment.contentKey;
+        experimentVariantId = selectedExperimentVariant.id;
+        experimentTags = Array.isArray(selectedExperimentVariant.treatment.tags) ? selectedExperimentVariant.treatment.tags : [];
+        candidateExperiment = {
+          key: activeExperiment.key,
+          version: activeExperiment.version,
+          allocationId: assignment.allocationId,
+          isHoldout: assignment.isHoldout,
+          variantId: assignment.variantId,
+          spec
+        };
+      }
+
       const variantSelection = await withEngineMs(() =>
         selectVariant({
           profileId: profile.profileId,
@@ -769,21 +904,23 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       }
 
       if (deps.orchestration) {
-        const candidateTags = extractVariantTags(candidateVariant.contentJson);
+        const candidateTags = [...new Set([...extractVariantTags(candidateVariant.contentJson), ...experimentTags])];
+        const descriptorOfferKey = experimentOfferKey ?? campaign.offerKey ?? undefined;
+        const descriptorContentKey = experimentContentKey ?? campaign.contentKey ?? undefined;
         const candidateDescriptor = await buildActionDescriptor(
           {
             actionType: "inapp_message",
             actionKey: campaign.key,
             campaignKey: campaign.key,
-            offerKey: campaign.offerKey ?? undefined,
-            contentKey: campaign.contentKey ?? undefined,
+            offerKey: descriptorOfferKey,
+            contentKey: descriptorContentKey,
             tags: candidateTags,
             payload: {
               appKey: input.body.appKey,
               placement: input.body.placement,
               payloadRef: {
-                ...(campaign.offerKey ? { offerKey: campaign.offerKey } : {}),
-                ...(campaign.contentKey ? { contentKey: campaign.contentKey } : {})
+                ...(descriptorOfferKey ? { offerKey: descriptorOfferKey } : {}),
+                ...(descriptorContentKey ? { contentKey: descriptorContentKey } : {})
               }
             }
           },
@@ -795,7 +932,9 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             catalogResolver,
             metadata: {
               source: "v2_inapp_decide_candidate",
-              campaignKey: campaign.key
+              campaignKey: campaign.key,
+              ...(campaign.experimentKey ? { experimentKey: campaign.experimentKey } : {}),
+              ...(experimentVariantId ? { variantId: experimentVariantId } : {})
             }
           }
         );
@@ -835,13 +974,29 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       }
 
       selectedCampaign = campaign;
-      selectedVariant = candidateVariant;
+      selectedExperiment = candidateExperiment;
+      selectedVariant =
+        experimentContentKey && experimentVariantId
+          ? {
+              ...candidateVariant,
+              variantKey: experimentVariantId
+            }
+          : candidateVariant;
       break;
     }
 
     if (!selectedCampaign || !selectedVariant) {
       const response = buildNoShowResponse({ placement: input.body.placement });
       response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
+      if (selectedExperiment?.isHoldout) {
+        response.tracking = {
+          ...response.tracking,
+          experiment_id: selectedExperiment.key,
+          experiment_version: selectedExperiment.version,
+          is_holdout: true,
+          allocation_id: selectedExperiment.allocationId
+        };
+      }
       return {
         response,
         wbsMs,
@@ -875,20 +1030,27 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     const locale = typeof input.body.context?.locale === "string" ? input.body.context.locale : "en";
     const baseContext = isObject(input.body.context) ? (input.body.context as Record<string, unknown>) : {};
     const renderedVariantPayload = await withEngineMs(() => renderTemplateValue(selectedVariant.contentJson, tokenValues));
-    const resolvedOffer = selectedCampaign.offerKey
+    const selectedOfferKey = selectedExperiment
+      ? selectedExperiment.spec.variants.find((variant) => variant.id === selectedVariant.variantKey)?.treatment.offerKey ?? null
+      : selectedCampaign.offerKey;
+    const selectedContentKey = selectedExperiment
+      ? selectedExperiment.spec.variants.find((variant) => variant.id === selectedVariant.variantKey)?.treatment.contentKey ?? null
+      : selectedCampaign.contentKey;
+
+    const resolvedOffer = selectedOfferKey
       ? await withEngineMs(() =>
           catalogResolver.resolveOffer({
             environment: input.environment,
-            offerKey: selectedCampaign.offerKey as string,
+            offerKey: selectedOfferKey as string,
             now: contextNow
           })
         )
       : null;
-    const resolvedContent = selectedCampaign.contentKey
+    const resolvedContent = selectedContentKey
       ? await withEngineMs(() =>
           catalogResolver.resolveContent({
             environment: input.environment,
-            contentKey: selectedCampaign.contentKey as string,
+            contentKey: selectedContentKey as string,
             locale,
             profile,
             context: {
@@ -900,7 +1062,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         )
       : null;
 
-    if (selectedCampaign.contentKey && !resolvedContent && selectedCampaign.variants.length === 0) {
+    if (selectedContentKey && !resolvedContent && selectedCampaign.variants.length === 0) {
       const response = buildNoShowResponse({ placement: input.body.placement });
       response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
       return { response, wbsMs, engineMs, fallbackReason: "CONTENT_NOT_FOUND" };
@@ -947,7 +1109,15 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       tracking: {
         campaign_id: selectedCampaign.key,
         message_id: messageId,
-        variant_id: selectedVariant.variantKey
+        variant_id: selectedVariant.variantKey,
+        ...(selectedExperiment
+          ? {
+              experiment_id: selectedExperiment.key,
+              experiment_version: selectedExperiment.version,
+              is_holdout: false,
+              allocation_id: selectedExperiment.allocationId
+            }
+          : {})
       },
       payload
     };
@@ -973,7 +1143,8 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         metadata: {
           source: "v2_inapp_decide",
           campaignKey: selectedCampaign.key,
-          variantKey: selectedVariant.variantKey
+          variantKey: selectedVariant.variantKey,
+          ...(selectedExperiment ? { experimentKey: selectedExperiment.key } : {})
         }
       });
     }
@@ -1021,6 +1192,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
     const key = input.body.decisionKey ?? input.body.stackKey ?? `${input.body.appKey}:${input.body.placement}`;
     const identityKey = buildInappV2IdentityKey({
       profileId: input.body.profileId,
+      anonymousId: input.body.anonymousId,
       lookup: input.body.lookup
     });
     const contextForKey = pickAllowedContext(input.body.context, runtimeConfig.cacheContextKeys);

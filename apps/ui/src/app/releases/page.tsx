@@ -10,7 +10,7 @@ export default function ReleasesPage() {
   const { hasPermission } = usePermissions();
   const [items, setItems] = useState<ReleaseRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [selectionType, setSelectionType] = useState<"decision" | "stack" | "offer" | "content" | "campaign" | "policy" | "template" | "placement" | "app">("decision");
+  const [selectionType, setSelectionType] = useState<"decision" | "stack" | "offer" | "content" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app">("decision");
   const [selectionKey, setSelectionKey] = useState("");
   const [sourceEnv, setSourceEnv] = useState<"DEV" | "STAGE" | "PROD">("DEV");
   const [targetEnv, setTargetEnv] = useState<"DEV" | "STAGE" | "PROD">("STAGE");
@@ -66,6 +66,7 @@ export default function ReleasesPage() {
             <option value="stack">stack</option>
             <option value="offer">offer</option>
             <option value="content">content</option>
+            <option value="experiment">experiment</option>
             <option value="campaign">campaign</option>
             <option value="policy">policy</option>
             <option value="template">template</option>

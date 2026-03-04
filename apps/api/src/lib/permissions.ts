@@ -31,6 +31,10 @@ export const PERMISSIONS = {
   engageCampaignWrite: "engage.campaign.write",
   engageCampaignActivate: "engage.campaign.activate",
   engageCampaignArchive: "engage.campaign.archive",
+  experimentRead: "experiment.read",
+  experimentWrite: "experiment.write",
+  experimentActivate: "experiment.activate",
+  experimentArchive: "experiment.archive",
   logsRead: "logs.read",
   logsExport: "logs.export",
   cacheRead: "cache.read",
@@ -87,6 +91,7 @@ export const defaultRolePermissions: Record<string, string[]> = {
     ...readOnlyWithPrefix("engage.placement"),
     ...readOnlyWithPrefix("engage.template"),
     ...readOnlyWithPrefix("engage.campaign"),
+    PERMISSIONS.experimentRead,
     PERMISSIONS.logsRead,
     PERMISSIONS.cacheRead,
     PERMISSIONS.precomputeRead,
@@ -110,6 +115,8 @@ export const defaultRolePermissions: Record<string, string[]> = {
     PERMISSIONS.contentWrite,
     PERMISSIONS.engageCampaignRead,
     PERMISSIONS.engageCampaignWrite,
+    PERMISSIONS.experimentRead,
+    PERMISSIONS.experimentWrite,
     PERMISSIONS.simulatorRun
   ],
   publisher: [
@@ -133,6 +140,10 @@ export const defaultRolePermissions: Record<string, string[]> = {
     ...withPrefix("engage.placement"),
     ...withPrefix("engage.template"),
     ...withPrefix("engage.campaign"),
+    PERMISSIONS.experimentRead,
+    PERMISSIONS.experimentWrite,
+    PERMISSIONS.experimentActivate,
+    PERMISSIONS.experimentArchive,
     PERMISSIONS.promotionCreate,
     PERMISSIONS.simulatorRun
   ],
