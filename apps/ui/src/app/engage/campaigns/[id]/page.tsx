@@ -4,14 +4,19 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppAuditLog, InAppCampaign, InAppCampaignActivationPreview, InAppCampaignVersion } from "@decisioning/shared";
+import { DependenciesPanel } from "../../../../components/registry/DependenciesPanel";
+import { ResolvedRefValue } from "../../../../components/registry/ResolvedRefValue";
 import { EndsSoonBadge, StatusBadge } from "../../../../components/ui/status-badges";
 import { apiClient } from "../../../../lib/api";
+import { validateCampaignDependencies } from "../../../../lib/dependencies";
 import { usePermissions } from "../../../../lib/permissions";
+import { useRegistry } from "../../../../lib/registry";
 
 export default function CampaignDetailsPage() {
   const params = useParams<{ id: string }>();
   const id = String(params.id ?? "");
   const { hasPermission } = usePermissions();
+  const registry = useRegistry();
 
   const canWrite = hasPermission("engage.campaign.write");
   const canActivate = hasPermission("engage.campaign.activate");
@@ -78,6 +83,12 @@ export default function CampaignDetailsPage() {
   };
 
   const latestAudit = useMemo(() => auditLogs.slice(0, 10), [auditLogs]);
+  const dependencyItems = useMemo(() => {
+    if (!campaign) {
+      return [];
+    }
+    return validateCampaignDependencies(registry, campaign);
+  }, [campaign, registry]);
 
   return (
     <div className="space-y-4">
@@ -109,10 +120,10 @@ export default function CampaignDetailsPage() {
             <h3 className="font-semibold">Summary</h3>
             <div className="mt-2 grid gap-3 text-sm md:grid-cols-2">
               <div>
-                <p><strong>App:</strong> {campaign?.appKey ?? "-"}</p>
-                <p><strong>Placement:</strong> {campaign?.placementKey ?? "-"}</p>
-                <p><strong>Template:</strong> {campaign?.templateKey ?? "-"}</p>
-                <p><strong>Experiment:</strong> {campaign?.experimentKey ?? "-"}</p>
+                <p><strong>App:</strong> <ResolvedRefValue type="app" value={campaign?.appKey ?? null} /></p>
+                <p><strong>Placement:</strong> <ResolvedRefValue type="placement" value={campaign?.placementKey ?? null} /></p>
+                <p><strong>Template:</strong> <ResolvedRefValue type="template" value={campaign?.templateKey ?? null} /></p>
+                <p><strong>Experiment:</strong> <ResolvedRefValue type="experiment" value={campaign?.experimentKey ?? null} /></p>
               </div>
               <div>
                 <p><strong>Variants:</strong> {campaign?.variants.map((variant) => `${variant.variantKey} ${variant.weight}%`).join(" / ") || "-"}</p>
@@ -174,6 +185,7 @@ export default function CampaignDetailsPage() {
         </div>
 
         <aside className="space-y-3">
+          <DependenciesPanel items={dependencyItems} />
           <article className="rounded-lg border border-stone-200 bg-white p-4">
             <h3 className="font-semibold">Actions</h3>
             <div className="mt-2 grid gap-2">

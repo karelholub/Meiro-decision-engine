@@ -30,7 +30,8 @@ export function LocaleTabsEditor({
   const [rawDraftByLocale, setRawDraftByLocale] = useState<Record<string, string>>({});
 
   const locales = useMemo(() => Object.keys(localesJson), [localesJson]);
-  const effectiveLocale = locales.includes(activeLocale) ? activeLocale : locales[0] ?? "en";
+  const defaultLocale = localeOptions?.[0] ?? "en";
+  const effectiveLocale = locales.includes(activeLocale) ? activeLocale : locales[0] ?? defaultLocale;
   const localeValue = readObject(localesJson[effectiveLocale]);
 
   const updateLocaleField = (field: string, value: string) => {

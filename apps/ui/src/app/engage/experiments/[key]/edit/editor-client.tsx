@@ -65,7 +65,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   const [previewIdentityType, setPreviewIdentityType] = useState<"profileId" | "anonymousId" | "lookup">("profileId");
   const [previewIdentityValue, setPreviewIdentityValue] = useState("preview_profile");
   const [previewLookupAttribute, setPreviewLookupAttribute] = useState("email");
-  const [previewContextText, setPreviewContextText] = useState('{"locale":"en-US"}');
+  const [previewContextText, setPreviewContextText] = useState("");
   const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
   const [previewRan, setPreviewRan] = useState(false);
 
@@ -75,6 +75,17 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   const canArchive = hasPermission("experiment.archive");
   const registry = useRegistry();
   const { settings: enumSettings } = useAppEnumSettings(form.scope.appKey || undefined);
+
+  useEffect(() => {
+    if (previewContextText.trim()) {
+      return;
+    }
+    setPreviewContextText(
+      JSON.stringify({
+        locale: enumSettings.locales[0] ?? "en"
+      })
+    );
+  }, [previewContextText, enumSettings.locales]);
 
   const load = async () => {
     setLoading(true);

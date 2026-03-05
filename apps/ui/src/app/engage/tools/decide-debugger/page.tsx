@@ -1,16 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { parseLegacyKey } from "@decisioning/shared";
 import type { DecisionStackVersionSummary, DecisionVersionSummary, InAppApplication, InAppPlacement } from "@decisioning/shared";
+import { DependenciesPanel } from "../../../../components/registry/DependenciesPanel";
 import { apiClient, type InAppV2DecideResponse } from "../../../../lib/api";
 import { useAppEnumSettings } from "../../../../lib/app-enum-settings";
+import type { DependencyItem } from "../../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
+import { useRegistry } from "../../../../lib/registry";
 
 const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
 const toPrettyJson = (value: unknown) => JSON.stringify(value, null, 2);
 
 export default function InAppDecideDebuggerPage() {
+  const registry = useRegistry();
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +33,7 @@ export default function InAppDecideDebuggerPage() {
   const [profileId, setProfileId] = useState("p-1001");
   const [lookupAttribute, setLookupAttribute] = useState("email");
   const [lookupValue, setLookupValue] = useState("");
-  const [contextText, setContextText] = useState('{"locale":"en-US","deviceType":"ios"}');
+  const [contextText, setContextText] = useState("");
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -77,7 +82,7 @@ export default function InAppDecideDebuggerPage() {
 
   const decisionKeyOptions = useMemo(() => [...new Set(decisions.map((item) => item.key))], [decisions]);
   const stackKeyOptions = useMemo(() => [...new Set(stacks.map((item) => item.key))], [stacks]);
-  const { settings: enumSettings } = useAppEnumSettings();
+  const { settings: enumSettings } = useAppEnumSettings(appKey || undefined);
   const isPresetLookupAttribute = enumSettings.lookupAttributes.includes(lookupAttribute);
   const lookupAttributeSelectValue = isPresetLookupAttribute ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
@@ -92,6 +97,18 @@ export default function InAppDecideDebuggerPage() {
       return null;
     }
   }, [contextText]);
+
+  useEffect(() => {
+    if (contextText.trim()) {
+      return;
+    }
+    setContextText(
+      JSON.stringify({
+        locale: enumSettings.locales[0] ?? "en",
+        deviceType: enumSettings.deviceTypes[0] ?? "mobile"
+      })
+    );
+  }, [contextText, enumSettings.locales, enumSettings.deviceTypes]);
 
   const run = async () => {
     setLoading(true);
@@ -128,6 +145,37 @@ export default function InAppDecideDebuggerPage() {
       setLoading(false);
     }
   };
+
+  const dependencyItems = useMemo<DependencyItem[]>(() => {
+    if (!result) {
+      return [];
+    }
+    const rows = [
+      { label: "App", type: "app" as const, key: appKey },
+      { label: "Placement", type: "placement" as const, key: result.placement },
+      { label: "Template", type: "template" as const, key: result.templateId },
+      { label: "Offer", type: "offer" as const, key: result.debug.actionDescriptor?.offerKey },
+      { label: "Content", type: "content" as const, key: result.debug.actionDescriptor?.contentKey }
+    ];
+    const items: DependencyItem[] = [];
+    for (const row of rows) {
+      const ref = parseLegacyKey(row.type, typeof row.key === "string" ? row.key : "");
+      if (!ref.key) {
+        continue;
+      }
+      const resolved = registry.get(ref);
+      if (!resolved) {
+        items.push({ label: row.label, ref, status: "missing", detail: "Not found in registry" });
+        continue;
+      }
+      if (resolved.status !== "ACTIVE") {
+        items.push({ label: row.label, ref, status: "resolved_inactive", detail: `Found ${resolved.status}` });
+        continue;
+      }
+      items.push({ label: row.label, ref, status: "resolved_active" });
+    }
+    return items;
+  }, [appKey, registry, result]);
 
   return (
     <section className="space-y-4">
@@ -338,6 +386,7 @@ export default function InAppDecideDebuggerPage() {
             <p className="mb-1 text-xs uppercase text-stone-500">Response JSON</p>
             <pre className="overflow-x-auto rounded-md bg-stone-100 p-3 text-xs">{toPrettyJson(result)}</pre>
           </div>
+          <DependenciesPanel items={dependencyItems} />
         </article>
       ) : null}
     </section>

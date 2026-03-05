@@ -131,11 +131,11 @@ export default function ExperimentPlaygroundPage() {
   const [anonymousId, setAnonymousId] = useState("anon-visitor-001");
   const [lookupAttribute, setLookupAttribute] = useState("email");
   const [lookupValue, setLookupValue] = useState("tester@example.com");
-  const { settings: enumSettings } = useAppEnumSettings();
+  const { settings: enumSettings } = useAppEnumSettings(appKey || undefined);
   const isPresetLookupAttribute = enumSettings.lookupAttributes.includes(lookupAttribute);
   const lookupAttributeSelectValue = isPresetLookupAttribute ? lookupAttribute : CUSTOM_LOOKUP_ATTRIBUTE;
 
-  const [contextText, setContextText] = useState('{"locale":"en-US","deviceType":"ios","audiences":["preview"]}');
+  const [contextText, setContextText] = useState("");
 
   const [runtimeResult, setRuntimeResult] = useState<InAppV2DecideResponse | null>(null);
   const [experimentResult, setExperimentResult] = useState<ExperimentPreviewResult | null>(null);
@@ -181,6 +181,19 @@ export default function ExperimentPlaygroundPage() {
       setExperimentKey(experiments[0].key);
     }
   }, [experimentKey, experiments]);
+
+  useEffect(() => {
+    if (contextText.trim()) {
+      return;
+    }
+    setContextText(
+      JSON.stringify({
+        locale: enumSettings.locales[0] ?? "en",
+        deviceType: enumSettings.deviceTypes[0] ?? "mobile",
+        audiences: ["preview"]
+      })
+    );
+  }, [contextText, enumSettings.locales, enumSettings.deviceTypes]);
 
   const parsedContext = useMemo(() => {
     try {

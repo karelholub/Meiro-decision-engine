@@ -1,16 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  RefType,
   DecisionStackVersionSummary,
   DecisionVersionSummary,
   DecideStackResponse,
   InAppApplication,
   InAppPlacement
 } from "@decisioning/shared";
+import { parseLegacyKey } from "@decisioning/shared";
+import { DependenciesPanel } from "../../components/registry/DependenciesPanel";
 import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
 import { useAppEnumSettings } from "../../lib/app-enum-settings";
+import type { DependencyItem } from "../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { useRegistry } from "../../lib/registry";
 
 const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
@@ -94,6 +99,7 @@ const mergeProfiles = (profiles: SimulationProfile[]): SimulationProfile[] => {
 };
 
 export default function SimulatePage() {
+  const registry = useRegistry();
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [simulatorType, setSimulatorType] = useState<"decision" | "stack" | "inapp">("decision");
 
@@ -593,6 +599,50 @@ export default function SimulatePage() {
     }
   };
 
+  const toDependencyItem = useCallback((type: RefType, key: string | undefined, label: string): DependencyItem | null => {
+    const ref = parseLegacyKey(type, key ?? "");
+    if (!ref.key) {
+      return null;
+    }
+    const resolved = registry.get(ref);
+    if (!resolved) {
+      return { label, ref, status: "missing", detail: "Not found in registry" };
+    }
+    if (resolved.status !== "ACTIVE") {
+      return { label, ref, status: "resolved_inactive", detail: `Found ${resolved.status}` };
+    }
+    return { label, ref, status: "resolved_active" };
+  }, [registry]);
+
+  const decisionDependencyItems = useMemo(() => {
+    const items = [
+      toDependencyItem("offer", typeof decisionActionDescriptor?.offerKey === "string" ? decisionActionDescriptor.offerKey : undefined, "Offer"),
+      toDependencyItem("content", typeof decisionActionDescriptor?.contentKey === "string" ? decisionActionDescriptor.contentKey : undefined, "Content")
+    ];
+    return items.filter((item): item is DependencyItem => Boolean(item));
+  }, [decisionActionDescriptor, toDependencyItem]);
+
+  const stackDependencyItems = useMemo(() => {
+    const items = [
+      toDependencyItem("stack", stackResult?.trace.stackKey, "Stack"),
+      toDependencyItem("offer", typeof stackActionDescriptor?.offerKey === "string" ? stackActionDescriptor.offerKey : undefined, "Offer"),
+      toDependencyItem("content", typeof stackActionDescriptor?.contentKey === "string" ? stackActionDescriptor.contentKey : undefined, "Content")
+    ];
+    return items.filter((item): item is DependencyItem => Boolean(item));
+  }, [stackActionDescriptor, stackResult?.trace.stackKey, toDependencyItem]);
+
+  const inAppDependencyItems = useMemo(() => {
+    const action = inAppResult?.debug.actionDescriptor;
+    const items = [
+      toDependencyItem("app", inAppAppKey, "App"),
+      toDependencyItem("placement", inAppResult?.placement, "Placement"),
+      toDependencyItem("template", inAppResult?.templateId, "Template"),
+      toDependencyItem("offer", typeof action?.offerKey === "string" ? action.offerKey : undefined, "Offer"),
+      toDependencyItem("content", typeof action?.contentKey === "string" ? action.contentKey : undefined, "Content")
+    ];
+    return items.filter((item): item is DependencyItem => Boolean(item));
+  }, [inAppAppKey, inAppResult, toDependencyItem]);
+
   return (
     <section className="space-y-4">
       <header className="panel p-4">
@@ -1040,6 +1090,7 @@ export default function SimulatePage() {
                       : "none"}
                   </p>
                 </div>
+                <DependenciesPanel items={decisionDependencyItems} title="Dependencies" />
                 <details>
                   <summary className="cursor-pointer font-medium">Payload</summary>
                   <pre className="mt-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
@@ -1146,6 +1197,7 @@ export default function SimulatePage() {
                       : "none"}
                   </p>
                 </div>
+                <DependenciesPanel items={stackDependencyItems} title="Dependencies" />
                 <div className="flex items-center gap-2">
                   <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(stackResult)}>
                     Copy JSON
@@ -1234,6 +1286,7 @@ export default function SimulatePage() {
                       : "none"}
                   </p>
                 </div>
+                <DependenciesPanel items={inAppDependencyItems} title="Dependencies" />
                 <div className="flex items-center gap-2">
                   <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(inAppResult)}>
                     Copy JSON

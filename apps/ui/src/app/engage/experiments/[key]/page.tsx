@@ -3,10 +3,15 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import type { ExperimentDetails, ExperimentSummaryDetails } from "@decisioning/shared";
+import type { ExperimentDefinition, ExperimentDetails, ExperimentSummaryDetails } from "@decisioning/shared";
+import { DependenciesPanel } from "../../../../components/registry/DependenciesPanel";
+import { ResolvedRefValue } from "../../../../components/registry/ResolvedRefValue";
 import { HasDraftBadge, NoTrafficBadge, StatusBadge } from "../../../../components/ui/status-badges";
 import { apiClient } from "../../../../lib/api";
+import { useAppEnumSettings } from "../../../../lib/app-enum-settings";
+import { validateExperimentDependencies } from "../../../../lib/dependencies";
 import { usePermissions } from "../../../../lib/permissions";
+import { useRegistry } from "../../../../lib/registry";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
@@ -14,6 +19,7 @@ export default function ExperimentDetailsPage() {
   const params = useParams<{ key: string }>();
   const key = decodeURIComponent(params.key ?? "");
   const { hasPermission } = usePermissions();
+  const registry = useRegistry();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,13 +30,24 @@ export default function ExperimentDetailsPage() {
   const [previewIdentityType, setPreviewIdentityType] = useState<"profileId" | "anonymousId" | "lookup">("profileId");
   const [previewIdentityValue, setPreviewIdentityValue] = useState("preview_profile");
   const [previewLookupAttribute, setPreviewLookupAttribute] = useState("email");
-  const [previewContextText, setPreviewContextText] = useState('{"locale":"en-US"}');
+  const [previewContextText, setPreviewContextText] = useState("");
   const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
+  const { settings: enumSettings } = useAppEnumSettings(summary?.appKey ?? undefined);
 
   const canWrite = hasPermission("experiment.write");
   const canActivate = hasPermission("experiment.activate");
   const canArchive = hasPermission("experiment.archive");
   const canPromote = hasPermission("promotion.create");
+  const dependencyItems = useMemo(() => {
+    if (!details || !isRecord(details.experimentJson)) {
+      return [];
+    }
+    const parsed = details.experimentJson as Record<string, unknown>;
+    if (!isRecord(parsed.scope) || !Array.isArray(parsed.variants)) {
+      return [];
+    }
+    return validateExperimentDependencies(registry, parsed as unknown as ExperimentDefinition);
+  }, [details, registry]);
 
   const load = async () => {
     setLoading(true);
@@ -55,6 +72,17 @@ export default function ExperimentDetailsPage() {
     }
     void load();
   }, [key]);
+
+  useEffect(() => {
+    if (previewContextText.trim()) {
+      return;
+    }
+    setPreviewContextText(
+      JSON.stringify({
+        locale: enumSettings.locales[0] ?? "en"
+      })
+    );
+  }, [previewContextText, enumSettings.locales]);
 
   const parsedSpec = useMemo(() => {
     const json = details?.experimentJson;
@@ -199,7 +227,19 @@ export default function ExperimentDetailsPage() {
             <div className="mt-2 grid gap-3 md:grid-cols-2 text-sm">
               <div>
                 <p><strong>Scope:</strong> app {summary?.appKey ?? "-"}</p>
-                <p><strong>Placements:</strong> {summary?.placements.join(", ") || "-"}</p>
+                <p>
+                  <strong>Placements:</strong>{" "}
+                  {summary?.placements.length ? (
+                    summary.placements.map((placementKey, index) => (
+                      <span key={placementKey}>
+                        <ResolvedRefValue type="placement" value={placementKey} />
+                        {index < summary.placements.length - 1 ? ", " : ""}
+                      </span>
+                    ))
+                  ) : (
+                    "-"
+                  )}
+                </p>
                 <p><strong>Channels:</strong> {summary?.channels.join(", ") || "-"}</p>
               </div>
               <div>
@@ -275,6 +315,7 @@ export default function ExperimentDetailsPage() {
         </div>
 
         <aside className="space-y-3">
+          <DependenciesPanel items={dependencyItems} />
           <article className="rounded-lg border border-stone-200 bg-white p-4">
             <h3 className="font-semibold">Actions</h3>
             <div className="mt-2 flex flex-col gap-2">

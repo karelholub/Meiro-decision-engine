@@ -5,6 +5,7 @@ import type { DecisionDefinition } from "@decisioning/dsl";
 import type { ValidationByStep } from "./types";
 import { deriveRequiredFieldsFromDraft, draftRiskFlags, getDecisionSummaryText } from "./wizard-utils";
 import { apiClient } from "../../lib/api";
+import { DEFAULT_APP_ENUM_SETTINGS } from "../../lib/app-enum-settings";
 
 interface SummaryPanelProps {
   definition: DecisionDefinition;
@@ -51,7 +52,7 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
       }
       try {
         const response = await apiClient.catalog.content.preview(referencedContentKey, {
-          locale: "en",
+          locale: DEFAULT_APP_ENUM_SETTINGS.locales[0] ?? "en",
           context: {}
         });
         if (!cancelled) {

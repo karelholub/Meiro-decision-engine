@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CatalogContentBlock } from "@decisioning/shared";
 import { DependenciesPanel } from "../../../components/registry/DependenciesPanel";
 import { apiClient } from "../../../lib/api";
-import { useAppEnumSettings } from "../../../lib/app-enum-settings";
+import { DEFAULT_APP_ENUM_SETTINGS, useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { validateContentDependencies } from "../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
@@ -47,6 +47,26 @@ const rowsToBindings = (rows: TokenBindingRow[]) => {
     output[token] = sourcePath;
   }
   return output;
+};
+
+const withPreferredDefaultLocale = (locales: Record<string, unknown>, preferredLocale: string) => {
+  if (!preferredLocale.trim()) {
+    return locales;
+  }
+  if (Object.prototype.hasOwnProperty.call(locales, preferredLocale)) {
+    return locales;
+  }
+  const keys = Object.keys(locales);
+  if (keys.length !== 1) {
+    return locales;
+  }
+  const onlyKey = keys[0];
+  if (!onlyKey) {
+    return locales;
+  }
+  return {
+    [preferredLocale]: readObject(locales[onlyKey])
+  };
 };
 
 const parsePayloadOrThrow = (editor: ContentEditorState) => {
@@ -100,11 +120,12 @@ export default function CatalogContentPage() {
   const [statusFilter, setStatusFilter] = useState<"ALL" | CatalogContentBlock["status"]>("ALL");
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
 
-  const [activeLocale, setActiveLocale] = useState("en");
-  const [localeData, setLocaleData] = useState<Record<string, unknown>>({ en: {} });
+  const defaultLocale = DEFAULT_APP_ENUM_SETTINGS.locales[0] ?? "en";
+  const [activeLocale, setActiveLocale] = useState(defaultLocale);
+  const [localeData, setLocaleData] = useState<Record<string, unknown>>({ [defaultLocale]: {} });
   const [tokenBindingRows, setTokenBindingRows] = useState<TokenBindingRow[]>([{ token: "offer", sourcePath: "context.offer" }]);
 
-  const [previewLocale, setPreviewLocale] = useState("en");
+  const [previewLocale, setPreviewLocale] = useState(defaultLocale);
   const [previewProfileId, setPreviewProfileId] = useState("p-1001");
   const [previewContext, setPreviewContext] = useState('{\n  "offer": { "code": "WINBACK10", "percent": 10 },\n  "profile": { "first_name": "Alex" }\n}\n');
   const [previewResult, setPreviewResult] = useState<unknown | null>(null);
@@ -112,6 +133,7 @@ export default function CatalogContentPage() {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [archiveConfirmKey, setArchiveConfirmKey] = useState("");
   const { settings: enumSettings } = useAppEnumSettings();
+  const preferredLocale = enumSettings.locales[0] ?? defaultLocale;
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -134,8 +156,8 @@ export default function CatalogContentPage() {
           setCreateMode(false);
           setLocaleData(readObject(safeJsonParse<Record<string, unknown>>(seed.localesJsonText).value));
           setTokenBindingRows(toTokenRows(seed.tokenBindingsText));
-          setActiveLocale(Object.keys(active.localesJson ?? {})[0] ?? "en");
-          setPreviewLocale(Object.keys(active.localesJson ?? {})[0] ?? "en");
+          setActiveLocale(Object.keys(active.localesJson ?? {})[0] ?? preferredLocale);
+          setPreviewLocale(Object.keys(active.localesJson ?? {})[0] ?? preferredLocale);
         }
       }
       setError(null);
@@ -374,7 +396,7 @@ export default function CatalogContentPage() {
         throw new Error(`Invalid preview context: ${context.error}`);
       }
       const response = await apiClient.catalog.content.preview(editor.key.trim(), {
-        locale: previewLocale.trim() || "en",
+        locale: previewLocale.trim() || preferredLocale,
         profileId: previewProfileId.trim() || undefined,
         context: context.value
       });
@@ -444,13 +466,16 @@ export default function CatalogContentPage() {
               className="w-full"
               onClick={() => {
                 const seed = makeContentEditorSeed();
+                const baseLocaleData = readObject(safeJsonParse<Record<string, unknown>>(seed.localesJsonText).value);
+                const localeSeed = withPreferredDefaultLocale(baseLocaleData, preferredLocale);
                 setCreateMode(true);
                 setSelectedId(null);
-                setEditor(seed);
-                setLocaleData(readObject(safeJsonParse<Record<string, unknown>>(seed.localesJsonText).value));
+                setEditor((current) => ({ ...current, ...seed, localesJsonText: toPrettyJson(localeSeed) }));
+                setLocaleData(localeSeed);
                 setTokenBindingRows(toTokenRows(seed.tokenBindingsText));
-                setActiveLocale("en");
-                setPreviewLocale("en");
+                const firstLocale = Object.keys(localeSeed)[0] ?? preferredLocale;
+                setActiveLocale(firstLocale);
+                setPreviewLocale(firstLocale);
                 setLastValidationValid(null);
               }}
             >
@@ -475,7 +500,7 @@ export default function CatalogContentPage() {
                   setCreateMode(false);
                   setLocaleData(readObject(item.localesJson));
                   setTokenBindingRows(toTokenRows(seed.tokenBindingsText));
-                  const firstLocale = Object.keys(item.localesJson ?? {})[0] ?? "en";
+                  const firstLocale = Object.keys(item.localesJson ?? {})[0] ?? preferredLocale;
                   setActiveLocale(firstLocale);
                   setPreviewLocale(firstLocale);
                   setLastValidationValid(null);
@@ -532,7 +557,7 @@ export default function CatalogContentPage() {
       </div>
 
       <PreviewPane
-        localeOptions={Object.keys(localeData).length > 0 ? Object.keys(localeData) : ["en"]}
+        localeOptions={Object.keys(localeData).length > 0 ? Object.keys(localeData) : [preferredLocale]}
         previewLocale={previewLocale}
         testProfileId={previewProfileId}
         contextJsonText={previewContext}

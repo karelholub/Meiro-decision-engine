@@ -7,6 +7,7 @@ import {
   type PipesInlineEvaluateResponse,
   type PipesRequirementsResponse
 } from "../../../../lib/api";
+import { DEFAULT_APP_ENUM_SETTINGS } from "../../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 import { Button } from "../../../../components/ui/button";
 import { CollapsibleSection, RedactedJsonViewer, StatusChipsRow, buildTesterSkeletonFromRequirements, simpleHash } from "../../../../components/configure";
@@ -34,7 +35,7 @@ const defaultContextJson = JSON.stringify(
     now: new Date().toISOString(),
     appKey: "storefront",
     placement: "home_top",
-    locale: "en"
+    locale: DEFAULT_APP_ENUM_SETTINGS.locales[0] ?? "en"
   },
   null,
   2
