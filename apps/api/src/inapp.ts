@@ -19,12 +19,12 @@ import { createCatalogResolver } from "./services/catalogResolver";
 import { buildActionDescriptor } from "./services/actionDescriptor";
 import {
   buildCampaignCalendar,
+  buildCampaignCalendarContentAsset,
+  buildCampaignCalendarOfferAsset,
+  latestByKey,
   type CampaignCalendarLinkedAsset
 } from "./services/campaignCalendar";
-import {
-  buildActivationLibraryItem,
-  type ActivationAssetType
-} from "./services/activationAssetLibrary";
+import type { ActivationAssetType } from "./services/activationAssetLibrary";
 import { getInAppGovernanceAllowedStatuses, getInAppGovernanceTransitionError } from "./lib/inappGovernance";
 
 interface WbsInstanceRecord {
@@ -1408,104 +1408,6 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
   });
 
-  const toLatestByKey = <T extends { key: string; version: number }>(rows: T[]) => {
-    const byKey = new Map<string, T>();
-    for (const row of rows) {
-      const current = byKey.get(row.key);
-      if (!current || row.version > current.version) {
-        byKey.set(row.key, row);
-      }
-    }
-    return byKey;
-  };
-
-  const toCalendarContentAsset = (item: {
-    key: string;
-    name: string;
-    description: string | null;
-    status: string;
-    version: number;
-    updatedAt: Date;
-    tags: unknown;
-    templateId: string;
-    schemaJson: unknown;
-    localesJson: unknown;
-    startAt: Date | null;
-    endAt: Date | null;
-    variants: Array<{ locale: string | null; channel: string | null; placementKey: string | null; payloadJson: unknown; metadataJson?: unknown }>;
-  }): CampaignCalendarLinkedAsset => {
-    const libraryItem = buildActivationLibraryItem({
-      asset: {
-        entityType: "content",
-        key: item.key,
-        name: item.name,
-        description: item.description,
-        status: item.status,
-        version: item.version,
-        updatedAt: item.updatedAt,
-        tags: item.tags,
-        templateId: item.templateId,
-        schemaJson: item.schemaJson,
-        localesJson: item.localesJson,
-        variants: item.variants
-      }
-    });
-    return {
-      kind: "content",
-      key: item.key,
-      name: item.name,
-      status: item.status,
-      category: libraryItem.category,
-      assetType: libraryItem.assetType,
-      assetTypeLabel: libraryItem.assetTypeLabel,
-      thumbnailUrl: libraryItem.preview.thumbnailUrl,
-      startAt: item.startAt,
-      endAt: item.endAt
-    };
-  };
-
-  const toCalendarOfferAsset = (item: {
-    key: string;
-    name: string;
-    description: string | null;
-    status: string;
-    version: number;
-    updatedAt: Date;
-    tags: unknown;
-    type: string;
-    valueJson: unknown;
-    startAt: Date | null;
-    endAt: Date | null;
-    variants: Array<{ locale: string | null; channel: string | null; placementKey: string | null; payloadJson: unknown; metadataJson?: unknown }>;
-  }): CampaignCalendarLinkedAsset => {
-    const libraryItem = buildActivationLibraryItem({
-      asset: {
-        entityType: "offer",
-        key: item.key,
-        name: item.name,
-        description: item.description,
-        status: item.status,
-        version: item.version,
-        updatedAt: item.updatedAt,
-        tags: item.tags,
-        valueJson: item.valueJson,
-        variants: item.variants
-      }
-    });
-    return {
-      kind: "offer",
-      key: item.key,
-      name: item.name,
-      status: item.status,
-      category: libraryItem.category,
-      assetType: libraryItem.assetType,
-      assetTypeLabel: libraryItem.assetTypeLabel,
-      thumbnailUrl: libraryItem.preview.thumbnailUrl,
-      startAt: item.startAt,
-      endAt: item.endAt
-    };
-  };
-
   app.get("/v1/inapp/campaign-calendar", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -1608,12 +1510,12 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     ]);
 
     const contentAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
-    for (const item of toLatestByKey(contentRows).values()) {
-      contentAssetsByKey.set(item.key, toCalendarContentAsset(item));
+    for (const item of latestByKey(contentRows).values()) {
+      contentAssetsByKey.set(item.key, buildCampaignCalendarContentAsset(item));
     }
     const offerAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
-    for (const item of toLatestByKey(offerRows).values()) {
-      offerAssetsByKey.set(item.key, toCalendarOfferAsset(item));
+    for (const item of latestByKey(offerRows).values()) {
+      offerAssetsByKey.set(item.key, buildCampaignCalendarOfferAsset(item));
     }
 
     return buildCampaignCalendar({

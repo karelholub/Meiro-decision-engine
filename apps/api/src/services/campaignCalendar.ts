@@ -1,5 +1,9 @@
 import { InAppCampaignStatus } from "@prisma/client";
-import type { ActivationAssetCategory, ActivationAssetType } from "./activationAssetLibrary";
+import {
+  buildActivationLibraryItem,
+  type ActivationAssetCategory,
+  type ActivationAssetType
+} from "./activationAssetLibrary";
 
 export type CampaignCalendarApprovalState = "draft" | "pending_approval" | "approved_or_active" | "archived";
 
@@ -96,6 +100,36 @@ export interface CampaignCalendarResponse {
   };
 }
 
+type CampaignCalendarContentAssetInput = {
+  key: string;
+  name: string;
+  description: string | null;
+  status: string;
+  version: number;
+  updatedAt: Date;
+  tags: unknown;
+  templateId: string;
+  schemaJson: unknown;
+  localesJson: unknown;
+  startAt: Date | null;
+  endAt: Date | null;
+  variants: Array<{ locale: string | null; channel: string | null; placementKey: string | null; payloadJson: unknown; metadataJson?: unknown }>;
+};
+
+type CampaignCalendarOfferAssetInput = {
+  key: string;
+  name: string;
+  description: string | null;
+  status: string;
+  version: number;
+  updatedAt: Date;
+  tags: unknown;
+  valueJson: unknown;
+  startAt: Date | null;
+  endAt: Date | null;
+  variants: Array<{ locale: string | null; channel: string | null; placementKey: string | null; payloadJson: unknown; metadataJson?: unknown }>;
+};
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const parseDate = (value: Date | string | null | undefined): Date | null => {
@@ -140,6 +174,77 @@ const assetMatches = (asset: CampaignCalendarLinkedAsset, input: Pick<CampaignCa
   if (input.assetKey?.trim() && asset.key !== input.assetKey.trim()) return false;
   if (input.assetType && asset.assetType !== input.assetType) return false;
   return true;
+};
+
+export const latestByKey = <T extends { key: string; version: number }>(rows: T[]) => {
+  const byKey = new Map<string, T>();
+  for (const row of rows) {
+    const current = byKey.get(row.key);
+    if (!current || row.version > current.version) {
+      byKey.set(row.key, row);
+    }
+  }
+  return byKey;
+};
+
+export const buildCampaignCalendarContentAsset = (item: CampaignCalendarContentAssetInput): CampaignCalendarLinkedAsset => {
+  const libraryItem = buildActivationLibraryItem({
+    asset: {
+      entityType: "content",
+      key: item.key,
+      name: item.name,
+      description: item.description,
+      status: item.status,
+      version: item.version,
+      updatedAt: item.updatedAt,
+      tags: item.tags,
+      templateId: item.templateId,
+      schemaJson: item.schemaJson,
+      localesJson: item.localesJson,
+      variants: item.variants
+    }
+  });
+  return {
+    kind: "content",
+    key: item.key,
+    name: item.name,
+    status: item.status,
+    category: libraryItem.category,
+    assetType: libraryItem.assetType,
+    assetTypeLabel: libraryItem.assetTypeLabel,
+    thumbnailUrl: libraryItem.preview.thumbnailUrl,
+    startAt: item.startAt,
+    endAt: item.endAt
+  };
+};
+
+export const buildCampaignCalendarOfferAsset = (item: CampaignCalendarOfferAssetInput): CampaignCalendarLinkedAsset => {
+  const libraryItem = buildActivationLibraryItem({
+    asset: {
+      entityType: "offer",
+      key: item.key,
+      name: item.name,
+      description: item.description,
+      status: item.status,
+      version: item.version,
+      updatedAt: item.updatedAt,
+      tags: item.tags,
+      valueJson: item.valueJson,
+      variants: item.variants
+    }
+  });
+  return {
+    kind: "offer",
+    key: item.key,
+    name: item.name,
+    status: item.status,
+    category: libraryItem.category,
+    assetType: libraryItem.assetType,
+    assetTypeLabel: libraryItem.assetTypeLabel,
+    thumbnailUrl: libraryItem.preview.thumbnailUrl,
+    startAt: item.startAt,
+    endAt: item.endAt
+  };
 };
 
 const summarize = (items: CampaignCalendarItem[]): CampaignCalendarResponse["summary"] => {

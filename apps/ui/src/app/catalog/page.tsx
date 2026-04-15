@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   apiClient,
-  type ActivationAssetCategory,
   type ActivationAssetChannel,
   type ActivationAssetType,
   type ActivationLibraryItem
@@ -12,157 +11,15 @@ import {
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 import { Button } from "../../components/ui/button";
 import { ActivationAssetCard, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, ChannelBadges, assetHref } from "../../components/catalog/ActivationAssetCard";
-
-const assetTypeOptions: Array<{ value: "" | ActivationAssetType; label: string }> = [
-  { value: "", label: "All types" },
-  { value: "image", label: "Images" },
-  { value: "copy_snippet", label: "Copy" },
-  { value: "cta", label: "CTAs" },
-  { value: "offer", label: "Offers" },
-  { value: "website_banner", label: "Website banners" },
-  { value: "popup_banner", label: "Popup banners" },
-  { value: "email_block", label: "Email blocks" },
-  { value: "push_message", label: "Push messages" },
-  { value: "whatsapp_message", label: "WhatsApp messages" },
-  { value: "journey_asset", label: "Journey assets" },
-  { value: "bundle", label: "Bundles" }
-];
-
-const channelOptions: Array<{ value: "" | ActivationAssetChannel; label: string }> = [
-  { value: "", label: "All channels" },
-  { value: "website_personalization", label: "Website personalization" },
-  { value: "popup_banner", label: "Popup banners" },
-  { value: "email", label: "Email" },
-  { value: "mobile_push", label: "Mobile push" },
-  { value: "whatsapp", label: "WhatsApp" },
-  { value: "journey_canvas", label: "Journey canvas" }
-];
-
-const channelLabel = (value: ActivationAssetChannel) => channelOptions.find((option) => option.value === value)?.label ?? value;
-
-type CreationOption = {
-  assetType: ActivationAssetType;
-  label: string;
-  group: "Primitive assets" | "Channel assets" | "Existing governed objects";
-  description: string;
-  channels: ActivationAssetChannel[];
-  templateHint: string;
-};
-
-const creationOptions: CreationOption[] = [
-  {
-    assetType: "image",
-    label: "Image",
-    group: "Primitive assets",
-    description: "Reusable image reference with source, description, and tags.",
-    channels: ["website_personalization", "popup_banner", "email"],
-    templateHint: "image_ref_v1"
-  },
-  {
-    assetType: "copy_snippet",
-    label: "Copy Snippet",
-    group: "Primitive assets",
-    description: "Token-aware reusable copy for messages, banners, and journey steps.",
-    channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"],
-    templateHint: "copy_snippet_v1"
-  },
-  {
-    assetType: "cta",
-    label: "CTA",
-    group: "Primitive assets",
-    description: "Reusable button label and target/action fields.",
-    channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"],
-    templateHint: "cta_v1"
-  },
-  {
-    assetType: "website_banner",
-    label: "Website Banner",
-    group: "Channel assets",
-    description: "Website personalization banner with title, subtitle, CTA, image, and URL starter fields.",
-    channels: ["website_personalization"],
-    templateHint: "banner_v1"
-  },
-  {
-    assetType: "popup_banner",
-    label: "Popup Banner",
-    group: "Channel assets",
-    description: "Popup or modal banner with short body, CTA, URL, and image reference.",
-    channels: ["popup_banner"],
-    templateHint: "popup_banner_v1"
-  },
-  {
-    assetType: "email_block",
-    label: "Email Block",
-    group: "Channel assets",
-    description: "Email content block with headline, body, CTA, image, and footer fields.",
-    channels: ["email"],
-    templateHint: "email_block_v1"
-  },
-  {
-    assetType: "push_message",
-    label: "Push Message",
-    group: "Channel assets",
-    description: "Short mobile push draft with title, body, deeplink, and action fields.",
-    channels: ["mobile_push"],
-    templateHint: "push_message_v1"
-  },
-  {
-    assetType: "whatsapp_message",
-    label: "WhatsApp Message",
-    group: "Channel assets",
-    description: "WhatsApp message draft with body, button, action, and variable guidance.",
-    channels: ["whatsapp"],
-    templateHint: "whatsapp_message_v1"
-  },
-  {
-    assetType: "journey_asset",
-    label: "Journey Asset",
-    group: "Channel assets",
-    description: "Journey-compatible content block for decision, message, or fallback nodes.",
-    channels: ["journey_canvas"],
-    templateHint: "journey_asset_v1"
-  },
-  {
-    assetType: "offer",
-    label: "Offer",
-    group: "Existing governed objects",
-    description: "Governed offer draft with starter value and constraints.",
-    channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"],
-    templateHint: "Offer editor"
-  },
-  {
-    assetType: "bundle",
-    label: "Bundle",
-    group: "Existing governed objects",
-    description: "Reusable package for governed offer and content block references.",
-    channels: [],
-    templateHint: "Bundle editor"
-  }
-];
-
-const creationGroups: CreationOption["group"][] = ["Primitive assets", "Channel assets", "Existing governed objects"];
-
-const browseTabs: Array<{
-  id: string;
-  label: string;
-  category?: ActivationAssetCategory;
-  assetType?: ActivationAssetType;
-  description: string;
-}> = [
-  { id: "all", label: "All Assets", description: "Every governed activation asset in one library." },
-  { id: "images", label: "Images", assetType: "image", description: "Thumbnail-forward reusable image references." },
-  { id: "copy", label: "Copy", assetType: "copy_snippet", description: "Reusable snippets, tokenized copy, and fragments." },
-  { id: "ctas", label: "CTAs", assetType: "cta", description: "Reusable labels, URLs, and deeplinks." },
-  { id: "offers", label: "Offers", assetType: "offer", description: "Decision-ready offer objects." },
-  { id: "channel", label: "Channel Assets", category: "channel", description: "Campaign-ready assets by channel and template." },
-  { id: "bundles", label: "Bundles", assetType: "bundle", description: "Composed packages of governed assets." }
-];
-
-const createTypeForTab = (tab: (typeof browseTabs)[number]): ActivationAssetType => {
-  if (tab.assetType) return tab.assetType;
-  if (tab.category === "channel") return "website_banner";
-  return "website_banner";
-};
+import {
+  activationAssetBrowseTabs,
+  activationAssetCreationGroups,
+  activationAssetCreationOptions,
+  activationAssetTypeFilterOptions,
+  activationChannelFilterOptions,
+  channelFilterLabel,
+  createTypeForBrowseTab
+} from "../../components/catalog/activationAssetConfig";
 
 const noResultsMessage = (input: {
   query: string;
@@ -208,10 +65,10 @@ export default function CatalogLibraryPage() {
     return onEnvironmentChange(setEnvironment);
   }, []);
 
-  const activeTab = browseTabs.find((tab) => tab.id === browseTab) ?? browseTabs[0]!;
-  const activeCreateOption = creationOptions.find((option) => option.assetType === createType) ?? creationOptions[3]!;
-  const tabCreateType = createTypeForTab(activeTab);
-  const tabCreateLabel = creationOptions.find((option) => option.assetType === tabCreateType)?.label ?? "Asset";
+  const activeTab = activationAssetBrowseTabs.find((tab) => tab.id === browseTab) ?? activationAssetBrowseTabs[0]!;
+  const activeCreateOption = activationAssetCreationOptions.find((option) => option.assetType === createType) ?? activationAssetCreationOptions[3]!;
+  const tabCreateType = createTypeForBrowseTab(activeTab);
+  const tabCreateLabel = activationAssetCreationOptions.find((option) => option.assetType === tabCreateType)?.label ?? "Asset";
 
   const load = async () => {
     setLoading(true);
@@ -261,7 +118,7 @@ export default function CatalogLibraryPage() {
   );
 
   const openCreate = (assetType = tabCreateType) => {
-    const option = creationOptions.find((entry) => entry.assetType === assetType);
+    const option = activationAssetCreationOptions.find((entry) => entry.assetType === assetType);
     setCreateType(assetType);
     setCreateName(option ? `New ${option.label}` : "");
     setCreateKey("");
@@ -332,7 +189,7 @@ export default function CatalogLibraryPage() {
 
       <section className="panel space-y-4 p-4">
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {browseTabs.map((tab) => (
+          {activationAssetBrowseTabs.map((tab) => (
             <button
               key={tab.id}
               className={`shrink-0 rounded-md border px-3 py-2 text-sm ${browseTab === tab.id ? "border-ink bg-ink text-white" : "border-stone-300 bg-white"}`}
@@ -358,13 +215,13 @@ export default function CatalogLibraryPage() {
           <label className="text-sm">
             Type
             <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={assetType} onChange={(event) => setAssetType(event.target.value as "" | ActivationAssetType)}>
-              {assetTypeOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
+              {activationAssetTypeFilterOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label className="text-sm">
             Works in
             <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={channel} onChange={(event) => setChannel(event.target.value as "" | ActivationAssetChannel)}>
-              {channelOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
+              {activationChannelFilterOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label className="text-sm">
@@ -457,11 +314,11 @@ export default function CatalogLibraryPage() {
             </div>
             <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_340px]">
               <div className="space-y-4">
-                {creationGroups.map((group) => (
+                {activationAssetCreationGroups.map((group) => (
                   <div key={group}>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">{group}</p>
                     <div className="grid gap-2 md:grid-cols-2">
-                      {creationOptions.filter((option) => option.group === group).map((option) => (
+                      {activationAssetCreationOptions.filter((option) => option.group === group).map((option) => (
                         <button
                           key={option.assetType}
                           type="button"
@@ -486,7 +343,7 @@ export default function CatalogLibraryPage() {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Where it works</p>
                   <p className="mt-1 text-sm text-stone-700">
-                    {activeCreateOption.channels.length > 0 ? activeCreateOption.channels.map(channelLabel).join(", ") : "Composed from selected governed assets"}
+                    {activeCreateOption.channels.length > 0 ? activeCreateOption.channels.map(channelFilterLabel).join(", ") : "Composed from selected governed assets"}
                   </p>
                 </div>
                 <div>

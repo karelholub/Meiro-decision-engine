@@ -5,10 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient, type ActivationAssetType, type CampaignCalendarItem, type CampaignCalendarResponse } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
+import { activationAssetTypeOptions, campaignCreationHref } from "../../../components/catalog/activationAssetConfig";
 import {
   addMonths,
   addWeeks,
-  campaignCreationHref,
   calendarGridPlacement,
   daysBetweenInclusive,
   formatDateInput,
@@ -19,20 +19,6 @@ import {
   windowForView,
   type CalendarView
 } from "./calendar-utils";
-
-const assetTypeOptions: Array<{ value: ActivationAssetType; label: string }> = [
-  { value: "image", label: "Image" },
-  { value: "copy_snippet", label: "Copy Snippet" },
-  { value: "cta", label: "CTA" },
-  { value: "offer", label: "Offer" },
-  { value: "website_banner", label: "Website Banner" },
-  { value: "popup_banner", label: "Popup Banner" },
-  { value: "email_block", label: "Email Block" },
-  { value: "push_message", label: "Push Message" },
-  { value: "whatsapp_message", label: "WhatsApp Message" },
-  { value: "journey_asset", label: "Journey Asset" },
-  { value: "bundle", label: "Bundle" }
-];
 
 const assetHref = (asset: CampaignCalendarItem["linkedAssets"][number]) =>
   asset.kind === "offer" ? `/catalog/offers?key=${encodeURIComponent(asset.key)}` : `/catalog/content?key=${encodeURIComponent(asset.key)}`;
@@ -322,7 +308,7 @@ export default function CampaignCalendarPage() {
             Asset type
             <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={assetType} onChange={(event) => setAssetType(event.target.value)}>
               <option value="">Any</option>
-              {assetTypeOptions.map((option) => (
+              {activationAssetTypeOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>

@@ -1,6 +1,12 @@
 import { InAppCampaignStatus } from "@prisma/client";
 import { describe, expect, it } from "vitest";
-import { buildCampaignCalendar, type CampaignCalendarLinkedAsset } from "./campaignCalendar";
+import {
+  buildCampaignCalendar,
+  buildCampaignCalendarContentAsset,
+  buildCampaignCalendarOfferAsset,
+  latestByKey,
+  type CampaignCalendarLinkedAsset
+} from "./campaignCalendar";
 
 const now = "2026-04-15T10:00:00.000Z";
 const from = "2026-04-01T00:00:00.000Z";
@@ -138,5 +144,55 @@ describe("campaign calendar", () => {
     });
 
     expect(calendar.items.map((item) => item.campaignKey)).toEqual(["spring_home"]);
+  });
+
+  it("projects latest governed assets into calendar linked assets", () => {
+    expect([...latestByKey([{ key: "hero", version: 1 }, { key: "hero", version: 2 }]).values()]).toEqual([
+      { key: "hero", version: 2 }
+    ]);
+
+    expect(
+      buildCampaignCalendarContentAsset({
+        key: "push_welcome",
+        name: "Push welcome",
+        description: null,
+        status: "DRAFT",
+        version: 1,
+        updatedAt: new Date(now),
+        tags: [],
+        templateId: "push_message_v1",
+        schemaJson: { activationAsset: { assetType: "push_message" } },
+        localesJson: ["en"],
+        startAt: null,
+        endAt: null,
+        variants: [{ locale: "en", channel: "mobile_push", placementKey: null, payloadJson: { title: "Hi" } }]
+      })
+    ).toMatchObject({
+      kind: "content",
+      key: "push_welcome",
+      assetType: "push_message",
+      assetTypeLabel: "Push Message"
+    });
+
+    expect(
+      buildCampaignCalendarOfferAsset({
+        key: "discount10",
+        name: "Discount 10",
+        description: null,
+        status: "ACTIVE",
+        version: 1,
+        updatedAt: new Date(now),
+        tags: [],
+        valueJson: { amount: 10 },
+        startAt: null,
+        endAt: null,
+        variants: []
+      })
+    ).toMatchObject({
+      kind: "offer",
+      key: "discount10",
+      assetType: "offer",
+      assetTypeLabel: "Offer"
+    });
   });
 });

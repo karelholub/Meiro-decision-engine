@@ -4,33 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient, type ActivationLibraryItem } from "../../lib/api";
 import { ActivationAssetMeta, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, ChannelBadges, ReusablePartsPanel } from "./ActivationAssetCard";
+import { assetCalendarUsageHref, assetCampaignPlanHref } from "./activationAssetConfig";
 
 type ActivationAssetProfilePanelProps = {
   entityType: "offer" | "content" | "bundle";
   assetKey: string;
-};
-
-const campaignPlanHref = (item: ActivationLibraryItem) => {
-  const params = new URLSearchParams({
-    assetType: item.assetType,
-    name: `Campaign for ${item.name}`
-  });
-  if (item.runtimeRef.offerKey) {
-    params.set("offerKey", item.runtimeRef.offerKey);
-  } else if (item.runtimeRef.contentKey) {
-    params.set("contentKey", item.runtimeRef.contentKey);
-  } else {
-    return null;
-  }
-  return `/engage/campaigns/new/edit?${params.toString()}`;
-};
-
-const calendarHref = (item: ActivationLibraryItem) => {
-  const params = new URLSearchParams({
-    assetKey: item.key,
-    assetType: item.assetType
-  });
-  return `/engage/calendar?${params.toString()}`;
 };
 
 export function ActivationAssetProfilePanel({ entityType, assetKey }: ActivationAssetProfilePanelProps) {
@@ -60,7 +38,7 @@ export function ActivationAssetProfilePanel({ entityType, assetKey }: Activation
     return null;
   }
 
-  const planHref = campaignPlanHref(item);
+  const planHref = assetCampaignPlanHref(item);
 
   return (
     <section className="panel overflow-hidden">
@@ -86,7 +64,7 @@ export function ActivationAssetProfilePanel({ entityType, assetKey }: Activation
                 Plan campaign with this asset
               </Link>
             ) : null}
-            <Link className="rounded-md border border-stone-300 px-3 py-2 text-sm" href={calendarHref(item)}>
+            <Link className="rounded-md border border-stone-300 px-3 py-2 text-sm" href={assetCalendarUsageHref(item)}>
               View calendar usage
             </Link>
           </div>

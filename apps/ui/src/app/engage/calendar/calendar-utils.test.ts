@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CampaignCalendarItem } from "../../../lib/api";
+import { campaignCreationHref } from "../../../components/catalog/activationAssetConfig";
 import {
   calendarGridPlacement,
-  campaignCreationHref,
   daysBetweenInclusive,
   fromDatetimeLocal,
   startOfWeek,

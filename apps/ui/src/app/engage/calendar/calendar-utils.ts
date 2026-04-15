@@ -1,4 +1,4 @@
-import type { ActivationAssetType, CampaignCalendarItem } from "../../../lib/api";
+import type { CampaignCalendarItem } from "../../../lib/api";
 
 export type CalendarView = "month" | "week" | "list";
 
@@ -59,38 +59,6 @@ export const fromDatetimeLocal = (value: string): string | null => {
     return null;
   }
   return parsed.toISOString();
-};
-
-export const campaignCreationHref = (input: {
-  startAt?: string | null;
-  endAt?: string | null;
-  appKey?: string | null;
-  placementKey?: string | null;
-  assetKey?: string | null;
-  assetType?: ActivationAssetType | string | null;
-  assetKind?: "content" | "offer" | null;
-  name?: string | null;
-}) => {
-  const params = new URLSearchParams();
-  if (input.startAt) params.set("startAt", input.startAt);
-  if (input.endAt) params.set("endAt", input.endAt);
-  if (input.appKey?.trim()) params.set("appKey", input.appKey.trim());
-  if (input.placementKey?.trim()) params.set("placementKey", input.placementKey.trim());
-  if (input.assetType?.trim()) params.set("assetType", input.assetType.trim());
-  if (input.name?.trim()) params.set("name", input.name.trim());
-
-  const assetKey = input.assetKey?.trim();
-  if (assetKey) {
-    const kind = input.assetKind ?? (input.assetType === "offer" ? "offer" : input.assetType === "bundle" ? null : "content");
-    if (kind === "offer") {
-      params.set("offerKey", assetKey);
-    } else if (kind === "content") {
-      params.set("contentKey", assetKey);
-    }
-  }
-
-  const query = params.toString();
-  return `/engage/campaigns/new/edit${query ? `?${query}` : ""}`;
 };
 
 export const warningLabel = (code: string) =>
