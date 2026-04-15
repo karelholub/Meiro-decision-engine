@@ -6,8 +6,9 @@ import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
-import { CatalogActionBar, OfferEditor } from "../../../components/catalog";
+import { AssetVariantsEditor, CatalogActionBar, OfferEditor, makeVariantEditorRows, serializeVariantRows, type AssetVariantEditorRow } from "../../../components/catalog";
 import {
+  DEFAULT_OFFER_VALUE,
   deriveDiscountFields,
   fromDatetimeLocal,
   makeOfferEditorSeed,
@@ -75,6 +76,10 @@ export default function CatalogOffersPage() {
   const [discountFields, setDiscountFields] = useState<DiscountFields>({ code: "", percent: "", minSpend: "", newCustomersOnly: false });
   const [discountErrors, setDiscountErrors] = useState<Partial<Record<"code" | "percent" | "minSpend", string>>>({});
   const [genericPairs, setGenericPairs] = useState<GenericPair[]>([{ key: "", value: "" }]);
+  const [variantRows, setVariantRows] = useState<AssetVariantEditorRow[]>(() => makeVariantEditorRows([], DEFAULT_OFFER_VALUE));
+  const [previewContext, setPreviewContext] = useState('{\n  "profile": { "first_name": "Alex" }\n}\n');
+  const [previewResult, setPreviewResult] = useState<unknown | null>(null);
+  const [assetReport, setAssetReport] = useState<Awaited<ReturnType<typeof apiClient.catalog.assets.report>> | null>(null);
 
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [searchText, setSearchText] = useState("");
@@ -103,6 +108,7 @@ export default function CatalogOffersPage() {
           setSelectedId(active.id);
           setCreateMode(false);
           setGenericPairs(makeGenericPairs(seed.valueJsonText));
+          setVariantRows(makeVariantEditorRows(active.variants, active.valueJson));
         }
       }
       setError(null);
@@ -210,6 +216,7 @@ export default function CatalogOffersPage() {
     setSaving(true);
     try {
       const payload = parsePayloadOrThrow(editor);
+      const variants = serializeVariantRows(variantRows);
 
       if (editor.type === "discount") {
         const localErrors = validateDiscountFields(discountFields);
@@ -220,7 +227,7 @@ export default function CatalogOffersPage() {
       }
 
       if (createMode || !selectedId) {
-        const response = await apiClient.catalog.offers.create(payload);
+        const response = await apiClient.catalog.offers.create({ ...payload, variants });
         setSelectedId(response.item.id);
         setCreateMode(false);
         setEditor(makeOfferEditorSeed(response.item));
@@ -235,7 +242,8 @@ export default function CatalogOffersPage() {
           valueJson: payload.valueJson,
           constraints: payload.constraints,
           startAt: payload.startAt,
-          endAt: payload.endAt
+          endAt: payload.endAt,
+          variants
         });
         setEditor(makeOfferEditorSeed(response.item));
         setMessage(`Updated ${response.item.key} v${response.item.version}`);
@@ -263,7 +271,7 @@ export default function CatalogOffersPage() {
       }
 
       const payload = parsePayloadOrThrow(editor);
-      const validation = await apiClient.catalog.offers.validate(payload);
+      const validation = await apiClient.catalog.offers.validate({ ...payload, variants: serializeVariantRows(variantRows) });
       setLastValidationValid(validation.valid);
       setMessage(validation.valid ? "Validation passed" : `Validation failed: ${validation.errors.join(" | ") || "unknown"}`);
       setError(null);
@@ -277,7 +285,7 @@ export default function CatalogOffersPage() {
     setSaving(true);
     try {
       const payload = parsePayloadOrThrow(editor);
-      const response = await apiClient.catalog.offers.create(payload);
+      const response = await apiClient.catalog.offers.create({ ...payload, variants: serializeVariantRows(variantRows) });
       setSelectedId(response.item.id);
       setEditor(makeOfferEditorSeed(response.item));
       setCreateMode(false);
@@ -310,8 +318,8 @@ export default function CatalogOffersPage() {
       return;
     }
     try {
-      await apiClient.catalog.offers.archive(editor.key.trim());
-      setMessage(`Archived ${editor.key.trim()}`);
+      const response = await apiClient.catalog.offers.archive(editor.key.trim());
+      setMessage(response.archiveSafety?.warning ? `Archived ${editor.key.trim()}. ${response.archiveSafety.warning}` : `Archived ${editor.key.trim()}`);
       setArchiveConfirmOpen(false);
       setArchiveConfirmKey("");
       await load();
@@ -341,6 +349,41 @@ export default function CatalogOffersPage() {
     setCreateMode(true);
     setSelectedId(null);
     setMessage(`Prepared duplicate as ${nextKey}`);
+  };
+
+  const runPreview = async () => {
+    if (!editor.key.trim()) {
+      return;
+    }
+    try {
+      const context = safeJsonParse<Record<string, unknown>>(previewContext);
+      if (!context.value) {
+        throw new Error(`Invalid preview context: ${context.error}`);
+      }
+      const response = await apiClient.catalog.offers.preview(editor.key.trim(), {
+        locale: "en",
+        channel: "inapp",
+        placementKey: "home_top",
+        context: context.value
+      });
+      setPreviewResult(response);
+      setMessage("Preview generated");
+      setError(null);
+    } catch (previewError) {
+      setError(previewError instanceof Error ? previewError.message : "Preview failed");
+    }
+  };
+
+  const loadReport = async () => {
+    if (!editor.key.trim()) {
+      return;
+    }
+    try {
+      const response = await apiClient.catalog.assets.report({ type: "offer", key: editor.key.trim() });
+      setAssetReport(response);
+    } catch (reportError) {
+      setError(reportError instanceof Error ? reportError.message : "Report failed");
+    }
   };
 
   return (
@@ -393,6 +436,8 @@ export default function CatalogOffersPage() {
             >
               <option value="ALL">All</option>
               <option value="ACTIVE">Active</option>
+              <option value="PENDING_APPROVAL">Pending approval</option>
+              <option value="PAUSED">Paused</option>
               <option value="DRAFT">Draft</option>
               <option value="ARCHIVED">Archived</option>
             </select>
@@ -404,6 +449,7 @@ export default function CatalogOffersPage() {
                 setSelectedId(null);
                 setEditor(makeOfferEditorSeed());
                 setGenericPairs([{ key: "", value: "" }]);
+                setVariantRows(makeVariantEditorRows([], DEFAULT_OFFER_VALUE));
                 setLastValidationValid(null);
               }}
             >
@@ -427,6 +473,7 @@ export default function CatalogOffersPage() {
                   setEditor(seed);
                   setCreateMode(false);
                   setGenericPairs(makeGenericPairs(seed.valueJsonText));
+                  setVariantRows(makeVariantEditorRows(item.variants, item.valueJson));
                   setLastValidationValid(null);
                 }}
               >
@@ -473,9 +520,55 @@ export default function CatalogOffersPage() {
         />
       </div>
 
+      <AssetVariantsEditor
+        rows={variantRows}
+        onChange={(rows) => {
+          setVariantRows(rows);
+          setLastValidationValid(null);
+        }}
+        readOnly={readOnly}
+        fallbackPayload={readObject(valueParse.value)}
+      />
+
+      <section className="panel grid gap-4 p-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <h3 className="font-semibold">Preview Resolution</h3>
+          <textarea
+            value={previewContext}
+            onChange={(event) => setPreviewContext(event.target.value)}
+            className="min-h-28 w-full rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+          />
+          <Button variant="outline" onClick={() => void runPreview()}>
+            Preview en / inapp / home_top
+          </Button>
+          <pre className="max-h-80 overflow-auto rounded-md bg-stone-950 p-3 text-xs text-stone-50">{JSON.stringify(previewResult, null, 2)}</pre>
+        </div>
+        <div className="space-y-2">
+          <h3 className="font-semibold">Usage & Dependencies</h3>
+          <Button variant="outline" onClick={() => void loadReport()}>
+            Load usage
+          </Button>
+          {assetReport ? (
+            <div className="space-y-2 text-sm">
+              <p className="font-medium">Operational usage, last {assetReport.windowDays} days</p>
+              <p>Usage count: {assetReport.usageCount} / In-app impressions: {assetReport.impressions} / Clicks: {assetReport.clicks}</p>
+              <p>Decision serves sampled: {assetReport.decisionUsageCount} / Observed events: {assetReport.observedEventCount ?? 0}</p>
+              <p>Referenced by decisions: {assetReport.dependencies.decisions.map((item) => `${item.key} v${item.version}`).join(", ") || "-"}</p>
+              <p>Referenced by campaigns: {assetReport.dependencies.campaigns.map((item) => item.key).join(", ") || "-"}</p>
+              {assetReport.dependencies.archiveSafety?.warning ? <p className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700">{assetReport.dependencies.archiveSafety.warning}</p> : null}
+              {(assetReport.warnings ?? []).length > 0 ? <p className="text-stone-600">Report caveats: {assetReport.warnings?.join(", ")}</p> : null}
+              {(assetReport.dataCaveats ?? []).length > 0 ? <p className="text-stone-600">{assetReport.dataCaveats?.[0]}</p> : null}
+            </div>
+          ) : (
+            <p className="text-sm text-stone-600">Load usage to see references, engagement counts, and archive risk.</p>
+          )}
+        </div>
+      </section>
+
       <section className="panel space-y-3 border-red-300 p-4">
         <h3 className="font-semibold text-red-700">Danger zone</h3>
         <p className="text-sm text-stone-700">Archive key permanently hides all versions of this offer key from active use.</p>
+        {assetReport?.dependencies.archiveSafety?.warning ? <p className="text-sm font-medium text-red-700">{assetReport.dependencies.archiveSafety.warning}</p> : null}
         {!archiveConfirmOpen ? (
           <Button variant="danger" onClick={() => setArchiveConfirmOpen(true)}>
             Archive key

@@ -4,6 +4,7 @@ import type {
   AppEnumSettingsResponse,
   ActivationPreviewResponse,
   CatalogTagsResponse,
+  CatalogAssetBundle,
   CatalogContentBlock,
   CatalogOffer,
   DecisionDetailsResponse,
@@ -661,7 +662,7 @@ export const apiClient = {
     tags: (params: { env?: "DEV" | "STAGE" | "PROD"; q?: string } = {}) =>
       apiFetch<CatalogTagsResponse>(`/v1/catalog/tags${toQuery(params)}`),
     offers: {
-      list: (params: { key?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; q?: string } = {}) =>
+      list: (params: { key?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED"; q?: string } = {}) =>
         apiFetch<{ items: CatalogOffer[] }>(`/v1/catalog/offers${toQuery(params)}`),
       create: (input: Record<string, unknown>) =>
         apiFetch<{ item: CatalogOffer; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/catalog/offers`, {
@@ -679,7 +680,7 @@ export const apiClient = {
           body: JSON.stringify(version ? { version } : {})
         }),
       archive: (key: string) =>
-        apiFetch<{ archivedKey: string }>(`/v1/catalog/offers/${key}/archive`, {
+        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null } }>(`/v1/catalog/offers/${key}/archive`, {
           method: "POST",
           body: JSON.stringify({})
         }),
@@ -687,10 +688,32 @@ export const apiClient = {
         apiFetch<{ valid: boolean; errors: string[]; warnings: string[] }>(`/v1/catalog/offers/validate`, {
           method: "POST",
           body: JSON.stringify(input)
+        }),
+      preview: (key: string, input: Record<string, unknown>) =>
+        apiFetch<{
+          item: {
+            offerKey: string;
+            version: number;
+            type: string;
+            value: Record<string, unknown>;
+            constraints: Record<string, unknown>;
+            valid: boolean;
+            variantId?: string | null;
+            resolution: Record<string, unknown>;
+            tags: string[];
+          };
+        }>(`/v1/catalog/offers/${key}/preview`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      makeVariantDefault: (key: string, variantId: string) =>
+        apiFetch<{ item: CatalogOffer | null; warnings?: string[] }>(`/v1/catalog/offers/${key}/variants/${variantId}/make-default`, {
+          method: "POST",
+          body: JSON.stringify({})
         })
     },
     content: {
-      list: (params: { key?: string; status?: "DRAFT" | "ACTIVE" | "ARCHIVED"; q?: string } = {}) =>
+      list: (params: { key?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED"; q?: string } = {}) =>
         apiFetch<{ items: CatalogContentBlock[] }>(`/v1/catalog/content${toQuery(params)}`),
       create: (input: Record<string, unknown>) =>
         apiFetch<{ item: CatalogContentBlock; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(
@@ -714,7 +737,7 @@ export const apiClient = {
           body: JSON.stringify(version ? { version } : {})
         }),
       archive: (key: string) =>
-        apiFetch<{ archivedKey: string }>(`/v1/catalog/content/${key}/archive`, {
+        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null } }>(`/v1/catalog/content/${key}/archive`, {
           method: "POST",
           body: JSON.stringify({})
         }),
@@ -735,6 +758,8 @@ export const apiClient = {
           profile?: Record<string, unknown>;
           context?: Record<string, unknown>;
           derived?: Record<string, unknown>;
+          channel?: string;
+          placementKey?: string;
           missingTokenValue?: string;
         }
       ) =>
@@ -745,6 +770,9 @@ export const apiClient = {
             templateId: string;
             locale: string;
             payload: Record<string, unknown> | unknown;
+            valid: boolean;
+            variantId?: string | null;
+            resolution: Record<string, unknown>;
             tags: string[];
           };
           debug: {
@@ -755,7 +783,112 @@ export const apiClient = {
         }>(`/v1/catalog/content/${key}/preview`, {
           method: "POST",
           body: JSON.stringify(input)
+        }),
+      makeVariantDefault: (key: string, variantId: string) =>
+        apiFetch<{ item: CatalogContentBlock | null; warnings?: string[] }>(`/v1/catalog/content/${key}/variants/${variantId}/make-default`, {
+          method: "POST",
+          body: JSON.stringify({})
         })
+    },
+    bundles: {
+      list: (params: { key?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED"; q?: string } = {}) =>
+        apiFetch<{ items: CatalogAssetBundle[] }>(`/v1/catalog/bundles${toQuery(params)}`),
+      create: (input: Record<string, unknown>) =>
+        apiFetch<{ item: CatalogAssetBundle; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/catalog/bundles`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      update: (id: string, input: Record<string, unknown>) =>
+        apiFetch<{ item: CatalogAssetBundle; validation?: { valid: boolean; errors: string[]; warnings: string[] } }>(`/v1/catalog/bundles/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(input)
+        }),
+      activate: (key: string, version?: number) =>
+        apiFetch<{ item: CatalogAssetBundle }>(`/v1/catalog/bundles/${key}/activate`, {
+          method: "POST",
+          body: JSON.stringify(version ? { version } : {})
+        }),
+      archive: (key: string) =>
+        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null } }>(`/v1/catalog/bundles/${key}/archive`, {
+          method: "POST",
+          body: JSON.stringify({})
+        }),
+      preview: (key: string, input: Record<string, unknown>) =>
+        apiFetch<Record<string, unknown>>(`/v1/catalog/bundles/${key}/preview`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    },
+    assets: {
+      dependencies: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
+        apiFetch<{
+          asset: { type: "offer" | "content" | "bundle"; key: string };
+          dependencies: {
+            decisions: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+            campaigns: Array<{ id: string; key: string; name: string; status: string; appKey: string; placementKey: string; updatedAt: string }>;
+            experiments: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+            bundles: Array<{ id: string; key: string; name: string; version: number; status: string; offerKey: string | null; contentKey: string | null; updatedAt: string }>;
+            activeReferences?: {
+              decisions: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+              campaigns: Array<{ id: string; key: string; name: string; status: string; appKey: string; placementKey: string; updatedAt: string }>;
+              experiments: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+              bundles?: Array<{ id: string; key: string; name: string; version: number; status: string; offerKey: string | null; contentKey: string | null; updatedAt: string }>;
+            };
+            archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null };
+          };
+        }>(`/v1/catalog/assets/dependencies${toQuery(params)}`),
+      report: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
+        apiFetch<{
+          windowDays: number;
+          window?: { from: string; to: string };
+          metricSemantics?: Record<string, string>;
+          dataCaveats?: string[];
+          warnings?: string[];
+          usageCount: number;
+          decisionUsageCount: number;
+          impressions: number;
+          clicks: number;
+          dismissals: number;
+          ctr: number;
+          variantUsage: Record<string, number>;
+          campaignVariantUsage?: Record<string, number>;
+          observedEventCount?: number;
+          dependencies: {
+            decisions: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+            campaigns: Array<{ id: string; key: string; name: string; status: string; appKey: string; placementKey: string; updatedAt: string }>;
+            experiments: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+            bundles: Array<{ id: string; key: string; name: string; version: number; status: string; offerKey: string | null; contentKey: string | null; updatedAt: string }>;
+            activeReferences?: {
+              decisions: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+              campaigns: Array<{ id: string; key: string; name: string; status: string; appKey: string; placementKey: string; updatedAt: string }>;
+              experiments: Array<{ id: string; key: string; name: string; version: number; status: string; updatedAt: string }>;
+              bundles?: Array<{ id: string; key: string; name: string; version: number; status: string; offerKey: string | null; contentKey: string | null; updatedAt: string }>;
+            };
+            archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null };
+          };
+        }>(`/v1/catalog/assets/report${toQuery(params)}`),
+      health: (params: { type?: "offer" | "content" | "bundle"; key?: string } = {}) =>
+        apiFetch<{
+          generatedAt: string;
+          semantics: Record<string, string>;
+          items: Array<{
+            type: "offer" | "content" | "bundle";
+            key: string;
+            name: string;
+            status: string;
+            version: number;
+            health: "healthy" | "warning" | "critical";
+            warnings: string[];
+            warningDetails?: Array<{ code: string; severity: "warning" | "critical"; message: string }>;
+            runtimeEligibleVariantCount: number;
+            variantCount: number;
+            localeCoverage: string[];
+            channelCoverage: string[];
+            placementCoverage: string[];
+            dependencyCounts: { decisions: number; campaigns: number; experiments: number };
+            tags: string[];
+          }>;
+        }>(`/v1/catalog/assets/health${toQuery(params)}`)
     }
   },
   inapp: {

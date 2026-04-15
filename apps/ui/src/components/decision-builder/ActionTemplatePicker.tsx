@@ -64,6 +64,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
   const payloadRef = isRecord(payload.payloadRef) ? payload.payloadRef : {};
   const selectedContentKey = typeof payloadRef.contentKey === "string" ? payloadRef.contentKey : "";
   const selectedOfferKey = typeof payloadRef.offerKey === "string" ? payloadRef.offerKey : "";
+  const selectedBundleKey = typeof payloadRef.bundleKey === "string" ? payloadRef.bundleKey : "";
   const selectedContentRef = selectedContentKey ? parseLegacyKey("content", selectedContentKey) : null;
   const selectedOfferRef = selectedOfferKey ? parseLegacyKey("offer", selectedOfferKey) : null;
   const selectedExperimentRef =
@@ -97,7 +98,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
     });
   };
 
-  const updatePayloadRef = (patch: { contentKey?: string; offerKey?: string }, payloadPatch: Record<string, unknown> = {}) => {
+  const updatePayloadRef = (patch: { contentKey?: string; offerKey?: string; bundleKey?: string }, payloadPatch: Record<string, unknown> = {}) => {
     const nextRef: Record<string, unknown> = {
       ...(isRecord(payload.payloadRef) ? payload.payloadRef : {}),
       ...patch
@@ -108,6 +109,9 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
     }
     if (!nextRef.offerKey) {
       delete nextRef.offerKey;
+    }
+    if (!nextRef.bundleKey) {
+      delete nextRef.bundleKey;
     }
 
     const nextPayload: Record<string, unknown> = {
@@ -241,6 +245,16 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
                 onChange={(nextRef) => updatePayloadRef({ offerKey: nextRef ? toLegacyKey(nextRef) : undefined })}
                 disabled={readOnly}
                 allowVersionPin
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs md:col-span-2">
+              Asset Bundle Reference (optional)
+              <input
+                className="rounded-md border border-stone-300 px-2 py-1"
+                value={selectedBundleKey}
+                onChange={(event) => updatePayloadRef({ bundleKey: event.target.value.trim() || undefined })}
+                placeholder="winback_home_modal"
+                disabled={readOnly}
               />
             </label>
           </div>

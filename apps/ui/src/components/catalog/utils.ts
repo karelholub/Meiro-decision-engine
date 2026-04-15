@@ -362,6 +362,12 @@ export const statusLabel = (status: CatalogStatus, version?: number) => {
   if (status === "ACTIVE") {
     return `ACTIVE${version ? ` v${version}` : ""}`;
   }
+  if (status === "PENDING_APPROVAL") {
+    return `PENDING APPROVAL${version ? ` v${version}` : ""}`;
+  }
+  if (status === "PAUSED") {
+    return `PAUSED${version ? ` v${version}` : ""}`;
+  }
   if (status === "ARCHIVED") {
     return "ARCHIVED";
   }
@@ -391,6 +397,8 @@ export const makeContentEditorSeed = (block?: CatalogContentBlock) => ({
   status: block?.status ?? ("DRAFT" as const),
   templateId: block?.templateId ?? "banner_v1",
   tags: block?.tags ?? [],
+  startAt: toDatetimeLocal(block?.startAt ?? null),
+  endAt: toDatetimeLocal(block?.endAt ?? null),
   schemaJsonText: toPrettyJson(
     block
       ? block.schemaJson ?? (block.templateId === "banner_v1" ? DEFAULT_BANNER_SCHEMA : null)

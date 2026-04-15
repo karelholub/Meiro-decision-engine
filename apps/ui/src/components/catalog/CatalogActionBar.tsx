@@ -5,7 +5,7 @@ import { Button } from "../ui/button";
 import { cn } from "../../lib/cn";
 
 type CatalogActionBarProps = {
-  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED";
   versionLabel: string;
   environment: string;
   lastSavedAt: string | null;
@@ -84,7 +84,7 @@ export function CatalogActionBar({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-stone-700">
-        <Badge variant={status === "ACTIVE" ? "success" : status === "ARCHIVED" ? "danger" : "warning"}>{versionLabel}</Badge>
+        <Badge variant={status === "ACTIVE" ? "success" : status === "ARCHIVED" ? "danger" : status === "PAUSED" ? "neutral" : "warning"}>{versionLabel}</Badge>
         <Badge variant="neutral">{environment}</Badge>
         <span className={cn("rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5", !lastSavedAt && "text-stone-500")}>
           Last saved: {lastSavedAt ? new Date(lastSavedAt).toLocaleString() : "-"}

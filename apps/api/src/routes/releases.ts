@@ -10,6 +10,7 @@ const releaseEntityTypeSchema = z.enum([
   "stack",
   "offer",
   "content",
+  "bundle",
   "experiment",
   "campaign",
   "policy",
@@ -91,6 +92,7 @@ const topLevelDiffSummary = (source: unknown, target: unknown): string => {
 const extractDecisionRefs = (definition: unknown) => {
   const contentKeys = new Set<string>();
   const offerKeys = new Set<string>();
+  const bundleKeys = new Set<string>();
   const experimentKeys = new Set<string>();
 
   const walk = (value: unknown) => {
@@ -111,6 +113,9 @@ const extractDecisionRefs = (definition: unknown) => {
       if (typeof value.payloadRef.offerKey === "string" && value.payloadRef.offerKey.trim()) {
         offerKeys.add(value.payloadRef.offerKey.trim());
       }
+      if (typeof value.payloadRef.bundleKey === "string" && value.payloadRef.bundleKey.trim()) {
+        bundleKeys.add(value.payloadRef.bundleKey.trim());
+      }
     }
 
     if (typeof value.offerKey === "string" && value.offerKey.trim()) {
@@ -118,6 +123,9 @@ const extractDecisionRefs = (definition: unknown) => {
     }
     if (typeof value.contentKey === "string" && value.contentKey.trim()) {
       contentKeys.add(value.contentKey.trim());
+    }
+    if (typeof value.bundleKey === "string" && value.bundleKey.trim()) {
+      bundleKeys.add(value.bundleKey.trim());
     }
     if (typeof value.experimentKey === "string" && value.experimentKey.trim()) {
       experimentKeys.add(value.experimentKey.trim());
@@ -132,6 +140,7 @@ const extractDecisionRefs = (definition: unknown) => {
   return {
     contentKeys: [...contentKeys],
     offerKeys: [...offerKeys],
+    bundleKeys: [...bundleKeys],
     experimentKeys: [...experimentKeys]
   };
 };
@@ -231,6 +240,167 @@ const normalizeStackDefinitionForTarget = (definition: unknown, targetVersion: n
 
 const releaseItemId = (item: { type: string; key: string; version: number }) => `${item.type}:${item.key}:${item.version}`;
 
+const normalizeAssetVariantsForDiff = (variants: unknown) =>
+  Array.isArray(variants)
+    ? variants.map((variant: any) => ({
+        locale: variant.locale ?? null,
+        channel: variant.channel ?? null,
+        placementKey: variant.placementKey ?? null,
+        isDefault: Boolean(variant.isDefault),
+        payloadJson: variant.payloadJson,
+        tokenBindings: variant.tokenBindings ?? null,
+        clonedFromVariantId: variant.clonedFromVariantId ?? null,
+        experimentKey: variant.experimentKey ?? null,
+        experimentVariantId: variant.experimentVariantId ?? null,
+        experimentRole: variant.experimentRole ?? null,
+        metadataJson: variant.metadataJson ?? null,
+        startAt: variant.startAt ?? null,
+        endAt: variant.endAt ?? null
+      }))
+    : [];
+
+const offerSnapshotForDiff = (source: any) => ({
+  type: source?.type,
+  valueJson: source?.valueJson,
+  constraints: source?.constraints ?? null,
+  startAt: source?.startAt ?? null,
+  endAt: source?.endAt ?? null,
+  tokenBindings: source?.tokenBindings ?? null,
+  variants: normalizeAssetVariantsForDiff(source?.variants)
+});
+
+const contentSnapshotForDiff = (source: any) => ({
+  templateId: source?.templateId,
+  schemaJson: source?.schemaJson ?? null,
+  localesJson: source?.localesJson,
+  tokenBindings: source?.tokenBindings ?? null,
+  startAt: source?.startAt ?? null,
+  endAt: source?.endAt ?? null,
+  variants: normalizeAssetVariantsForDiff(source?.variants)
+});
+
+const bundleSnapshotForDiff = (source: any) => ({
+  name: source?.name,
+  description: source?.description ?? null,
+  offerKey: source?.offerKey ?? null,
+  contentKey: source?.contentKey ?? null,
+  templateKey: source?.templateKey ?? null,
+  placementKeys: source?.placementKeys ?? [],
+  channels: source?.channels ?? [],
+  locales: source?.locales ?? [],
+  tags: source?.tags ?? [],
+  useCase: source?.useCase ?? null,
+  metadataJson: source?.metadataJson ?? null
+});
+
+const assetParentSnapshotForDiff = (source: any) => {
+  const { variants: _variants, ...parent } = source ?? {};
+  return parent;
+};
+
+const assetChangeSummary = (source: any, target: any) => {
+  const base = topLevelDiffSummary(source, target);
+  if (!target) {
+    return `${base}; parent+variants:new`;
+  }
+  const parentChanged = valueDigest(assetParentSnapshotForDiff(source)) !== valueDigest(assetParentSnapshotForDiff(target));
+  const variantsChanged = valueDigest(normalizeAssetVariantsForDiff(source?.variants)) !== valueDigest(normalizeAssetVariantsForDiff(target?.variants));
+  const sourceVariants = normalizeAssetVariantsForDiff(source?.variants);
+  const targetVariants = normalizeAssetVariantsForDiff(target?.variants);
+  const experimentChanged = valueDigest(sourceVariants.map((variant) => ({
+    experimentKey: variant.experimentKey,
+    experimentVariantId: variant.experimentVariantId,
+    experimentRole: variant.experimentRole
+  }))) !== valueDigest(targetVariants.map((variant) => ({
+    experimentKey: variant.experimentKey,
+    experimentVariantId: variant.experimentVariantId,
+    experimentRole: variant.experimentRole
+  })));
+  const structuredChanged = valueDigest(sourceVariants.map((variant) => ({
+    payloadJson: variant.payloadJson,
+    metadataJson: variant.metadataJson
+  }))) !== valueDigest(targetVariants.map((variant) => ({
+    payloadJson: variant.payloadJson,
+    metadataJson: variant.metadataJson
+  })));
+  const visibility = [
+    parentChanged && variantsChanged ? "parent+variants:changed" : parentChanged ? "parent:changed" : variantsChanged ? "variants:changed" : "parent+variants:unchanged",
+    experimentChanged ? "experiment-metadata:changed" : "experiment-metadata:unchanged",
+    structuredChanged ? "structured-payload:changed" : "structured-payload:unchanged"
+  ].join("; ");
+  return `${base}; ${visibility}`;
+};
+
+const buildAssetVariantRiskFlags = (sourceSnapshot: unknown) => {
+  const flags = new Set<string>();
+  if (!isObject(sourceSnapshot)) {
+    return flags;
+  }
+  const variants = Array.isArray(sourceSnapshot.variants) ? sourceSnapshot.variants : [];
+  if (variants.length === 0) {
+    flags.add("LEGACY_ASSET_NO_VARIANTS");
+    return flags;
+  }
+  if (!variants.some((variant) => isObject(variant) && variant.isDefault === true)) {
+    flags.add("DEFAULT_VARIANT_MISSING");
+  }
+  const now = Date.now();
+  let runtimeEligible = 0;
+  const seenScopes = new Set<string>();
+  for (const variant of variants) {
+    if (!isObject(variant)) {
+      continue;
+    }
+    const scopeKey = `${variant.locale ?? "_"}::${variant.channel ?? "_"}::${variant.placementKey ?? "_"}`;
+    if (seenScopes.has(scopeKey)) {
+      flags.add("DUPLICATE_VARIANT_SCOPE");
+    }
+    seenScopes.add(scopeKey);
+    const startsAt = typeof variant.startAt === "string" ? Date.parse(variant.startAt) : Number.NaN;
+    const endsAt = typeof variant.endAt === "string" ? Date.parse(variant.endAt) : Number.NaN;
+    const notStarted = Number.isFinite(startsAt) && startsAt > now;
+    const expired = Number.isFinite(endsAt) && endsAt < now;
+    if (!notStarted && !expired) {
+      runtimeEligible += 1;
+    }
+    if (variant.isDefault === true && expired) {
+      flags.add("DEFAULT_VARIANT_EXPIRED");
+    }
+    if ((variant.experimentRole || variant.experimentVariantId) && !variant.experimentKey) {
+      flags.add("EXPERIMENT_METADATA_WITHOUT_KEY");
+    }
+    if (variant.experimentKey) {
+      flags.add("EXPERIMENT_LINKED_VARIANT");
+    }
+    if (isObject(variant.metadataJson) && variant.metadataJson.authoringMode === "structured") {
+      if (!isObject(variant.payloadJson)) {
+        flags.add("STRUCTURED_PAYLOAD_NON_OBJECT");
+      }
+      const ctaUrl = isObject(variant.payloadJson) && typeof variant.payloadJson.ctaUrl === "string" ? variant.payloadJson.ctaUrl.trim() : "";
+      if (ctaUrl && !/^(https?:\/\/|[a-z][a-z0-9+.-]*:\/\/|\/|\{\{)/i.test(ctaUrl)) {
+        flags.add("STRUCTURED_CTA_URL_INVALID");
+      }
+    }
+  }
+  if (runtimeEligible === 0) {
+    flags.add("NO_RUNTIME_ELIGIBLE_VARIANTS");
+  }
+  return flags;
+};
+
+const collectAssetVariantPlacementKeys = (sourceSnapshot: unknown): string[] => {
+  if (!isObject(sourceSnapshot) || !Array.isArray(sourceSnapshot.variants)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      sourceSnapshot.variants
+        .map((variant) => (isObject(variant) && typeof variant.placementKey === "string" ? variant.placementKey.trim() : ""))
+        .filter((key) => key.length > 0)
+    )
+  ].sort((a, b) => a.localeCompare(b));
+};
+
 export const registerReleaseRoutes = async (deps: {
   app: FastifyInstance;
   prisma: PrismaClient;
@@ -322,6 +492,9 @@ export const registerReleaseRoutes = async (deps: {
             key: selection.key,
             ...(selection.version ? { version: selection.version } : { status: "ACTIVE" })
           },
+          include: {
+            variants: true
+          },
           orderBy: { version: "desc" }
         });
         if (!offer) {
@@ -342,6 +515,9 @@ export const registerReleaseRoutes = async (deps: {
             key: selection.key,
             ...(selection.version ? { version: selection.version } : { status: "ACTIVE" })
           },
+          include: {
+            variants: true
+          },
           orderBy: { version: "desc" }
         });
         if (!content) {
@@ -353,6 +529,26 @@ export const registerReleaseRoutes = async (deps: {
           version: content.version as number,
           sourceSnapshot: content,
           record: content
+        };
+      }
+      case "bundle": {
+        const bundle = await (prisma as any).assetBundle.findFirst({
+          where: {
+            environment: sourceEnv,
+            key: selection.key,
+            ...(selection.version ? { version: selection.version } : { status: "ACTIVE" })
+          },
+          orderBy: { version: "desc" }
+        });
+        if (!bundle) {
+          return null;
+        }
+        return {
+          type: selection.type,
+          key: selection.key,
+          version: bundle.version as number,
+          sourceSnapshot: bundle,
+          record: bundle
         };
       }
       case "experiment": {
@@ -514,13 +710,15 @@ export const registerReleaseRoutes = async (deps: {
       case "offer": {
         const versions = await (prisma as any).offer.findMany({
           where: { environment: targetEnv, key: item.key },
+          include: { variants: true },
           orderBy: { version: "desc" },
           take: 20
         });
         if (versions.length === 0) {
           return { action: "create_new" as const, targetVersion: 1, existingSnapshot: null };
         }
-        const same = versions.find((version: any) => valueDigest(version.valueJson) === valueDigest((item.sourceSnapshot as any)?.valueJson));
+        const sourceDiff = offerSnapshotForDiff(item.sourceSnapshot);
+        const same = versions.find((version: any) => valueDigest(offerSnapshotForDiff(version)) === valueDigest(sourceDiff));
         if (same) {
           return { action: "noop" as const, targetVersion: same.version as number, existingSnapshot: same };
         }
@@ -529,13 +727,31 @@ export const registerReleaseRoutes = async (deps: {
       case "content": {
         const versions = await (prisma as any).contentBlock.findMany({
           where: { environment: targetEnv, key: item.key },
+          include: { variants: true },
           orderBy: { version: "desc" },
           take: 20
         });
         if (versions.length === 0) {
           return { action: "create_new" as const, targetVersion: 1, existingSnapshot: null };
         }
-        const same = versions.find((version: any) => valueDigest(version.localesJson) === valueDigest((item.sourceSnapshot as any)?.localesJson));
+        const sourceDiff = contentSnapshotForDiff(item.sourceSnapshot);
+        const same = versions.find((version: any) => valueDigest(contentSnapshotForDiff(version)) === valueDigest(sourceDiff));
+        if (same) {
+          return { action: "noop" as const, targetVersion: same.version as number, existingSnapshot: same };
+        }
+        return { action: "update_new_version" as const, targetVersion: (versions[0]?.version ?? 0) + 1, existingSnapshot: versions[0] };
+      }
+      case "bundle": {
+        const versions = await (prisma as any).assetBundle.findMany({
+          where: { environment: targetEnv, key: item.key },
+          orderBy: { version: "desc" },
+          take: 20
+        });
+        if (versions.length === 0) {
+          return { action: "create_new" as const, targetVersion: 1, existingSnapshot: null };
+        }
+        const sourceDiff = bundleSnapshotForDiff(item.sourceSnapshot);
+        const same = versions.find((version: any) => valueDigest(bundleSnapshotForDiff(version)) === valueDigest(sourceDiff));
         if (same) {
           return { action: "noop" as const, targetVersion: same.version as number, existingSnapshot: same };
         }
@@ -694,6 +910,93 @@ export const registerReleaseRoutes = async (deps: {
         }
       }
 
+      if (source.type === "offer" || source.type === "content") {
+        for (const risk of buildAssetVariantRiskFlags(source.sourceSnapshot)) {
+          riskFlags.add(risk);
+        }
+        const experimentKeys = [
+          ...new Set(
+            (Array.isArray((source.sourceSnapshot as any)?.variants) ? (source.sourceSnapshot as any).variants : [])
+              .map((variant: any) => (isObject(variant) && typeof variant.experimentKey === "string" ? variant.experimentKey.trim() : ""))
+              .filter((key: string) => key.length > 0)
+          )
+        ];
+        for (const experimentKey of experimentKeys) {
+          const targetExperiment = await (prisma as any).experimentVersion.findFirst({
+            where: { environment: parsed.data.targetEnv, key: experimentKey, status: "ACTIVE" },
+            select: { id: true }
+          });
+          if (!targetExperiment) {
+            riskFlags.add("EXPERIMENT_METADATA_TARGET_MISSING");
+          }
+        }
+        const placementKeys = collectAssetVariantPlacementKeys(source.sourceSnapshot);
+        if (placementKeys.length > 0) {
+          const targetPlacements: Array<{ key: string }> = await (prisma as any).inAppPlacement.findMany({
+            where: {
+              environment: parsed.data.targetEnv,
+              key: {
+                in: placementKeys
+              }
+            },
+            select: {
+              key: true
+            }
+          });
+          const targetPlacementKeys = new Set(targetPlacements.map((placement) => placement.key));
+          if (placementKeys.some((key) => !targetPlacementKeys.has(key))) {
+            riskFlags.add("MISSING_VARIANT_PLACEMENT_IN_TARGET");
+          }
+        }
+      }
+
+      if (source.type === "bundle") {
+        const snapshot = source.sourceSnapshot as Record<string, unknown>;
+        if (typeof snapshot.offerKey !== "string" && typeof snapshot.contentKey !== "string") {
+          riskFlags.add("BUNDLE_HAS_NO_COMPONENTS");
+        }
+        if (typeof snapshot.offerKey === "string" && snapshot.offerKey.trim()) {
+          const sourceOffer = await (prisma as any).offer.findFirst({
+            where: { environment: parsed.data.sourceEnv, key: snapshot.offerKey.trim(), status: "ACTIVE" },
+            select: { id: true }
+          });
+          if (!sourceOffer) {
+            riskFlags.add("BUNDLE_OFFER_MISSING_IN_SOURCE");
+          }
+        }
+        if (typeof snapshot.contentKey === "string" && snapshot.contentKey.trim()) {
+          const sourceContent = await (prisma as any).contentBlock.findFirst({
+            where: { environment: parsed.data.sourceEnv, key: snapshot.contentKey.trim(), status: "ACTIVE" },
+            select: { id: true }
+          });
+          if (!sourceContent) {
+            riskFlags.add("BUNDLE_CONTENT_MISSING_IN_SOURCE");
+          }
+        }
+        if (typeof snapshot.templateKey === "string" && snapshot.templateKey.trim()) {
+          const targetTemplate = await (prisma as any).inAppTemplate.findFirst({
+            where: { environment: parsed.data.targetEnv, key: snapshot.templateKey.trim() },
+            select: { id: true }
+          });
+          if (!targetTemplate) {
+            riskFlags.add("BUNDLE_TEMPLATE_MISSING_IN_TARGET");
+          }
+        }
+        const placementKeys = Array.isArray(snapshot.placementKeys)
+          ? snapshot.placementKeys.filter((key): key is string => typeof key === "string" && key.trim().length > 0)
+          : [];
+        if (placementKeys.length > 0) {
+          const targetPlacements: Array<{ key: string }> = await (prisma as any).inAppPlacement.findMany({
+            where: { environment: parsed.data.targetEnv, key: { in: placementKeys } },
+            select: { key: true }
+          });
+          const targetPlacementKeys = new Set(targetPlacements.map((placement) => placement.key));
+          if (placementKeys.some((key) => !targetPlacementKeys.has(key))) {
+            riskFlags.add("BUNDLE_PLACEMENT_MISSING_IN_TARGET");
+          }
+        }
+      }
+
       const newItem: ReleasePlanItem = {
         type: source.type,
         key: source.key,
@@ -702,7 +1005,12 @@ export const registerReleaseRoutes = async (deps: {
         dependsOn: [],
         diff: {
           hasChanges: targetMeta.action !== "noop",
-          summary: topLevelDiffSummary(source.sourceSnapshot, targetMeta.existingSnapshot)
+          summary:
+            source.type === "offer" || source.type === "content"
+              ? assetChangeSummary(source.sourceSnapshot, targetMeta.existingSnapshot)
+              : source.type === "bundle"
+                ? `Bundle ${topLevelDiffSummary(bundleSnapshotForDiff(source.sourceSnapshot), bundleSnapshotForDiff(targetMeta.existingSnapshot))}`
+              : topLevelDiffSummary(source.sourceSnapshot, targetMeta.existingSnapshot)
         },
         riskFlags: [...riskFlags],
         sourceSnapshot: source.sourceSnapshot,
@@ -721,6 +1029,9 @@ export const registerReleaseRoutes = async (deps: {
         }
         for (const offerKey of refs.offerKeys) {
           await addSelection({ type: "offer", key: offerKey }, newItem);
+        }
+        for (const bundleKey of refs.bundleKeys) {
+          await addSelection({ type: "bundle", key: bundleKey }, newItem);
         }
         for (const experimentKey of refs.experimentKeys) {
           await addSelection({ type: "experiment", key: experimentKey }, newItem);
@@ -776,12 +1087,34 @@ export const registerReleaseRoutes = async (deps: {
           if (typeof treatment.offerKey === "string" && treatment.offerKey.trim()) {
             await addSelection({ type: "offer", key: treatment.offerKey.trim() }, newItem);
           }
+          if (typeof treatment.bundleKey === "string" && treatment.bundleKey.trim()) {
+            await addSelection({ type: "bundle", key: treatment.bundleKey.trim() }, newItem);
+          }
         }
       }
 
       if (source.type === "content") {
         for (const offerKey of extractContentOfferRefs(source.sourceSnapshot)) {
           await addSelection({ type: "offer", key: offerKey }, newItem);
+        }
+      }
+
+      if (source.type === "bundle") {
+        const snapshot = source.sourceSnapshot as Record<string, unknown>;
+        if (typeof snapshot.offerKey === "string" && snapshot.offerKey.trim()) {
+          await addSelection({ type: "offer", key: snapshot.offerKey.trim() }, newItem);
+        }
+        if (typeof snapshot.contentKey === "string" && snapshot.contentKey.trim()) {
+          await addSelection({ type: "content", key: snapshot.contentKey.trim() }, newItem);
+        }
+        if (typeof snapshot.templateKey === "string" && snapshot.templateKey.trim()) {
+          await addSelection({ type: "template", key: snapshot.templateKey.trim() }, newItem);
+        }
+        const placementKeys = Array.isArray(snapshot.placementKeys) ? snapshot.placementKeys : [];
+        for (const placementKey of placementKeys) {
+          if (typeof placementKey === "string" && placementKey.trim()) {
+            await addSelection({ type: "placement", key: placementKey.trim() }, newItem);
+          }
         }
       }
     };
@@ -899,6 +1232,7 @@ export const registerReleaseRoutes = async (deps: {
       if (type === "stack") return "stack.activate";
       if (type === "offer") return "catalog.offer.activate";
       if (type === "content") return "catalog.content.activate";
+      if (type === "bundle") return "catalog.content.activate";
       if (type === "experiment") return "experiment.activate";
       if (type === "campaign") return "engage.campaign.activate";
       if (type === "policy") return "engage.campaign.activate";
@@ -914,7 +1248,7 @@ export const registerReleaseRoutes = async (deps: {
       }
     }
 
-    const applyOrder = ["offer", "content", "template", "placement", "app", "decision", "stack", "policy", "experiment", "campaign"];
+    const applyOrder = ["offer", "content", "bundle", "template", "placement", "app", "decision", "stack", "policy", "experiment", "campaign"];
     const sorted = [...items].sort((left, right) => applyOrder.indexOf(left.type) - applyOrder.indexOf(right.type));
 
     try {
@@ -940,6 +1274,12 @@ export const registerReleaseRoutes = async (deps: {
           beforeActiveSnapshot.push({ type: item.type, key: item.key, activeVersion: active?.version ?? null });
         } else if (item.type === "content") {
           const active = await (prisma as any).contentBlock.findFirst({
+            where: { environment: releaseRecord.targetEnv, key: item.key, status: "ACTIVE" },
+            orderBy: { version: "desc" }
+          });
+          beforeActiveSnapshot.push({ type: item.type, key: item.key, activeVersion: active?.version ?? null });
+        } else if (item.type === "bundle") {
+          const active = await (prisma as any).assetBundle.findFirst({
             where: { environment: releaseRecord.targetEnv, key: item.key, status: "ACTIVE" },
             orderBy: { version: "desc" }
           });
@@ -1011,7 +1351,27 @@ export const registerReleaseRoutes = async (deps: {
               valueJson: source.valueJson,
               constraints: source.constraints,
               startAt: source.startAt,
-              endAt: source.endAt
+              endAt: source.endAt,
+              tokenBindings: source.tokenBindings,
+              variants: Array.isArray(source.variants)
+                ? {
+                    create: source.variants.map((variant: any) => ({
+                      locale: variant.locale,
+                      channel: variant.channel,
+                      placementKey: variant.placementKey,
+                      isDefault: Boolean(variant.isDefault),
+                      payloadJson: variant.payloadJson,
+                      tokenBindings: variant.tokenBindings,
+                      clonedFromVariantId: variant.clonedFromVariantId,
+                      experimentKey: variant.experimentKey,
+                      experimentVariantId: variant.experimentVariantId,
+                      experimentRole: variant.experimentRole,
+                      metadataJson: variant.metadataJson,
+                      startAt: variant.startAt,
+                      endAt: variant.endAt
+                    }))
+                  }
+                : undefined
             }
           });
         } else if (item.type === "content") {
@@ -1028,7 +1388,49 @@ export const registerReleaseRoutes = async (deps: {
               templateId: source.templateId,
               schemaJson: source.schemaJson,
               localesJson: source.localesJson,
-              tokenBindings: source.tokenBindings
+              tokenBindings: source.tokenBindings,
+              startAt: source.startAt,
+              endAt: source.endAt,
+              variants: Array.isArray(source.variants)
+                ? {
+                    create: source.variants.map((variant: any) => ({
+                      locale: variant.locale,
+                      channel: variant.channel,
+                      placementKey: variant.placementKey,
+                      isDefault: Boolean(variant.isDefault),
+                      payloadJson: variant.payloadJson,
+                      tokenBindings: variant.tokenBindings,
+                      clonedFromVariantId: variant.clonedFromVariantId,
+                      experimentKey: variant.experimentKey,
+                      experimentVariantId: variant.experimentVariantId,
+                      experimentRole: variant.experimentRole,
+                      metadataJson: variant.metadataJson,
+                      startAt: variant.startAt,
+                      endAt: variant.endAt
+                    }))
+                  }
+                : undefined
+            }
+          });
+        } else if (item.type === "bundle") {
+          const source = item.sourceSnapshot as any;
+          await (prisma as any).assetBundle.create({
+            data: {
+              environment: releaseRecord.targetEnv,
+              key: item.key,
+              name: source.name,
+              description: source.description,
+              status: "DRAFT",
+              version: item.targetVersion,
+              offerKey: source.offerKey,
+              contentKey: source.contentKey,
+              templateKey: source.templateKey,
+              placementKeys: source.placementKeys,
+              channels: source.channels,
+              locales: source.locales,
+              tags: source.tags,
+              useCase: source.useCase,
+              metadataJson: source.metadataJson
             }
           });
         } else if (item.type === "experiment") {
@@ -1245,6 +1647,15 @@ export const registerReleaseRoutes = async (deps: {
               data: { status: "ARCHIVED" }
             });
             await (prisma as any).contentBlock.updateMany({
+              where: { environment: releaseRecord.targetEnv, key: item.key, version: item.targetVersion },
+              data: { status: "ACTIVE", activatedAt: new Date() }
+            });
+          } else if (item.type === "bundle") {
+            await (prisma as any).assetBundle.updateMany({
+              where: { environment: releaseRecord.targetEnv, key: item.key, status: "ACTIVE" },
+              data: { status: "ARCHIVED" }
+            });
+            await (prisma as any).assetBundle.updateMany({
               where: { environment: releaseRecord.targetEnv, key: item.key, version: item.targetVersion },
               data: { status: "ACTIVE", activatedAt: new Date() }
             });

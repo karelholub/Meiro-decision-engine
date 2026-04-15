@@ -333,14 +333,48 @@ model Offer {
   constraints Json?
   startAt     DateTime?
   endAt       DateTime?
+  locale      String?
+  channel     String?
+  placementKey String?
+  tokenBindings Json?
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  approvedBy  String?
+  archivedAt  DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   activatedAt DateTime?
+  variants    OfferVariant[]
 
   @@unique([environment, key, version])
   @@index([environment, key, status])
   @@index([environment, status, updatedAt])
   @@map("offers")
+}
+
+model OfferVariant {
+  id            String   @id @default(uuid())
+  offerId       String
+  locale        String?
+  channel       String?
+  placementKey  String?
+  isDefault     Boolean  @default(false)
+  payloadJson   Json
+  tokenBindings Json?
+  clonedFromVariantId String?
+  experimentKey String?
+  experimentVariantId String?
+  experimentRole String?
+  metadataJson   Json?
+  startAt       DateTime?
+  endAt         DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  offer         Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@index([offerId, locale, channel, placementKey])
+  @@index([offerId, isDefault])
+  @@map("offer_variants")
 }
 
 model ContentBlock {
@@ -356,14 +390,80 @@ model ContentBlock {
   schemaJson   Json?
   localesJson  Json
   tokenBindings Json?
+  startAt      DateTime?
+  endAt        DateTime?
+  locale       String?
+  channel      String?
+  placementKey String?
+  submittedAt  DateTime?
+  approvedAt   DateTime?
+  approvedBy   String?
+  archivedAt   DateTime?
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   activatedAt  DateTime?
+  variants     ContentBlockVariant[]
 
   @@unique([environment, key, version])
   @@index([environment, key, status])
   @@index([environment, status, updatedAt])
   @@map("content_blocks")
+}
+
+model ContentBlockVariant {
+  id             String       @id @default(uuid())
+  contentBlockId String
+  locale         String?
+  channel        String?
+  placementKey   String?
+  isDefault      Boolean      @default(false)
+  payloadJson    Json
+  tokenBindings  Json?
+  clonedFromVariantId String?
+  experimentKey  String?
+  experimentVariantId String?
+  experimentRole String?
+  metadataJson    Json?
+  startAt        DateTime?
+  endAt          DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  contentBlock   ContentBlock @relation(fields: [contentBlockId], references: [id], onDelete: Cascade)
+
+  @@index([contentBlockId, locale, channel, placementKey])
+  @@index([contentBlockId, isDefault])
+  @@map("content_block_variants")
+}
+
+model AssetBundle {
+  id             String      @id @default(uuid())
+  environment    Environment @default(DEV)
+  key            String
+  name           String
+  description    String?
+  status         String
+  version        Int
+  offerKey       String?
+  contentKey     String?
+  templateKey    String?
+  placementKeys  Json?
+  channels       Json?
+  locales        Json?
+  tags           Json?
+  useCase        String?
+  metadataJson   Json?
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+  approvedBy     String?
+  archivedAt     DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  activatedAt    DateTime?
+
+  @@unique([environment, key, version])
+  @@index([environment, key, status])
+  @@index([environment, status, updatedAt])
+  @@map("asset_bundles")
 }
 
 model CatalogAuditLog {

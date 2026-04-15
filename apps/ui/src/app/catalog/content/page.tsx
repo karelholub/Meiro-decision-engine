@@ -10,9 +10,19 @@ import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../.
 import { usePermissions } from "../../../lib/permissions";
 import { useRegistry } from "../../../lib/registry";
 import { Button } from "../../../components/ui/button";
-import { CatalogActionBar, ContentBlockEditor, PreviewPane, type TokenBindingRow } from "../../../components/catalog";
+import {
+  AssetVariantsEditor,
+  CatalogActionBar,
+  ContentBlockEditor,
+  PreviewPane,
+  makeVariantEditorRows,
+  serializeVariantRows,
+  type AssetVariantEditorRow,
+  type TokenBindingRow
+} from "../../../components/catalog";
 import {
   detectBindingDiagnostics,
+  fromDatetimeLocal,
   makeContentEditorSeed,
   readObject,
   renderLocaleWithBindings,
@@ -95,6 +105,8 @@ const parsePayloadOrThrow = (editor: ContentEditorState) => {
     status: editor.status,
     templateId: editor.templateId.trim(),
     tags: editor.tags,
+    startAt: fromDatetimeLocal(editor.startAt),
+    endAt: fromDatetimeLocal(editor.endAt),
     schemaJson: schema.value,
     localesJson: locales.value,
     tokenBindings: tokenBindings.value
@@ -124,11 +136,13 @@ export default function CatalogContentPage() {
   const [activeLocale, setActiveLocale] = useState(defaultLocale);
   const [localeData, setLocaleData] = useState<Record<string, unknown>>({ [defaultLocale]: {} });
   const [tokenBindingRows, setTokenBindingRows] = useState<TokenBindingRow[]>([{ token: "offer", sourcePath: "context.offer" }]);
+  const [variantRows, setVariantRows] = useState<AssetVariantEditorRow[]>(() => makeVariantEditorRows([], { title: "Hey {{profile.first_name}}" }));
 
   const [previewLocale, setPreviewLocale] = useState(defaultLocale);
   const [previewProfileId, setPreviewProfileId] = useState("p-1001");
   const [previewContext, setPreviewContext] = useState('{\n  "offer": { "code": "WINBACK10", "percent": 10 },\n  "profile": { "first_name": "Alex" }\n}\n');
   const [previewResult, setPreviewResult] = useState<unknown | null>(null);
+  const [assetReport, setAssetReport] = useState<Awaited<ReturnType<typeof apiClient.catalog.assets.report>> | null>(null);
 
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [archiveConfirmKey, setArchiveConfirmKey] = useState("");
@@ -156,6 +170,7 @@ export default function CatalogContentPage() {
           setCreateMode(false);
           setLocaleData(readObject(safeJsonParse<Record<string, unknown>>(seed.localesJsonText).value));
           setTokenBindingRows(toTokenRows(seed.tokenBindingsText));
+          setVariantRows(makeVariantEditorRows(active.variants, readObject(Object.values(active.localesJson ?? {})[0])));
           setActiveLocale(Object.keys(active.localesJson ?? {})[0] ?? preferredLocale);
           setPreviewLocale(Object.keys(active.localesJson ?? {})[0] ?? preferredLocale);
         }
@@ -273,8 +288,9 @@ export default function CatalogContentPage() {
     setSaving(true);
     try {
       const payload = parsePayloadOrThrow(editor);
+      const variants = serializeVariantRows(variantRows);
       if (createMode || !selectedId) {
-        const response = await apiClient.catalog.content.create(payload);
+        const response = await apiClient.catalog.content.create({ ...payload, variants });
         setSelectedId(response.item.id);
         setCreateMode(false);
         setEditor(makeContentEditorSeed(response.item));
@@ -286,9 +302,12 @@ export default function CatalogContentPage() {
           status: payload.status,
           templateId: payload.templateId,
           tags: payload.tags,
+          startAt: payload.startAt,
+          endAt: payload.endAt,
           schemaJson: payload.schemaJson,
           localesJson: payload.localesJson,
-          tokenBindings: payload.tokenBindings
+          tokenBindings: payload.tokenBindings,
+          variants
         });
         setEditor(makeContentEditorSeed(response.item));
         setMessage(`Updated ${response.item.key} v${response.item.version}`);
@@ -306,7 +325,7 @@ export default function CatalogContentPage() {
   const validate = async () => {
     try {
       const payload = parsePayloadOrThrow(editor);
-      const validation = await apiClient.catalog.content.validate(payload);
+      const validation = await apiClient.catalog.content.validate({ ...payload, variants: serializeVariantRows(variantRows) });
       setLastValidationValid(validation.valid);
       setMessage(validation.valid ? "Validation passed" : `Validation failed: ${validation.errors.join(" | ") || "unknown"}`);
       setError(null);
@@ -320,7 +339,7 @@ export default function CatalogContentPage() {
     setSaving(true);
     try {
       const payload = parsePayloadOrThrow(editor);
-      const response = await apiClient.catalog.content.create(payload);
+      const response = await apiClient.catalog.content.create({ ...payload, variants: serializeVariantRows(variantRows) });
       setSelectedId(response.item.id);
       setEditor(makeContentEditorSeed(response.item));
       setCreateMode(false);
@@ -353,8 +372,8 @@ export default function CatalogContentPage() {
       return;
     }
     try {
-      await apiClient.catalog.content.archive(editor.key.trim());
-      setMessage(`Archived ${editor.key.trim()}`);
+      const response = await apiClient.catalog.content.archive(editor.key.trim());
+      setMessage(response.archiveSafety?.warning ? `Archived ${editor.key.trim()}. ${response.archiveSafety.warning}` : `Archived ${editor.key.trim()}`);
       setArchiveConfirmOpen(false);
       setArchiveConfirmKey("");
       await load();
@@ -397,6 +416,8 @@ export default function CatalogContentPage() {
       }
       const response = await apiClient.catalog.content.preview(editor.key.trim(), {
         locale: previewLocale.trim() || preferredLocale,
+        channel: "inapp",
+        placementKey: "home_top",
         profileId: previewProfileId.trim() || undefined,
         context: context.value
       });
@@ -405,6 +426,18 @@ export default function CatalogContentPage() {
       setError(null);
     } catch (previewError) {
       setError(previewError instanceof Error ? previewError.message : "Preview failed");
+    }
+  };
+
+  const loadReport = async () => {
+    if (!editor.key.trim()) {
+      return;
+    }
+    try {
+      const response = await apiClient.catalog.assets.report({ type: "content", key: editor.key.trim() });
+      setAssetReport(response);
+    } catch (reportError) {
+      setError(reportError instanceof Error ? reportError.message : "Report failed");
     }
   };
 
@@ -458,6 +491,8 @@ export default function CatalogContentPage() {
             >
               <option value="ALL">All</option>
               <option value="ACTIVE">Active</option>
+              <option value="PENDING_APPROVAL">Pending approval</option>
+              <option value="PAUSED">Paused</option>
               <option value="DRAFT">Draft</option>
               <option value="ARCHIVED">Archived</option>
             </select>
@@ -473,6 +508,7 @@ export default function CatalogContentPage() {
                 setEditor((current) => ({ ...current, ...seed, localesJsonText: toPrettyJson(localeSeed) }));
                 setLocaleData(localeSeed);
                 setTokenBindingRows(toTokenRows(seed.tokenBindingsText));
+                setVariantRows(makeVariantEditorRows([], readObject(Object.values(localeSeed)[0])));
                 const firstLocale = Object.keys(localeSeed)[0] ?? preferredLocale;
                 setActiveLocale(firstLocale);
                 setPreviewLocale(firstLocale);
@@ -500,6 +536,7 @@ export default function CatalogContentPage() {
                   setCreateMode(false);
                   setLocaleData(readObject(item.localesJson));
                   setTokenBindingRows(toTokenRows(seed.tokenBindingsText));
+                  setVariantRows(makeVariantEditorRows(item.variants, readObject(Object.values(item.localesJson ?? {})[0])));
                   const firstLocale = Object.keys(item.localesJson ?? {})[0] ?? preferredLocale;
                   setActiveLocale(firstLocale);
                   setPreviewLocale(firstLocale);
@@ -556,6 +593,16 @@ export default function CatalogContentPage() {
         <DependenciesPanel items={dependencyItems} />
       </div>
 
+      <AssetVariantsEditor
+        rows={variantRows}
+        onChange={(rows) => {
+          setVariantRows(rows);
+          setLastValidationValid(null);
+        }}
+        readOnly={readOnly}
+        fallbackPayload={readObject(localeData[activeLocale])}
+      />
+
       <PreviewPane
         localeOptions={Object.keys(localeData).length > 0 ? Object.keys(localeData) : [preferredLocale]}
         previewLocale={previewLocale}
@@ -570,9 +617,39 @@ export default function CatalogContentPage() {
         missingTokens={localRendered.missingTokens}
       />
 
+      <section className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="font-semibold">Usage & Dependencies</h3>
+            <p className="text-sm text-stone-700">Asset references and basic in-app engagement for the last 30 days.</p>
+          </div>
+          <Button variant="outline" onClick={() => void loadReport()}>
+            Load usage
+          </Button>
+        </div>
+        {assetReport ? (
+          <div className="grid gap-3 text-sm md:grid-cols-3">
+            <p className="font-medium md:col-span-3">Operational usage, last {assetReport.windowDays} days</p>
+            <p>Usage count: {assetReport.usageCount}</p>
+            <p>In-app impressions: {assetReport.impressions}</p>
+            <p>CTR: {(assetReport.ctr * 100).toFixed(1)}%</p>
+            <p>Decision serves sampled: {assetReport.decisionUsageCount}</p>
+            <p>Observed events: {assetReport.observedEventCount ?? 0}</p>
+            <p className="md:col-span-3">Decisions: {assetReport.dependencies.decisions.map((item) => `${item.key} v${item.version}`).join(", ") || "-"}</p>
+            <p className="md:col-span-3">Campaigns: {assetReport.dependencies.campaigns.map((item) => item.key).join(", ") || "-"}</p>
+            {assetReport.dependencies.archiveSafety?.warning ? <p className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700 md:col-span-3">{assetReport.dependencies.archiveSafety.warning}</p> : null}
+            {(assetReport.warnings ?? []).length > 0 ? <p className="text-stone-600 md:col-span-3">Report caveats: {assetReport.warnings?.join(", ")}</p> : null}
+            {(assetReport.dataCaveats ?? []).length > 0 ? <p className="text-stone-600 md:col-span-3">{assetReport.dataCaveats?.[0]}</p> : null}
+          </div>
+        ) : (
+          <p className="text-sm text-stone-600">Load usage to inspect references, engagement counts, and archive risk.</p>
+        )}
+      </section>
+
       <section className="panel space-y-3 border-red-300 p-4">
         <h3 className="font-semibold text-red-700">Danger zone</h3>
         <p className="text-sm text-stone-700">Archive key permanently hides all versions of this content key from active use.</p>
+        {assetReport?.dependencies.archiveSafety?.warning ? <p className="text-sm font-medium text-red-700">{assetReport.dependencies.archiveSafety.warning}</p> : null}
         {!archiveConfirmOpen ? (
           <Button variant="danger" onClick={() => setArchiveConfirmOpen(true)}>
             Archive key

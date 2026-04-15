@@ -473,17 +473,23 @@ export interface CatalogOffer {
   key: string;
   name: string;
   description: string | null;
-  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED";
   version: number;
   tags: string[];
   type: "discount" | "free_shipping" | "bonus" | "content_only";
   valueJson: Record<string, unknown>;
   constraints: Record<string, unknown>;
+  tokenBindings: Record<string, unknown>;
   startAt: string | null;
   endAt: string | null;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
   activatedAt: string | null;
+  variants: CatalogAssetVariant[];
 }
 
 export interface CatalogContentBlock {
@@ -492,13 +498,65 @@ export interface CatalogContentBlock {
   key: string;
   name: string;
   description: string | null;
-  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED";
   version: number;
   tags: string[];
   templateId: string;
   schemaJson: Record<string, unknown> | null;
   localesJson: Record<string, unknown>;
   tokenBindings: Record<string, unknown>;
+  startAt: string | null;
+  endAt: string | null;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt: string | null;
+  variants: CatalogAssetVariant[];
+}
+
+export interface CatalogAssetVariant {
+  id: string;
+  locale: string | null;
+  channel: string | null;
+  placementKey: string | null;
+  isDefault: boolean;
+  payloadJson: unknown;
+  tokenBindings: Record<string, unknown>;
+  clonedFromVariantId?: string | null;
+  experimentKey?: string | null;
+  experimentVariantId?: string | null;
+  experimentRole?: string | null;
+  metadataJson?: Record<string, unknown> | null;
+  startAt: string | null;
+  endAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CatalogAssetBundle {
+  id: string;
+  environment: DecisionEnvironment;
+  key: string;
+  name: string;
+  description: string | null;
+  status: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+  version: number;
+  offerKey: string | null;
+  contentKey: string | null;
+  templateKey: string | null;
+  placementKeys: string[];
+  channels: string[];
+  locales: string[];
+  tags: string[];
+  useCase: string | null;
+  metadataJson: Record<string, unknown>;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
   activatedAt: string | null;

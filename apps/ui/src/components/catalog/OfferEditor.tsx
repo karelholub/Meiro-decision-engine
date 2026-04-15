@@ -119,7 +119,9 @@ export function OfferEditor({
           disabled={readOnly}
         >
           <option value="DRAFT">DRAFT</option>
+          <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
           <option value="ACTIVE">ACTIVE</option>
+          <option value="PAUSED">PAUSED</option>
           <option value="ARCHIVED">ARCHIVED</option>
         </select>
       </label>

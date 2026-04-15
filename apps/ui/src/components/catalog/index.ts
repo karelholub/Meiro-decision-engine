@@ -4,4 +4,5 @@ export * from "./ContentBlockEditor";
 export * from "./LocaleTabsEditor";
 export * from "./TokenBindingsTable";
 export * from "./PreviewPane";
+export * from "./AssetVariantsEditor";
 export * from "./utils";

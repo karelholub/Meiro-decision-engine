@@ -15,6 +15,8 @@ type ContentBlockEditorModel = {
   status: CatalogContentBlock["status"];
   templateId: string;
   tags: string[];
+  startAt: string;
+  endAt: string;
   schemaJsonText: string;
   localesJsonText: string;
   tokenBindingsText: string;
@@ -127,7 +129,9 @@ export function ContentBlockEditor({
             disabled={readOnly}
           >
             <option value="DRAFT">DRAFT</option>
+            <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
             <option value="ACTIVE">ACTIVE</option>
+            <option value="PAUSED">PAUSED</option>
             <option value="ARCHIVED">ARCHIVED</option>
           </select>
         </label>
@@ -138,6 +142,26 @@ export function ContentBlockEditor({
             value={value.templateId ? parseLegacyKey("template", value.templateId) : null}
             onChange={(nextRef) => onChange({ templateId: nextRef?.key ?? "" })}
             filter={{ status: "ACTIVE" }}
+            disabled={readOnly}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Start At
+          <input
+            type="datetime-local"
+            value={value.startAt}
+            onChange={(event) => onChange({ startAt: event.target.value })}
+            className="rounded-md border border-stone-300 px-2 py-1"
+            disabled={readOnly}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          End At
+          <input
+            type="datetime-local"
+            value={value.endAt}
+            onChange={(event) => onChange({ endAt: event.target.value })}
+            className="rounded-md border border-stone-300 px-2 py-1"
             disabled={readOnly}
           />
         </label>

@@ -1042,6 +1042,11 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           catalogResolver.resolveOffer({
             environment: input.environment,
             offerKey: selectedOfferKey as string,
+            locale,
+            channel: typeof baseContext.channel === "string" ? baseContext.channel : "inapp",
+            placementKey: input.body.placement,
+            profile,
+            context: baseContext,
             now: contextNow
           })
         )
@@ -1052,6 +1057,8 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             environment: input.environment,
             contentKey: selectedContentKey as string,
             locale,
+            channel: typeof baseContext.channel === "string" ? baseContext.channel : "inapp",
+            placementKey: input.body.placement,
             profile,
             context: {
               ...baseContext,
@@ -1062,13 +1069,13 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         )
       : null;
 
-    if (selectedContentKey && !resolvedContent && selectedCampaign.variants.length === 0) {
+    if (selectedContentKey && (!resolvedContent || !resolvedContent.valid) && selectedCampaign.variants.length === 0) {
       const response = buildNoShowResponse({ placement: input.body.placement });
       response.ttl_seconds = Math.max(1, Math.min(30, runtimeConfig.cacheTtlSeconds));
-      return { response, wbsMs, engineMs, fallbackReason: "CONTENT_NOT_FOUND" };
+      return { response, wbsMs, engineMs, fallbackReason: resolvedContent ? "CONTENT_NOT_ELIGIBLE" : "CONTENT_NOT_FOUND" };
     }
 
-    const renderedPayload = resolvedContent?.payload ?? renderedVariantPayload;
+    const renderedPayload = resolvedContent?.valid ? resolvedContent.payload : renderedVariantPayload;
     const ttlSeconds =
       selectedCampaign.ttlSeconds > 0
         ? selectedCampaign.ttlSeconds
@@ -1085,7 +1092,34 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         value: resolvedOffer.value,
         constraints: resolvedOffer.constraints,
         key: resolvedOffer.key,
-        version: resolvedOffer.version
+        version: resolvedOffer.version,
+        variantId: resolvedOffer.variantId
+      };
+    }
+    if (resolvedContent?.valid || resolvedOffer?.valid) {
+      payload.resolutionMeta = {
+        ...(resolvedContent?.valid
+          ? {
+              contentBlock: {
+                key: resolvedContent.key,
+                version: resolvedContent.version,
+                variantId: resolvedContent.variantId,
+                reasonCode: resolvedContent.resolution.reasonCode,
+                warnings: resolvedContent.resolution.warnings
+              }
+            }
+          : {}),
+        ...(resolvedOffer?.valid
+          ? {
+              offer: {
+                key: resolvedOffer.key,
+                version: resolvedOffer.version,
+                variantId: resolvedOffer.variantId,
+                reasonCode: resolvedOffer.resolution.reasonCode,
+                warnings: resolvedOffer.resolution.warnings
+              }
+            }
+          : {})
       };
     }
 

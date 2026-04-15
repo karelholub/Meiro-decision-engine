@@ -29,6 +29,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/overview", label: "Overview" },
       { href: "/logs", label: "Logs" },
+      { href: "/observe/assets", label: "Asset Health" },
       { href: "/execution/cache", label: "Realtime Cache" },
       { href: "/execution/orchestration", label: "Orchestration Policies" },
       { href: "/execution/dlq", label: "DLQ" },
@@ -54,7 +55,8 @@ const NAV_GROUPS: NavGroup[] = [
     hint: "Reusable offers and content blocks",
     items: [
       { href: "/catalog/offers", label: "Offers" },
-      { href: "/catalog/content", label: "Content Blocks" }
+      { href: "/catalog/content", label: "Content Blocks" },
+      { href: "/catalog/bundles", label: "Asset Bundles" }
     ]
   },
   {
@@ -102,6 +104,7 @@ const isItemActive = (pathname: string, href: string) => pathname === href || pa
 const navPermissionByHref: Record<string, string> = {
   "/overview": "logs.read",
   "/logs": "logs.read",
+  "/observe/assets": "logs.read",
   "/execution/cache": "cache.read",
   "/execution/orchestration": "decision.read",
   "/execution/dlq": "dlq.read",
@@ -114,6 +117,7 @@ const navPermissionByHref: Record<string, string> = {
   "/simulate": "simulator.run",
   "/catalog/offers": "catalog.offer.read",
   "/catalog/content": "catalog.content.read",
+  "/catalog/bundles": "catalog.content.read",
   "/engage/campaigns": "engage.campaign.read",
   "/engage/experiments": "experiment.read",
   "/engage/apps": "engage.app.read",
