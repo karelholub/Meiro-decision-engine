@@ -13,11 +13,11 @@ export default function EnvironmentSelector() {
 
   return (
     <label className="flex items-center gap-2 text-sm">
-      <span className="text-stone-700">Environment</span>
+      <span className="text-stone-700">Env</span>
       <select
         value={environment}
         onChange={(event) => setEnvironment(event.target.value as UiEnvironment)}
-        className="rounded-md border border-stone-300 bg-white px-2 py-1"
+        className="control-button rounded-md px-2 py-1"
       >
         <option value="DEV">DEV</option>
         <option value="STAGE">STAGE</option>

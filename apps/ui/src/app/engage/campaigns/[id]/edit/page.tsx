@@ -152,6 +152,23 @@ const inferActivationChannelFromContext = (templateKey?: string, placementKey?: 
   return "website_personalization";
 };
 
+const readCreateQueryParams = () => {
+  if (typeof window === "undefined") {
+    return new URLSearchParams();
+  }
+  return new URLSearchParams(window.location.search);
+};
+
+const normalizeCampaignKey = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+
+const queryValue = (params: URLSearchParams, key: string) => params.get(key)?.trim() ?? "";
+
 export default function InAppCampaignEditPage() {
   const params = useParams<{ id: string }>();
   const campaignId = String(params.id ?? "");
@@ -237,25 +254,41 @@ export default function InAppCampaignEditPage() {
 
   const load = async () => {
     setLoading(true);
+    let loadMessage: string | null = null;
     try {
       await registry.loadAll();
       if (isCreateMode) {
+        const createParams = readCreateQueryParams();
+        const assetType = queryValue(createParams, "assetType");
+        const assetKey = queryValue(createParams, "assetKey");
+        const contentKey =
+          queryValue(createParams, "contentKey") || (assetKey && assetType !== "offer" && assetType !== "bundle" ? assetKey : "");
+        const offerKey = queryValue(createParams, "offerKey") || (assetKey && assetType === "offer" ? assetKey : "");
+        const requestedName = queryValue(createParams, "name");
+        const plannedName = requestedName || (contentKey || offerKey ? `Campaign for ${contentKey || offerKey}` : "");
+        const requestedKey = normalizeCampaignKey(queryValue(createParams, "key") || plannedName);
+        const requestedAppKey = queryValue(createParams, "appKey");
+        const requestedPlacementKey = queryValue(createParams, "placementKey");
+        const requestedTemplateKey = queryValue(createParams, "templateKey");
         setCampaign(null);
         setVersions([]);
         setAuditLogs([]);
         setActivationPreview(null);
-        setKey("");
-        setName("");
-        setDescription("");
+        setKey(requestedKey);
+        setName(plannedName);
+        setDescription(contentKey || offerKey ? "Planned from an activation asset." : "");
         setStatus("DRAFT");
         const firstApp = registry.list("app")[0];
         const firstPlacement = registry.list("placement")[0];
         const firstTemplate = registry.list("template")[0];
-        setAppRef(firstApp ? { type: "app", key: firstApp.key } : null);
-        setPlacementRef(firstPlacement ? { type: "placement", key: firstPlacement.key } : null);
-        setTemplateRef(firstTemplate ? { type: "template", key: firstTemplate.key } : null);
-        setContentRef(null);
-        setOfferRef(null);
+        const defaultAppKey = requestedAppKey || firstApp?.key || "";
+        const defaultPlacementKey = requestedPlacementKey || firstPlacement?.key || "";
+        const defaultTemplateKey = requestedTemplateKey || firstTemplate?.key || "";
+        setAppRef(defaultAppKey ? { type: "app", key: defaultAppKey } : null);
+        setPlacementRef(defaultPlacementKey ? { type: "placement", key: defaultPlacementKey } : null);
+        setTemplateRef(defaultTemplateKey ? { type: "template", key: defaultTemplateKey } : null);
+        setContentRef(contentKey ? parseLegacyKey("content", contentKey) : null);
+        setOfferRef(offerKey ? parseLegacyKey("offer", offerKey) : null);
         setExperimentMode("static");
         setExperimentRef(null);
         setPriority("0");
@@ -265,8 +298,8 @@ export default function InAppCampaignEditPage() {
         setHoldoutSalt("campaign-holdout");
         setCapsPerDay("");
         setCapsPerWeek("");
-        setStartAt("");
-        setEndAt("");
+        setStartAt(toDatetimeLocal(queryValue(createParams, "startAt") || null));
+        setEndAt(toDatetimeLocal(queryValue(createParams, "endAt") || null));
         setEligibilityAudiencesAny("");
         setVariants([
           {
@@ -277,6 +310,11 @@ export default function InAppCampaignEditPage() {
         ]);
         setBindings([]);
         setRollbackVersion("");
+        if (contentKey || offerKey) {
+          loadMessage = "Campaign draft prefilled from the selected activation asset. Review placement, template, and schedule before saving.";
+        } else if (queryValue(createParams, "startAt") || queryValue(createParams, "endAt")) {
+          loadMessage = "Campaign draft prefilled from the calendar window. Review schedule before saving.";
+        }
       } else {
         const [campaignResponse, versionsResponse, auditResponse, previewResponse] = await Promise.all([
           apiClient.inapp.campaigns.get(campaignId),
@@ -331,7 +369,7 @@ export default function InAppCampaignEditPage() {
       }
 
       setError(null);
-      setMessage(null);
+      setMessage(loadMessage);
     } catch (loadError) {
       setActivationPreview(null);
       setError(loadError instanceof Error ? loadError.message : "Failed to load campaign");

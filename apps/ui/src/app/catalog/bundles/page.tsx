@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { CatalogAssetBundle, CatalogContentBlock, CatalogOffer } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
@@ -7,6 +8,7 @@ import { getEnvironment, onEnvironmentChange } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
 import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
+import { AssetBadge, ChannelBadges } from "../../../components/catalog/ActivationAssetCard";
 
 const emptyBundle = {
   key: "",
@@ -23,7 +25,125 @@ const emptyBundle = {
   useCase: ""
 };
 
+const routeKeyParam = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("key")?.trim() || null;
+};
+
 const splitList = (value: string) => value.split(",").map((entry) => entry.trim()).filter(Boolean);
+
+const readPreviewObject = (value: unknown): Record<string, unknown> => (typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {});
+
+const readStringArray = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []);
+
+const extractPreviewPayload = (value: unknown): Record<string, unknown> | null => {
+  const root = readPreviewObject(value);
+  const candidates = [root.payload, readPreviewObject(root.item).payload, root.resolvedPayload, readPreviewObject(root.resolved).payload];
+  for (const candidate of candidates) {
+    if (typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)) {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  return null;
+};
+
+function BundleComponentCard({
+  label,
+  asset,
+  selectedKey,
+  href
+}: {
+  label: string;
+  asset: CatalogOffer | CatalogContentBlock | null;
+  selectedKey: string;
+  href: string;
+}) {
+  const hasSelection = Boolean(selectedKey.trim());
+  return (
+    <div className={`rounded-md border p-3 ${asset ? "border-stone-200 bg-white" : hasSelection ? "border-amber-200 bg-amber-50" : "border-dashed border-stone-300 bg-white"}`}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-stone-500">{label}</p>
+          <h4 className="font-semibold">{asset?.name ?? (selectedKey.trim() || `No ${label.toLowerCase()} selected`)}</h4>
+          <p className="text-xs text-stone-600">{asset?.key ?? (hasSelection ? "Referenced key is not available in this environment" : "Optional bundle component")}</p>
+        </div>
+        {asset ? <AssetBadge value={asset.status}>{asset.status}</AssetBadge> : hasSelection ? <AssetBadge value="warning">Missing</AssetBadge> : <AssetBadge value="ready_with_warnings">Empty slot</AssetBadge>}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-600">
+        <span>{asset ? `v${asset.version} · updated ${new Date(asset.updatedAt).toLocaleDateString()}` : hasSelection ? "Resolve this before activation" : "Add when this package needs it"}</span>
+        {asset ? <Link className="underline decoration-stone-300" href={href}>Open component</Link> : null}
+      </div>
+    </div>
+  );
+}
+
+function BundlePreviewPanel({
+  preview,
+  offerKey,
+  contentKey
+}: {
+  preview: unknown | null;
+  offerKey: string;
+  contentKey: string;
+}) {
+  if (!preview) {
+    return (
+      <section className="panel p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Bundle preview</h3>
+            <p className="text-sm text-stone-700">Run preview to see the resolved package without exposing raw resolver output.</p>
+          </div>
+          <AssetBadge value="ready_with_warnings">Not previewed</AssetBadge>
+        </div>
+        <div className="mt-4 rounded-md border border-dashed border-stone-300 bg-white p-4 text-sm text-stone-600">
+          Preview will show the selected offer, selected content block, resolved payload fields, and runtime warnings for the current locale/channel/placement.
+        </div>
+      </section>
+    );
+  }
+
+  const root = readPreviewObject(preview);
+  const resolutionMeta = readPreviewObject(root.resolutionMeta);
+  const payload = extractPreviewPayload(preview);
+  const payloadKeys = payload ? Object.keys(payload).slice(0, 8) : [];
+  const warnings = [
+    ...readStringArray(root.reasonCodes),
+    ...readStringArray(root.resolutionWarnings),
+    ...readStringArray(resolutionMeta.resolutionWarnings)
+  ];
+
+  return (
+    <section className="panel space-y-4 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Resolved bundle preview</h3>
+          <p className="text-sm text-stone-700">Runtime-like output for the current preview context.</p>
+        </div>
+        <AssetBadge value={warnings.length > 0 ? "warning" : "ready"}>{warnings.length > 0 ? "Preview warnings" : "Resolved"}</AssetBadge>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-md border border-stone-200 bg-white p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Bundle delivers</p>
+          <p className="mt-1 font-medium">Offer {offerKey || "not selected"} + content {contentKey || "not selected"}</p>
+          <p className="mt-2 text-sm text-stone-600">{payloadKeys.length > 0 ? `Resolved payload fields: ${payloadKeys.join(", ")}` : "Preview resolved, but no structured payload fields were returned."}</p>
+        </div>
+        <div className="rounded-md border border-stone-200 bg-white p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Resolver status</p>
+          {warnings.length > 0 ? (
+            <ul className="mt-1 space-y-1 text-sm text-amber-800">
+              {warnings.slice(0, 4).map((warning) => <li key={warning}>{warning}</li>)}
+            </ul>
+          ) : (
+            <p className="mt-1 text-sm text-stone-700">No resolver warnings for this preview context.</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export default function CatalogBundlesPage() {
   const { hasPermission } = usePermissions();
@@ -43,6 +163,9 @@ export default function CatalogBundlesPage() {
   const [error, setError] = useState("");
 
   const selected = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
+  const selectedOffer = useMemo(() => offers.find((offer) => offer.key === editor.offerKey.trim()) ?? null, [editor.offerKey, offers]);
+  const selectedContent = useMemo(() => contents.find((content) => content.key === editor.contentKey.trim()) ?? null, [contents, editor.contentKey]);
+  const missingPartsCount = [editor.offerKey.trim() && !selectedOffer, editor.contentKey.trim() && !selectedContent].filter(Boolean).length;
   const canWrite = hasPermission("catalog.content.write");
   const canActivate = hasPermission("catalog.content.activate");
 
@@ -51,12 +174,17 @@ export default function CatalogBundlesPage() {
   const load = async () => {
     const [bundleResponse, offerResponse, contentResponse] = await Promise.all([
       apiClient.catalog.bundles.list(),
-      apiClient.catalog.offers.list({ status: "ACTIVE" }),
-      apiClient.catalog.content.list({ status: "ACTIVE" })
+      apiClient.catalog.offers.list(),
+      apiClient.catalog.content.list()
     ]);
     setItems(bundleResponse.items);
     setOffers(offerResponse.items);
     setContents(contentResponse.items);
+    const routeKey = routeKeyParam();
+    const active = routeKey ? [...bundleResponse.items].filter((item) => item.key === routeKey).sort((a, b) => b.version - a.version)[0] : null;
+    if (active) {
+      loadIntoEditor(active);
+    }
   };
 
   useEffect(() => {
@@ -178,7 +306,34 @@ export default function CatalogBundlesPage() {
 
         <div className="space-y-4">
           {selected && editor.key.trim() ? <ActivationAssetProfilePanel entityType="bundle" assetKey={editor.key.trim()} /> : null}
+          <section className="panel space-y-4 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-stone-500">Bundle composition</p>
+                <h2 className="text-lg font-semibold">{editor.name || "New reusable package"}</h2>
+                <p className="text-sm text-stone-700">Show the governed pieces this bundle will reuse across campaigns and decisions.</p>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                <AssetBadge value={editor.status}>{editor.status}</AssetBadge>
+                {missingPartsCount > 0 ? <AssetBadge value="warning">{missingPartsCount} missing part{missingPartsCount === 1 ? "" : "s"}</AssetBadge> : <AssetBadge value="ready">Components linked</AssetBadge>}
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <BundleComponentCard label="Offer" asset={selectedOffer} selectedKey={editor.offerKey} href={`/catalog/offers?key=${encodeURIComponent(editor.offerKey)}`} />
+              <BundleComponentCard label="Content Block" asset={selectedContent} selectedKey={editor.contentKey} href={`/catalog/content?key=${encodeURIComponent(editor.contentKey)}`} />
+            </div>
+            <div className="rounded-md border border-stone-200 bg-white p-3">
+              <p className="mb-2 text-xs uppercase tracking-wide text-stone-500">Works in</p>
+              <div className="flex flex-wrap gap-3">
+                <ChannelBadges channels={splitList(editor.channelsText)} />
+                <span className="text-xs text-stone-600">Templates: {editor.templateKey.trim() || "Any template"}</span>
+                <span className="text-xs text-stone-600">Placements: {splitList(editor.placementKeysText).join(", ") || "Any placement"}</span>
+                <span className="text-xs text-stone-600">Locales: {splitList(editor.localesText).join(", ") || "All locales"}</span>
+              </div>
+            </div>
+          </section>
           <section className="panel grid gap-3 p-4 md:grid-cols-2">
+            <h3 className="font-semibold md:col-span-2">Bundle details</h3>
             <label className="text-sm">Key<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.key} onChange={(event) => setEditor((current) => ({ ...current, key: event.target.value }))} disabled={Boolean(selected)} /></label>
             <label className="text-sm">Name<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.name} onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))} /></label>
             <label className="text-sm md:col-span-2">Description<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.description} onChange={(event) => setEditor((current) => ({ ...current, description: event.target.value }))} /></label>
@@ -209,7 +364,7 @@ export default function CatalogBundlesPage() {
               ))}
             </section>
           ) : null}
-          <pre className="max-h-96 overflow-auto rounded-md bg-stone-950 p-3 text-xs text-stone-50">{JSON.stringify(preview, null, 2)}</pre>
+          <BundlePreviewPanel preview={preview} offerKey={editor.offerKey.trim()} contentKey={editor.contentKey.trim()} />
         </div>
       </div>
     </section>

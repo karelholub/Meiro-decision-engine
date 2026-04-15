@@ -115,6 +115,28 @@ export interface ActivationCompatibilityDecision {
   reasons: string[];
 }
 
+export type ActivationAssetCreationTarget = ActivationAssetEntityType;
+
+export interface ActivationTypedCreationInput {
+  assetType: ActivationAssetType;
+  key?: string | null;
+  name?: string | null;
+  locale?: string | null;
+  now?: Date | string;
+}
+
+export interface ActivationTypedCreationDraft {
+  assetType: ActivationAssetType;
+  assetTypeLabel: string;
+  category: ActivationAssetCategory;
+  targetEntityType: ActivationAssetCreationTarget;
+  description: string;
+  guidance: string;
+  routePath: string;
+  compatibility: ActivationCompatibility;
+  body: Record<string, unknown>;
+}
+
 const CHANNEL_ALIASES: Record<string, ActivationAssetChannel> = {
   web: "website_personalization",
   website: "website_personalization",
@@ -177,6 +199,80 @@ const TYPE_DEFAULT_CHANNELS: Record<ActivationAssetType, ActivationAssetChannel[
   bundle: []
 };
 
+const DEFAULT_CREATION_LOCALE = "en";
+
+const TYPE_TEMPLATE_DEFAULTS: Partial<Record<ActivationAssetType, string>> = {
+  image: "image_ref_v1",
+  copy_snippet: "copy_snippet_v1",
+  cta: "cta_v1",
+  website_banner: "banner_v1",
+  popup_banner: "popup_banner_v1",
+  email_block: "email_block_v1",
+  push_message: "push_message_v1",
+  whatsapp_message: "whatsapp_message_v1",
+  journey_asset: "journey_asset_v1"
+};
+
+const TYPE_PLACEMENT_DEFAULTS: Partial<Record<ActivationAssetType, string[]>> = {
+  website_banner: ["home_top"],
+  popup_banner: ["modal"],
+  journey_asset: ["journey_node"]
+};
+
+const TYPE_USE_CASE_DEFAULTS: Record<ActivationAssetType, string> = {
+  image: "Reusable governed image reference",
+  copy_snippet: "Reusable token-aware copy snippet",
+  cta: "Reusable call to action",
+  offer: "Decision-ready offer",
+  website_banner: "Website personalization banner",
+  popup_banner: "Popup banner or modal",
+  email_block: "Reusable email content block",
+  push_message: "Mobile push notification",
+  whatsapp_message: "WhatsApp message",
+  journey_asset: "Journey-compatible content asset",
+  bundle: "Reusable package of governed assets"
+};
+
+const TYPE_CREATION_GUIDANCE: Record<ActivationAssetType, string> = {
+  image: "Stores an image reference and descriptive metadata as a primitive content block. Binary upload and transformations stay outside this sprint.",
+  copy_snippet: "Stores reusable text with token guidance as a primitive content block.",
+  cta: "Stores reusable button label and target fields as a primitive content block.",
+  offer: "Creates a governed offer draft with starter discount fields.",
+  website_banner: "Creates a website-compatible content block with banner fields, template metadata, and a default website variant.",
+  popup_banner: "Creates a popup-compatible content block with modal copy, action, and image-reference fields.",
+  email_block: "Creates an email-compatible content block with headline, body, CTA, image, and footer fields.",
+  push_message: "Creates a mobile-push content block with short title, body, and deeplink fields.",
+  whatsapp_message: "Creates a WhatsApp-compatible content block with body, button, action, and token guidance.",
+  journey_asset: "Creates a journey-compatible content block that can be selected through the existing content asset path.",
+  bundle: "Creates a governed bundle draft for packaging an offer and content block with compatibility metadata."
+};
+
+const TYPE_KEY_PREFIX: Record<ActivationAssetType, string> = {
+  image: "IMAGE",
+  copy_snippet: "COPY",
+  cta: "CTA",
+  offer: "OFFER",
+  website_banner: "WEB_BANNER",
+  popup_banner: "POPUP",
+  email_block: "EMAIL_BLOCK",
+  push_message: "PUSH",
+  whatsapp_message: "WHATSAPP",
+  journey_asset: "JOURNEY_ASSET",
+  bundle: "BUNDLE"
+};
+
+const CONTENT_TARGET_TYPES = new Set<ActivationAssetType>([
+  "image",
+  "copy_snippet",
+  "cta",
+  "website_banner",
+  "popup_banner",
+  "email_block",
+  "push_message",
+  "whatsapp_message",
+  "journey_asset"
+]);
+
 const isObject = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 };
@@ -229,6 +325,340 @@ const valuesForPrefix = (tags: string[], prefix: string) =>
   stableList(tags.filter((tag) => tag.toLowerCase().startsWith(prefix)).map((tag) => tag.slice(prefix.length)));
 
 const stringValue = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null);
+
+const keySafe = (value: string) =>
+  value
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_{2,}/g, "_")
+    .toUpperCase();
+
+const compactTimestamp = (value: Date | string | undefined) => {
+  const date = value instanceof Date ? value : value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return "NEW";
+  }
+  return date.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+};
+
+const defaultNameForType = (assetType: ActivationAssetType) => `New ${TYPE_LABELS[assetType]}`;
+
+const creationKeyFor = (input: ActivationTypedCreationInput) => {
+  if (input.key?.trim()) {
+    return keySafe(input.key);
+  }
+  if (input.name?.trim()) {
+    return keySafe(`${TYPE_KEY_PREFIX[input.assetType]}_${input.name}`);
+  }
+  return `${TYPE_KEY_PREFIX[input.assetType]}_${compactTimestamp(input.now)}`;
+};
+
+const creationNameFor = (input: ActivationTypedCreationInput) => input.name?.trim() || defaultNameForType(input.assetType);
+
+const schemaFromFields = (required: string[], optional: string[] = []) => ({
+  type: "object",
+  required,
+  properties: [...required, ...optional].reduce<Record<string, { type: string }>>((acc, field) => {
+    acc[field] = { type: "string" };
+    return acc;
+  }, {})
+});
+
+const payloadForCreationType = (assetType: ActivationAssetType, name: string) => {
+  switch (assetType) {
+    case "image":
+      return {
+        title: name,
+        imageRef: "https://example.com/image.jpg",
+        imageUrl: "https://example.com/image.jpg",
+        description: "Describe source, rights, and intended use.",
+        tags: "brand, campaign"
+      };
+    case "copy_snippet":
+      return {
+        title: name,
+        text: "Hi {{profile.first_name}}, add reusable copy here.",
+        tokenGuide: "Use {{profile.attribute}}, {{context.value}}, or {{derived.value}} tokens."
+      };
+    case "cta":
+      return {
+        title: name,
+        ctaLabel: "Shop now",
+        ctaUrl: "https://example.com",
+        actionType: "open_url"
+      };
+    case "popup_banner":
+      return {
+        title: name,
+        body: "Short popup copy for this audience.",
+        ctaLabel: "Continue",
+        ctaUrl: "https://example.com",
+        imageRef: ""
+      };
+    case "email_block":
+      return {
+        headline: name,
+        body: "Email body copy with {{profile.first_name}} token support.",
+        ctaLabel: "Open",
+        ctaUrl: "https://example.com",
+        imageRef: "",
+        footer: "You are receiving this because you opted in."
+      };
+    case "push_message":
+      return {
+        title: name,
+        body: "Short push message.",
+        deeplink: "app://home",
+        action: "open_app"
+      };
+    case "whatsapp_message":
+      return {
+        title: name,
+        body: "Hi {{profile.first_name}}, your update is ready.",
+        buttonLabel: "Open",
+        buttonAction: "https://example.com",
+        variableGuide: "Use approved WhatsApp template variables where required."
+      };
+    case "journey_asset":
+      return {
+        title: name,
+        body: "Journey step copy.",
+        nextStep: "Continue",
+        ctaLabel: "Next",
+        ctaUrl: "https://example.com"
+      };
+    case "website_banner":
+    default:
+      return {
+        title: name,
+        subtitle: "Personalized website message for this audience.",
+        cta: "Open",
+        image: "image_asset_key_or_url",
+        deeplink: "https://example.com"
+      };
+  }
+};
+
+const schemaForCreationType = (assetType: ActivationAssetType) => {
+  switch (assetType) {
+    case "image":
+      return schemaFromFields(["title", "imageRef"], ["imageUrl", "description", "tags"]);
+    case "copy_snippet":
+      return schemaFromFields(["title", "text"], ["tokenGuide"]);
+    case "cta":
+      return schemaFromFields(["ctaLabel", "ctaUrl"], ["title", "actionType"]);
+    case "popup_banner":
+      return schemaFromFields(["title", "body", "ctaLabel", "ctaUrl"], ["imageRef"]);
+    case "email_block":
+      return schemaFromFields(["headline", "body", "ctaLabel", "ctaUrl"], ["imageRef", "footer"]);
+    case "push_message":
+      return schemaFromFields(["title", "body", "deeplink"], ["action"]);
+    case "whatsapp_message":
+      return schemaFromFields(["body"], ["title", "buttonLabel", "buttonAction", "variableGuide"]);
+    case "journey_asset":
+      return schemaFromFields(["title", "body"], ["nextStep", "ctaLabel", "ctaUrl"]);
+    case "website_banner":
+    default:
+      return schemaFromFields(["title", "subtitle", "cta", "image", "deeplink"]);
+  }
+};
+
+const tagDefaultsForCreationType = (assetType: ActivationAssetType, compatibility: ActivationCompatibility) =>
+  stableList([
+    "library:typed_create",
+    `asset:${assetType}`,
+    `category:${TYPE_CATEGORY[assetType]}`,
+    `use_case:${TYPE_USE_CASE_DEFAULTS[assetType].toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`,
+    ...compatibility.channels.map((channel) => `channel:${channel}`),
+    ...compatibility.templateKeys.map((templateKey) => `template:${templateKey}`),
+    ...compatibility.placementKeys.map((placementKey) => `placement:${placementKey}`)
+  ]);
+
+export const typedCreationTargetFor = (assetType: ActivationAssetType): ActivationAssetCreationTarget => {
+  if (assetType === "offer") return "offer";
+  if (assetType === "bundle") return "bundle";
+  return "content";
+};
+
+export const buildTypedActivationAssetCreationDraft = (input: ActivationTypedCreationInput): ActivationTypedCreationDraft => {
+  const assetType = input.assetType;
+  const targetEntityType = typedCreationTargetFor(assetType);
+  const assetTypeLabel = TYPE_LABELS[assetType];
+  const category = TYPE_CATEGORY[assetType];
+  const key = creationKeyFor(input);
+  const name = creationNameFor(input);
+  const locale = input.locale?.trim() || DEFAULT_CREATION_LOCALE;
+  const compatibility: ActivationCompatibility = {
+    channels: TYPE_DEFAULT_CHANNELS[assetType],
+    templateKeys: TYPE_TEMPLATE_DEFAULTS[assetType] ? [TYPE_TEMPLATE_DEFAULTS[assetType]!] : [],
+    placementKeys: TYPE_PLACEMENT_DEFAULTS[assetType] ?? [],
+    locales: [locale],
+    journeyNodeContexts: assetType === "journey_asset" ? ["message", "decision", "fallback"] : []
+  };
+  const tags = tagDefaultsForCreationType(assetType, compatibility);
+
+  if (targetEntityType === "offer") {
+    return {
+      assetType,
+      assetTypeLabel,
+      category,
+      targetEntityType,
+      description: TYPE_USE_CASE_DEFAULTS[assetType],
+      guidance: TYPE_CREATION_GUIDANCE[assetType],
+      routePath: `/catalog/offers?key=${encodeURIComponent(key)}`,
+      compatibility,
+      body: {
+        key,
+        name,
+        description: "Typed asset creation starter offer.",
+        status: "DRAFT",
+        tags,
+        type: "discount",
+        valueJson: {
+          title: name,
+          code: "STARTER10",
+          percent: 10,
+          assetType
+        },
+        constraints: {
+          minSpend: 0
+        },
+        tokenBindings: {},
+        variants: [
+          {
+            locale,
+            channel: null,
+            placementKey: null,
+            isDefault: true,
+            payloadJson: {
+              title: name,
+              code: "STARTER10",
+              percent: 10
+            },
+            metadataJson: {
+              activationAsset: {
+                assetType,
+                creationFlow: "typed_asset"
+              },
+              authoringMode: "structured"
+            }
+          }
+        ]
+      }
+    };
+  }
+
+  if (targetEntityType === "bundle") {
+    return {
+      assetType,
+      assetTypeLabel,
+      category,
+      targetEntityType,
+      description: TYPE_USE_CASE_DEFAULTS[assetType],
+      guidance: TYPE_CREATION_GUIDANCE[assetType],
+      routePath: `/catalog/bundles?key=${encodeURIComponent(key)}`,
+      compatibility,
+      body: {
+        key,
+        name,
+        description: "Typed asset creation starter bundle.",
+        status: "DRAFT",
+        offerKey: null,
+        contentKey: null,
+        templateKey: null,
+        placementKeys: [],
+        channels: [],
+        locales: [locale],
+        tags,
+        useCase: TYPE_USE_CASE_DEFAULTS[assetType],
+        metadataJson: {
+          activationAsset: {
+            assetType,
+            category,
+            creationFlow: "typed_asset",
+            targetEntityType
+          },
+          library: {
+            assetType,
+            category,
+            locales: [locale]
+          }
+        }
+      }
+    };
+  }
+
+  if (!CONTENT_TARGET_TYPES.has(assetType)) {
+    throw new Error(`Unsupported typed creation asset type: ${assetType}`);
+  }
+
+  const payload = payloadForCreationType(assetType, name);
+  const templateId = TYPE_TEMPLATE_DEFAULTS[assetType] ?? "content_block_v1";
+  const schemaJson = {
+    ...schemaForCreationType(assetType),
+    activationAsset: {
+      assetType,
+      category,
+      creationFlow: "typed_asset",
+      targetEntityType
+    },
+    library: {
+      assetType,
+      category,
+      channels: compatibility.channels,
+      supportedChannels: compatibility.channels,
+      supportedTemplates: compatibility.templateKeys,
+      supportedPlacements: compatibility.placementKeys,
+      locales: compatibility.locales,
+      journeyNodeContexts: compatibility.journeyNodeContexts,
+      authoringMode: "structured"
+    }
+  };
+
+  return {
+    assetType,
+    assetTypeLabel,
+    category,
+    targetEntityType,
+    description: TYPE_USE_CASE_DEFAULTS[assetType],
+    guidance: TYPE_CREATION_GUIDANCE[assetType],
+    routePath: `/catalog/content?key=${encodeURIComponent(key)}`,
+    compatibility,
+    body: {
+      key,
+      name,
+      description: TYPE_CREATION_GUIDANCE[assetType],
+      status: "DRAFT",
+      tags,
+      templateId,
+      schemaJson,
+      localesJson: {
+        [locale]: payload
+      },
+      tokenBindings:
+        assetType === "copy_snippet" || assetType === "email_block" || assetType === "whatsapp_message"
+          ? { profile: "profile" }
+          : {},
+      variants: [
+        {
+          locale,
+          channel: compatibility.channels[0] ?? null,
+          placementKey: compatibility.placementKeys[0] ?? null,
+          isDefault: true,
+          payloadJson: payload,
+          metadataJson: {
+            activationAsset: {
+              assetType,
+              creationFlow: "typed_asset"
+            },
+            authoringMode: "structured"
+          }
+        }
+      ]
+    }
+  };
+};
 
 const inferTypeFromText = (value: string): ActivationAssetType | null => {
   const text = value.toLowerCase();
@@ -390,6 +820,38 @@ export const collectActivationPrimitiveReferences = (
   return refs;
 };
 
+const previewFromRecord = (payload: Record<string, unknown>): ActivationLibraryItem["preview"] => {
+  const title = stringValue(payload.title) ?? stringValue(payload.headline) ?? stringValue(payload.subject) ?? stringValue(payload.name) ?? "Untitled asset";
+  const subtitle = stringValue(payload.subtitle) ?? stringValue(payload.body) ?? stringValue(payload.copy) ?? stringValue(payload.text) ?? stringValue(payload.description);
+  const thumbnailUrl = stringValue(payload.imageUrl) ?? stringValue(payload.imageRef) ?? stringValue(payload.image);
+  const snippet = subtitle ?? stringValue(payload.ctaLabel) ?? stringValue(payload.promoCode);
+  return {
+    title,
+    subtitle,
+    thumbnailUrl: thumbnailUrl && isExternalImageOrUrl(thumbnailUrl) ? thumbnailUrl : null,
+    snippet
+  };
+};
+
+const hasPreviewSignal = (payload: Record<string, unknown>) => {
+  return Boolean(
+    stringValue(payload.title) ??
+      stringValue(payload.headline) ??
+      stringValue(payload.subject) ??
+      stringValue(payload.name) ??
+      stringValue(payload.subtitle) ??
+      stringValue(payload.body) ??
+      stringValue(payload.copy) ??
+      stringValue(payload.text) ??
+      stringValue(payload.description) ??
+      stringValue(payload.imageUrl) ??
+      stringValue(payload.imageRef) ??
+      stringValue(payload.image) ??
+      stringValue(payload.ctaLabel) ??
+      stringValue(payload.promoCode)
+  );
+};
+
 const previewFromPayload = (value: unknown): ActivationLibraryItem["preview"] => {
   const candidates: Record<string, unknown>[] = [];
   if (isObject(value)) candidates.push(value);
@@ -399,17 +861,7 @@ const previewFromPayload = (value: unknown): ActivationLibraryItem["preview"] =>
       if (isObject(nested)) candidates.push(nested);
     }
   }
-  const payload = candidates[0] ?? {};
-  const title = stringValue(payload.title) ?? stringValue(payload.headline) ?? stringValue(payload.subject) ?? stringValue(payload.name) ?? "Untitled asset";
-  const subtitle = stringValue(payload.subtitle) ?? stringValue(payload.body) ?? stringValue(payload.copy) ?? stringValue(payload.text);
-  const thumbnailUrl = stringValue(payload.imageUrl) ?? stringValue(payload.imageRef) ?? stringValue(payload.image);
-  const snippet = subtitle ?? stringValue(payload.ctaLabel) ?? stringValue(payload.promoCode);
-  return {
-    title,
-    subtitle,
-    thumbnailUrl: thumbnailUrl && isExternalImageOrUrl(thumbnailUrl) ? thumbnailUrl : null,
-    snippet
-  };
+  return previewFromRecord(candidates.find(hasPreviewSignal) ?? {});
 };
 
 export const buildActivationLibraryItem = (input: {
@@ -421,11 +873,17 @@ export const buildActivationLibraryItem = (input: {
 }): ActivationLibraryItem => {
   const assetType = inferActivationAssetType(input.asset);
   const compatibility = deriveActivationCompatibility(input.asset, assetType);
-  const payloads = [input.asset.valueJson, input.asset.localesJson, ...(input.asset.variants ?? []).map((variant) => variant.payloadJson)].filter(
-    (entry) => entry !== undefined && entry !== null
-  );
-  const primitiveReferences = payloads.flatMap((payload, index) =>
-    collectActivationPrimitiveReferences(payload, input.knownPrimitiveKeys, index === 0 ? "$" : `$.variants[${index - 1}].payloadJson`)
+  const payloadSources = [
+    ...(input.asset.valueJson !== undefined && input.asset.valueJson !== null ? [{ value: input.asset.valueJson, path: "$.valueJson" }] : []),
+    ...(input.asset.localesJson !== undefined && input.asset.localesJson !== null ? [{ value: input.asset.localesJson, path: "$.localesJson" }] : []),
+    ...(input.asset.variants ?? []).flatMap((variant, index) =>
+      variant.payloadJson !== undefined && variant.payloadJson !== null
+        ? [{ value: variant.payloadJson, path: `$.variants[${index}].payloadJson` }]
+        : []
+    )
+  ];
+  const primitiveReferences = payloadSources.flatMap((payload) =>
+    collectActivationPrimitiveReferences(payload.value, input.knownPrimitiveKeys, payload.path)
   );
   const preview = previewFromPayload(input.asset.valueJson ?? input.asset.localesJson ?? input.asset.variants?.[0]?.payloadJson ?? {});
   const updatedAt = input.asset.updatedAt instanceof Date ? input.asset.updatedAt.toISOString() : input.asset.updatedAt;

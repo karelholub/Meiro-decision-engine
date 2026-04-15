@@ -17,6 +17,14 @@ import { createInAppV2RuntimeService } from "./services/inappV2Runtime";
 import type { OrchestrationService } from "./services/orchestrationService";
 import { createCatalogResolver } from "./services/catalogResolver";
 import { buildActionDescriptor } from "./services/actionDescriptor";
+import {
+  buildCampaignCalendar,
+  type CampaignCalendarLinkedAsset
+} from "./services/campaignCalendar";
+import {
+  buildActivationLibraryItem,
+  type ActivationAssetType
+} from "./services/activationAssetLibrary";
 import { getInAppGovernanceAllowedStatuses, getInAppGovernanceTransitionError } from "./lib/inappGovernance";
 
 interface WbsInstanceRecord {
@@ -177,6 +185,27 @@ const inAppCampaignUpsertSchema = z
     }
   });
 
+const inAppCampaignScheduleUpdateSchema = z
+  .object({
+    startAt: z.string().datetime().nullable().optional(),
+    endAt: z.string().datetime().nullable().optional()
+  })
+  .superRefine((value, ctx) => {
+    if (value.startAt === undefined && value.endAt === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide startAt or endAt"
+      });
+    }
+    if (value.startAt && value.endAt && new Date(value.endAt).getTime() < new Date(value.startAt).getTime()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endAt"],
+        message: "endAt must be after startAt"
+      });
+    }
+  });
+
 const inAppCampaignListQuerySchema = z.object({
   appKey: z.string().optional(),
   placementKey: z.string().optional(),
@@ -185,6 +214,31 @@ const inAppCampaignListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().optional(),
   sort: z.enum(["updated_desc", "status", "name", "end_at"]).optional()
+});
+
+const activationAssetTypeSchema = z.enum([
+  "image",
+  "copy_snippet",
+  "cta",
+  "offer",
+  "website_banner",
+  "popup_banner",
+  "email_block",
+  "push_message",
+  "whatsapp_message",
+  "journey_asset",
+  "bundle"
+]);
+
+const campaignCalendarQuerySchema = z.object({
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  appKey: z.string().optional(),
+  placementKey: z.string().optional(),
+  status: z.string().optional(),
+  assetKey: z.string().optional(),
+  assetType: activationAssetTypeSchema.optional(),
+  includeArchived: z.enum(["true", "false"]).optional()
 });
 
 const templateValidateSchema = z.object({
@@ -1354,6 +1408,226 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
   });
 
+  const toLatestByKey = <T extends { key: string; version: number }>(rows: T[]) => {
+    const byKey = new Map<string, T>();
+    for (const row of rows) {
+      const current = byKey.get(row.key);
+      if (!current || row.version > current.version) {
+        byKey.set(row.key, row);
+      }
+    }
+    return byKey;
+  };
+
+  const toCalendarContentAsset = (item: {
+    key: string;
+    name: string;
+    description: string | null;
+    status: string;
+    version: number;
+    updatedAt: Date;
+    tags: unknown;
+    templateId: string;
+    schemaJson: unknown;
+    localesJson: unknown;
+    startAt: Date | null;
+    endAt: Date | null;
+    variants: Array<{ locale: string | null; channel: string | null; placementKey: string | null; payloadJson: unknown; metadataJson?: unknown }>;
+  }): CampaignCalendarLinkedAsset => {
+    const libraryItem = buildActivationLibraryItem({
+      asset: {
+        entityType: "content",
+        key: item.key,
+        name: item.name,
+        description: item.description,
+        status: item.status,
+        version: item.version,
+        updatedAt: item.updatedAt,
+        tags: item.tags,
+        templateId: item.templateId,
+        schemaJson: item.schemaJson,
+        localesJson: item.localesJson,
+        variants: item.variants
+      }
+    });
+    return {
+      kind: "content",
+      key: item.key,
+      name: item.name,
+      status: item.status,
+      category: libraryItem.category,
+      assetType: libraryItem.assetType,
+      assetTypeLabel: libraryItem.assetTypeLabel,
+      thumbnailUrl: libraryItem.preview.thumbnailUrl,
+      startAt: item.startAt,
+      endAt: item.endAt
+    };
+  };
+
+  const toCalendarOfferAsset = (item: {
+    key: string;
+    name: string;
+    description: string | null;
+    status: string;
+    version: number;
+    updatedAt: Date;
+    tags: unknown;
+    type: string;
+    valueJson: unknown;
+    startAt: Date | null;
+    endAt: Date | null;
+    variants: Array<{ locale: string | null; channel: string | null; placementKey: string | null; payloadJson: unknown; metadataJson?: unknown }>;
+  }): CampaignCalendarLinkedAsset => {
+    const libraryItem = buildActivationLibraryItem({
+      asset: {
+        entityType: "offer",
+        key: item.key,
+        name: item.name,
+        description: item.description,
+        status: item.status,
+        version: item.version,
+        updatedAt: item.updatedAt,
+        tags: item.tags,
+        valueJson: item.valueJson,
+        variants: item.variants
+      }
+    });
+    return {
+      kind: "offer",
+      key: item.key,
+      name: item.name,
+      status: item.status,
+      category: libraryItem.category,
+      assetType: libraryItem.assetType,
+      assetTypeLabel: libraryItem.assetTypeLabel,
+      thumbnailUrl: libraryItem.preview.thumbnailUrl,
+      startAt: item.startAt,
+      endAt: item.endAt
+    };
+  };
+
+  app.get("/v1/inapp/campaign-calendar", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = campaignCalendarQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar query", parsed.error.flatten());
+    }
+
+    const nowDate = now();
+    const from = parsed.data.from ? new Date(parsed.data.from) : new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1));
+    const to = parsed.data.to ? new Date(parsed.data.to) : new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth() + 1, 1) - 1);
+    if (from.getTime() > to.getTime()) {
+      return buildResponseError(reply, 400, "from must be before to");
+    }
+
+    const statusValues = parsed.data.status
+      ? parsed.data.status.split(",").map((entry) => entry.trim()).filter(Boolean)
+      : [];
+    const allowedStatuses = new Set(Object.values(InAppCampaignStatus));
+    const invalidStatuses = statusValues.filter((status) => !allowedStatuses.has(status as InAppCampaignStatus));
+    if (invalidStatuses.length > 0) {
+      return buildResponseError(reply, 400, "Invalid campaign status filter", { invalidStatuses });
+    }
+    const statuses = statusValues as InAppCampaignStatus[];
+    const includeArchived = parsed.data.includeArchived === "true";
+
+    const campaigns = await prisma.inAppCampaign.findMany({
+      where: {
+        environment,
+        ...(parsed.data.appKey ? { appKey: parsed.data.appKey } : {}),
+        ...(parsed.data.placementKey ? { placementKey: parsed.data.placementKey } : {}),
+        ...(statuses.length > 0 ? { status: { in: statuses } } : includeArchived ? {} : { status: { not: InAppCampaignStatus.ARCHIVED } }),
+        AND: [
+          {
+            OR: [
+              { startAt: null },
+              { startAt: { lte: to } }
+            ]
+          },
+          {
+            OR: [
+              { endAt: null },
+              { endAt: { gte: from } }
+            ]
+          },
+          ...(parsed.data.assetKey
+            ? [
+                {
+                  OR: [
+                    { contentKey: parsed.data.assetKey },
+                    { offerKey: parsed.data.assetKey }
+                  ]
+                }
+              ]
+            : [])
+        ]
+      },
+      orderBy: [{ startAt: "asc" }, { updatedAt: "desc" }],
+      take: 500
+    });
+
+    const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((key): key is string => Boolean(key)))];
+    const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((key): key is string => Boolean(key)))];
+    const [contentRows, offerRows] = await Promise.all([
+      contentKeys.length > 0
+        ? prisma.contentBlock.findMany({
+            where: { environment, key: { in: contentKeys } },
+            include: {
+              variants: {
+                select: {
+                  locale: true,
+                  channel: true,
+                  placementKey: true,
+                  payloadJson: true
+                }
+              }
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([]),
+      offerKeys.length > 0
+        ? prisma.offer.findMany({
+            where: { environment, key: { in: offerKeys } },
+            include: {
+              variants: {
+                select: {
+                  locale: true,
+                  channel: true,
+                  placementKey: true,
+                  payloadJson: true
+                }
+              }
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([])
+    ]);
+
+    const contentAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
+    for (const item of toLatestByKey(contentRows).values()) {
+      contentAssetsByKey.set(item.key, toCalendarContentAsset(item));
+    }
+    const offerAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
+    for (const item of toLatestByKey(offerRows).values()) {
+      offerAssetsByKey.set(item.key, toCalendarOfferAsset(item));
+    }
+
+    return buildCampaignCalendar({
+      campaigns,
+      contentAssetsByKey,
+      offerAssetsByKey,
+      from,
+      to,
+      now: nowDate,
+      assetKey: parsed.data.assetKey ?? null,
+      assetType: parsed.data.assetType as ActivationAssetType | undefined
+    });
+  });
+
   app.get("/v1/inapp/campaigns", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -2021,6 +2295,85 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     return {
       item: serializeCampaign(updated),
       validation
+    };
+  });
+
+  app.patch("/v1/inapp/campaigns/:id/schedule", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    }
+
+    const parsed = inAppCampaignScheduleUpdateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const existing = await prisma.inAppCampaign.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      },
+      include: {
+        variants: true
+      }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const nextStartAt = parsed.data.startAt === undefined ? existing.startAt : parsed.data.startAt ? new Date(parsed.data.startAt) : null;
+    const nextEndAt = parsed.data.endAt === undefined ? existing.endAt : parsed.data.endAt ? new Date(parsed.data.endAt) : null;
+    if (nextStartAt && nextEndAt && nextEndAt.getTime() < nextStartAt.getTime()) {
+      return buildResponseError(reply, 400, "endAt must be after startAt");
+    }
+
+    const updated = await prisma.inAppCampaign.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        startAt: nextStartAt,
+        endAt: nextEndAt
+      },
+      include: {
+        variants: true
+      }
+    });
+
+    await createCampaignVersionSnapshot({
+      campaignId: updated.id,
+      environment,
+      authorUserId: actor.userId,
+      reason: "schedule_update"
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "update_campaign_schedule",
+      entityType: "inapp_campaign",
+      entityId: updated.id,
+      beforeValue: makeCampaignSnapshot(existing),
+      afterValue: makeCampaignSnapshot(updated),
+      meta: {
+        startAt: updated.startAt?.toISOString() ?? null,
+        endAt: updated.endAt?.toISOString() ?? null
+      }
+    });
+
+    return {
+      item: serializeCampaign(updated)
     };
   });
 

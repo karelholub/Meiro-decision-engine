@@ -1,12 +1,36 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient, type ActivationLibraryItem } from "../../lib/api";
-import { ActivationAssetMeta, ActivationAssetPreview, AssetBadge, ChannelBadges } from "./ActivationAssetCard";
+import { ActivationAssetMeta, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, ChannelBadges, ReusablePartsPanel } from "./ActivationAssetCard";
 
 type ActivationAssetProfilePanelProps = {
   entityType: "offer" | "content" | "bundle";
   assetKey: string;
+};
+
+const campaignPlanHref = (item: ActivationLibraryItem) => {
+  const params = new URLSearchParams({
+    assetType: item.assetType,
+    name: `Campaign for ${item.name}`
+  });
+  if (item.runtimeRef.offerKey) {
+    params.set("offerKey", item.runtimeRef.offerKey);
+  } else if (item.runtimeRef.contentKey) {
+    params.set("contentKey", item.runtimeRef.contentKey);
+  } else {
+    return null;
+  }
+  return `/engage/campaigns/new/edit?${params.toString()}`;
+};
+
+const calendarHref = (item: ActivationLibraryItem) => {
+  const params = new URLSearchParams({
+    assetKey: item.key,
+    assetType: item.assetType
+  });
+  return `/engage/calendar?${params.toString()}`;
 };
 
 export function ActivationAssetProfilePanel({ entityType, assetKey }: ActivationAssetProfilePanelProps) {
@@ -36,14 +60,16 @@ export function ActivationAssetProfilePanel({ entityType, assetKey }: Activation
     return null;
   }
 
+  const planHref = campaignPlanHref(item);
+
   return (
     <section className="panel overflow-hidden">
       <div className="grid gap-0 lg:grid-cols-[320px_1fr]">
         <ActivationAssetPreview item={item} />
-        <div className="space-y-3 p-4">
+        <div className="space-y-4 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-wide text-stone-500">Library profile</p>
+              <p className="text-xs uppercase tracking-wide text-stone-500">Activation asset profile</p>
               <h3 className="text-lg font-semibold">{item.name}</h3>
               <p className="text-sm text-stone-600">{item.assetTypeLabel} · {item.key} · v{item.version}</p>
             </div>
@@ -53,28 +79,41 @@ export function ActivationAssetProfilePanel({ entityType, assetKey }: Activation
               {item.health ? <AssetBadge value={item.health}>{item.health}</AssetBadge> : null}
             </div>
           </div>
-          <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Works in</p>
-            <ChannelBadges channels={item.compatibility.channels} />
+
+          <div className="flex flex-wrap gap-2">
+            {planHref ? (
+              <Link className="rounded-md bg-ink px-3 py-2 text-sm font-medium text-white" href={planHref}>
+                Plan campaign with this asset
+              </Link>
+            ) : null}
+            <Link className="rounded-md border border-stone-300 px-3 py-2 text-sm" href={calendarHref(item)}>
+              View calendar usage
+            </Link>
           </div>
-          <ActivationAssetMeta item={item} />
-          <div className="grid gap-2 text-sm md:grid-cols-3">
-            <p><span className="font-medium">Used in:</span> {item.usedInCount}</p>
-            <p><span className="font-medium">Reusable parts:</span> {item.primitiveReferences.length}</p>
-            <p><span className="font-medium">Missing parts:</span> {item.brokenPrimitiveReferences.length}</p>
-          </div>
-          {item.primitiveReferences.length > 0 ? (
-            <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Reusable parts</p>
-              <div className="flex flex-wrap gap-1">
-                {item.primitiveReferences.map((ref) => (
-                  <span key={`${ref.path}-${ref.key}`} className={`rounded border px-2 py-1 text-xs ${ref.resolved ? "border-stone-200 bg-stone-50 text-stone-700" : "border-rose-200 bg-rose-50 text-rose-700"}`}>
-                    {ref.kind}: {ref.key}
-                  </span>
-                ))}
-              </div>
+
+          <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
+            <div className="rounded-md border border-stone-200 bg-white p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Works in</p>
+              <ChannelBadges channels={item.compatibility.channels} />
             </div>
-          ) : null}
+            <div className="rounded-md border border-stone-200 bg-white p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Used in</p>
+              <ActivationAssetUsageSummary item={item} compact />
+            </div>
+          </div>
+
+          <div className="rounded-md border border-stone-200 bg-white p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Compatibility</p>
+            <ActivationAssetMeta item={item} />
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Reusable parts</p>
+              {item.primitiveReferences.length > 0 ? <span className="text-xs text-stone-500">{item.primitiveReferences.length} linked</span> : null}
+            </div>
+            <ReusablePartsPanel item={item} compact />
+          </div>
         </div>
       </div>
     </section>

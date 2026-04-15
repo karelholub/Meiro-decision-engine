@@ -166,6 +166,7 @@ export default function CampaignInventoryPage() {
             <p className="text-sm text-stone-600">Browse and operate campaigns at scale.</p>
           </div>
           <div className="flex gap-2">
+            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/calendar">Calendar</Link>
             {canWrite ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/campaigns/new/edit">Create campaign</Link> : null}
             <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void loadPage(null, true)} disabled={loading}>Refresh</button>
           </div>

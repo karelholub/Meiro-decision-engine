@@ -4,8 +4,8 @@ import { cn } from "../../lib/cn";
 type Variant = "neutral" | "success" | "warning" | "danger";
 
 const style: Record<Variant, string> = {
-  neutral: "bg-stone-100 text-stone-700 border-stone-200",
-  success: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  neutral: "border-stone-200 bg-white text-stone-700 shadow-sm",
+  success: "border-emerald-200 bg-emerald-50 text-emerald-700",
   warning: "bg-amber-100 text-amber-700 border-amber-200",
   danger: "bg-red-100 text-red-700 border-red-200"
 };

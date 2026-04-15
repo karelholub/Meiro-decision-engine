@@ -84,3 +84,28 @@ Existing Offer, Content Block, and Bundle pages now include a library profile pa
 - no new runtime resolver
 - no warehouse-grade asset analytics
 - no automatic generation of channel-specific versions
+
+## Final Polish Note
+
+The final demo-readiness pass focused on the places that still felt placeholder-heavy after the first UI polish sprint.
+
+Polish targets identified:
+
+- Bundle authoring still looked like a raw form because offer/content membership was only visible as select fields.
+- Bundle preview exposed resolver output as raw JSON, including null/empty states that felt debug-oriented.
+- Previews were channel-aware, but several fallback states still looked like blank cards instead of intentional unavailable states.
+- “Used in” and reusable-part counts were visible but not actionable enough to explain reuse value.
+- Detail pages had a profile panel, but reusable parts and compatibility needed clearer grouping.
+- Dense library rows needed better preview and usage hierarchy for scanning during demos.
+
+Implemented presentation adjustments:
+
+- shared previews now render richer, asset-type-specific frames for offer, channel, primitive, and bundle assets
+- preview fallbacks explain what is incomplete instead of showing blank placeholders
+- bundle pages now show component cards for the selected offer and content block, including missing-component states
+- bundle previews summarize composition, resolved payload fields, and resolver warnings without dumping raw JSON
+- reusable parts render as small resolved/missing tiles in the profile panel
+- usage copy now distinguishes “no active usage recorded” from assets used in one or more places
+- All Assets dense list now includes compact previews and clearer usage summaries
+
+These are UI-only refinements over the existing library endpoint, resolver, readiness, impact, and release safety model.

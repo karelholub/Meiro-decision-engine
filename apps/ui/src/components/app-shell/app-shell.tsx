@@ -66,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     hint: "In-app campaign lifecycle",
     items: [
       { href: "/engage/campaigns", label: "Campaigns" },
+      { href: "/engage/calendar", label: "Campaign Calendar" },
       { href: "/engage/experiments", label: "Experiments" },
       { href: "/engage/apps", label: "Apps" },
       { href: "/engage/placements", label: "Placements" },
@@ -121,6 +122,7 @@ const navPermissionByHref: Record<string, string> = {
   "/catalog/content": "catalog.content.read",
   "/catalog/bundles": "catalog.content.read",
   "/engage/campaigns": "engage.campaign.read",
+  "/engage/calendar": "engage.campaign.read",
   "/engage/experiments": "experiment.read",
   "/engage/apps": "engage.app.read",
   "/engage/placements": "engage.placement.read",
@@ -259,24 +261,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [quickQuery, quickOpen]);
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[1400px] gap-4 px-3 py-4 md:px-6 md:py-6">
+    <div className="app-frame">
       <aside
         className={cn(
-          "panel fixed inset-y-3 left-3 z-40 w-64 shrink-0 p-4 transition md:static md:translate-x-0",
+          "app-sidebar fixed inset-y-0 left-0 z-40 flex w-80 shrink-0 flex-col transition md:sticky md:top-0 md:h-screen md:translate-x-0",
           sidebarOpen ? "translate-x-0" : "-translate-x-[110%] md:translate-x-0"
         )}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-stone-700">Decisioning</p>
-            <p className="text-xs text-stone-500">Workflow navigation</p>
+        <div className="flex items-start justify-between px-5 pb-5 pt-4">
+          <div className="flex items-start gap-3">
+            <span className="brand-mark" aria-hidden />
+            <div className="pt-0.5 leading-none">
+              <p className="text-3xl font-bold leading-6 text-ink">meiro</p>
+              <p className="text-2xl font-bold leading-6 text-accent">engine</p>
+            </div>
           </div>
-          <button className="rounded border border-stone-300 px-2 py-0.5 text-xs md:hidden" onClick={() => setSidebarOpen(false)}>
+          <button className="control-button rounded px-2 py-1 text-xs md:hidden" onClick={() => setSidebarOpen(false)}>
             Close
           </button>
         </div>
 
-        <nav className="space-y-3 text-sm">
+        <div className="border-y border-stone-200 px-5 py-3 text-sm">
+          <p className="font-medium text-stone-700">Meiro-internal</p>
+          <p className="text-stone-500">{me?.email ?? "operator@meiro.io"}</p>
+        </div>
+
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4 text-lg">
           {visibleGroups.map((group) => {
             const currentGroupActive = group.items.some((item) => isItemActive(pathname, item.href));
             const open = groupOpen[group.id];
@@ -285,28 +295,29 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <div key={group.id} className="space-y-1">
                 <button
                   type="button"
+                  aria-current={currentGroupActive ? "page" : undefined}
                   className={cn(
-                    "flex w-full items-start justify-between rounded-md px-3 py-2 text-left transition",
-                    currentGroupActive ? "bg-ink text-white" : "hover:bg-stone-100"
+                    "nav-group-button flex w-full items-center justify-between rounded-md px-4 py-2 text-left transition",
+                    currentGroupActive && "nav-active"
                   )}
                   onClick={() => setGroupOpen((previous) => ({ ...previous, [group.id]: !previous[group.id] }))}
                 >
-                  <span>
-                    <span className="block font-medium">{group.label}</span>
-                    <span className={cn("block text-xs", currentGroupActive ? "text-stone-200" : "text-stone-500")}>{group.hint}</span>
+                  <span className="flex min-w-0 items-center gap-3">
+                    <span className="nav-glyph" aria-hidden />
+                    <span className="block truncate font-medium">{group.label}</span>
                   </span>
-                  <span className="pt-1 text-xs">{open ? "▾" : "▸"}</span>
+                  <span className="text-sm text-stone-500">{open ? "⌄" : "›"}</span>
                 </button>
 
                 {open ? (
-                  <div className="space-y-1 pl-3">
+                  <div className="space-y-1 pl-9">
                     {group.items.map((item) => {
                       const active = isItemActive(pathname, item.href);
                       return (
                         <Link
                           key={item.href}
                           href={item.href}
-                          className={cn("block rounded-md px-3 py-2 transition", active ? "bg-ink text-white" : "hover:bg-stone-100")}
+                          className={cn("nav-link block rounded-md px-4 py-2 text-base transition", active && "nav-active font-medium")}
                           onClick={() => setSidebarOpen(false)}
                         >
                           {item.label}
@@ -319,40 +330,49 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
+
+        <div className="mt-auto space-y-2 border-t border-stone-200 p-3">
+          <Link className="nav-link flex items-center gap-3 rounded-md px-4 py-2 text-lg" href="/docs">
+            <span className="nav-glyph" aria-hidden />
+            Documentation
+          </Link>
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <Link className="control-button rounded-md px-4 py-2 text-center text-base" href="/login">
+              Switch user
+            </Link>
+            <EnvironmentSelector />
+          </div>
+        </div>
       </aside>
 
       {sidebarOpen ? <button className="fixed inset-0 z-30 bg-black/20 md:hidden" onClick={() => setSidebarOpen(false)} /> : null}
 
-      <div className="flex min-w-0 flex-1 flex-col gap-4">
-        <header className="panel flex flex-wrap items-center justify-between gap-3 p-3 md:p-4">
+      <div className="content-shell flex min-w-0 flex-1 flex-col">
+        <header className="top-toolbar flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button
-              className="rounded border border-stone-300 px-2 py-1 text-xs md:hidden"
+              className="control-button rounded px-3 py-2 text-sm md:hidden"
               onClick={() => setSidebarOpen((prev) => !prev)}
             >
               Menu
             </button>
             <div>
-              <h1 className="text-lg font-semibold tracking-tight">Decisioning Extension</h1>
-              <p className="text-xs text-stone-600">
+              <h1 className="text-sm font-semibold text-stone-700">Decision Engine</h1>
+              <p className="text-sm text-stone-600">
                 {activeItem?.label ? `${activeGroupLabel} / ${activeItem.label}` : "Operational workspace"}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => setQuickOpen(true)}>
+            <button className="control-button rounded px-3 py-2 text-sm" onClick={() => setQuickOpen(true)}>
               Cmd/Ctrl+K
             </button>
-            <EnvironmentSelector />
-            <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/login">
-              Switch User
-            </Link>
-            <Link className="hidden rounded-md border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100 lg:inline-flex" href="/simulate">
+            <Link className="control-button hidden rounded-md px-3 py-2 text-sm lg:inline-flex" href="/simulate">
               Run Simulation
             </Link>
             {!shouldFilterNav || hasPermission("decision.write") ? (
-              <Link className="rounded-md bg-ink px-3 py-2 text-sm text-white hover:opacity-90" href="/decisions?create=wizard">
+              <Link className="primary-button rounded-md px-4 py-2 text-sm" href="/decisions?create=wizard">
                 New Decision
               </Link>
             ) : null}

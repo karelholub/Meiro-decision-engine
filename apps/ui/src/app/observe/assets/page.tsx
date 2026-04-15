@@ -68,11 +68,13 @@ export default function AssetHealthPage() {
         <p className="text-sm text-stone-600">Prioritized readiness, archive, and dependency tasks from deterministic catalog checks.</p>
         <div className="mt-3 space-y-2">
           {(tasks?.items ?? []).slice(0, 12).map((task) => (
-            <a key={task.id} href={task.href ?? "#"} className="block rounded-md border border-stone-200 px-3 py-2 text-sm hover:bg-stone-50">
-              <span className={task.severity === "blocking" ? "font-medium text-red-700" : task.severity === "high" ? "font-medium text-amber-700" : "font-medium text-stone-900"}>{task.title}</span>
-              <span className="ml-2 text-xs text-stone-500">{task.type}:{task.key}</span>
-              <span className="block text-stone-700">{task.message}</span>
-              <span className="block text-xs text-stone-600">Next: {task.nextAction}</span>
+            <a key={task.id} href={task.href ?? "#"} className="block rounded-md border border-stone-200 px-4 py-3 text-sm hover:bg-stone-50">
+              <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className={task.severity === "blocking" ? "font-medium text-red-700" : task.severity === "high" ? "font-medium text-amber-700" : "font-medium text-stone-900"}>{task.title}</span>
+                <span className="break-all text-xs text-stone-500">{task.type}:{task.key}</span>
+              </span>
+              <span className="mt-1 block text-stone-700">{task.message}</span>
+              <span className="mt-1 block text-xs text-stone-600">Next: {task.nextAction}</span>
             </a>
           ))}
           {tasks && tasks.items.length === 0 ? <p className="text-sm text-stone-600">No operator tasks were generated.</p> : null}
@@ -81,19 +83,19 @@ export default function AssetHealthPage() {
 
       <section className="grid gap-3">
         {(response?.items ?? []).map((item) => (
-          <article key={`${item.type}:${item.key}`} className="panel grid gap-3 p-4 md:grid-cols-[180px_1fr_220px]">
-            <div>
+          <article key={`${item.type}:${item.key}`} className="panel grid gap-5 p-5 md:grid-cols-[minmax(260px,360px)_minmax(0,1fr)_auto] md:gap-8">
+            <div className="min-w-0">
               <p className="text-xs uppercase tracking-wide text-stone-500">{item.type}</p>
-              <h2 className="font-semibold">{item.key}</h2>
+              <h2 className="break-words text-lg font-semibold leading-snug">{item.key}</h2>
               <p className="text-sm text-stone-600">v{item.version} {item.status}</p>
             </div>
-            <div className="space-y-2 text-sm">
-              <p>{item.name}</p>
+            <div className="min-w-0 space-y-2 text-sm">
+              <p className="text-base">{item.name}</p>
               <p>Runtime-eligible variants: {item.runtimeEligibleVariantCount} / {item.variantCount}</p>
               <p>Locales: {item.localeCoverage.join(", ") || "-"} / Channels: {item.channelCoverage.join(", ") || "-"}</p>
               <p>References: decisions {item.dependencyCounts.decisions}, campaigns {item.dependencyCounts.campaigns}, experiments {item.dependencyCounts.experiments}</p>
               {item.warningDetails?.length ? (
-                <ul className="space-y-1 text-xs text-stone-700">
+                <ul className="space-y-1.5 pt-1 text-sm text-stone-700">
                   {item.warningDetails.map((warning) => (
                     <li key={warning.code}>
                       <span className={warning.severity === "critical" ? "font-medium text-red-700" : "font-medium text-amber-700"}>{warning.code}</span>: {warning.message}
@@ -102,7 +104,7 @@ export default function AssetHealthPage() {
                 </ul>
               ) : item.warnings.length > 0 ? <p className="text-stone-600">Warnings: {item.warnings.join(", ")}</p> : null}
             </div>
-            <div>
+            <div className="md:justify-self-end">
               <span className={`inline-block rounded-md border px-3 py-2 text-sm font-medium ${healthClass[item.health]}`}>{item.health}</span>
             </div>
           </article>

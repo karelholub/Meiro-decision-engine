@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActivationAssetCard, ActivationAssetPreview, ChannelBadges } from "./ActivationAssetCard";
+import { ActivationAssetCard, ActivationAssetPreview, ActivationAssetUsageSummary, ChannelBadges, ReusablePartsPanel } from "./ActivationAssetCard";
 import type { ActivationLibraryItem } from "../../lib/api";
 
 const makeItem = (patch: Partial<ActivationLibraryItem>): ActivationLibraryItem => ({
@@ -73,6 +73,51 @@ describe("Activation asset presentation", () => {
     expect(pushHtml).toContain("Meiro");
     expect(pushHtml).toContain("Welcome back");
     expect(whatsappHtml).toContain("Welcome back");
+  });
+
+  it("renders bundle previews as component packages instead of raw placeholders", () => {
+    const html = renderToStaticMarkup(
+      <ActivationAssetPreview
+        item={makeItem({
+          entityType: "bundle",
+          key: "winback_package",
+          name: "Win-back package",
+          category: "composite",
+          assetType: "bundle",
+          assetTypeLabel: "Bundle",
+          runtimeRef: { bundleKey: "winback_package", offerKey: "winback_offer", contentKey: "winback_banner" }
+        })}
+      />
+    );
+
+    expect(html).toContain("Offer");
+    expect(html).toContain("winback_offer");
+    expect(html).toContain("Content");
+    expect(html).toContain("winback_banner");
+  });
+
+  it("renders reusable part tiles with missing-state language", () => {
+    const html = renderToStaticMarkup(
+      <ReusablePartsPanel
+        item={makeItem({
+          primitiveReferences: [
+            { kind: "image", key: "hero_image", path: "$.imageAssetKey", resolved: true },
+            { kind: "cta", key: "missing_cta", path: "$.ctaAssetKey", resolved: false }
+          ],
+          brokenPrimitiveReferences: [{ kind: "cta", key: "missing_cta", path: "$.ctaAssetKey", resolved: false }]
+        })}
+      />
+    );
+
+    expect(html).toContain("hero_image");
+    expect(html).toContain("missing_cta");
+    expect(html).toContain("Missing");
+  });
+
+  it("renders explicit zero-usage copy", () => {
+    const html = renderToStaticMarkup(<ActivationAssetUsageSummary item={makeItem({ usedInCount: 0 })} />);
+
+    expect(html).toContain("No active usage recorded");
   });
 
   it("renders readable channel badges", () => {

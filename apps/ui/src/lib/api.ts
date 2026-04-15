@@ -420,6 +420,78 @@ export type ActivationLibraryQuery = {
   includeUnready?: boolean;
 };
 
+export type ActivationTypedCreateInput = {
+  assetType: ActivationAssetType;
+  key?: string;
+  name?: string;
+  locale?: string;
+};
+
+export type ActivationTypedCreateResponse = {
+  item: CatalogOffer | CatalogContentBlock | CatalogAssetBundle;
+  created: {
+    assetType: ActivationAssetType;
+    assetTypeLabel: string;
+    category: ActivationAssetCategory;
+    targetEntityType: "offer" | "content" | "bundle";
+    routePath: string;
+    guidance: string;
+    compatibility: ActivationLibraryItem["compatibility"];
+  };
+  validation?: { valid: boolean; errors: string[]; warnings: string[] };
+};
+
+export type CampaignCalendarLinkedAsset = {
+  kind: "content" | "offer";
+  key: string;
+  name: string;
+  status: string;
+  category: ActivationAssetCategory;
+  assetType: ActivationAssetType;
+  assetTypeLabel: string;
+  thumbnailUrl: string | null;
+  startAt: string | null;
+  endAt: string | null;
+};
+
+export type CampaignCalendarItem = {
+  id: string;
+  campaignId: string;
+  campaignKey: string;
+  name: string;
+  description: string | null;
+  status: InAppCampaign["status"];
+  approvalState: "draft" | "pending_approval" | "approved_or_active" | "archived";
+  appKey: string;
+  placementKey: string;
+  templateKey: string;
+  priority: number;
+  startAt: string | null;
+  endAt: string | null;
+  submittedAt: string | null;
+  activatedAt: string | null;
+  lastReviewComment: string | null;
+  linkedAssets: CampaignCalendarLinkedAsset[];
+  warnings: string[];
+  conflicts: Array<{ campaignId: string; campaignKey: string; reason: string }>;
+  updatedAt: string | null;
+};
+
+export type CampaignCalendarResponse = {
+  window: { from: string; to: string; generatedAt: string };
+  items: CampaignCalendarItem[];
+  scheduledItems: CampaignCalendarItem[];
+  unscheduledItems: CampaignCalendarItem[];
+  summary: {
+    total: number;
+    scheduled: number;
+    unscheduled: number;
+    byStatus: Record<string, number>;
+    warnings: Record<string, number>;
+    conflicts: number;
+  };
+};
+
 export type PipesInlineEvaluateResponse = {
   status: "ok";
   eligible: boolean;
@@ -793,7 +865,12 @@ export const apiClient = {
           };
           items: ActivationLibraryItem[];
           rejected: Array<{ id: string; key: string; name: string; assetType: ActivationAssetType; reasons: string[] }>;
-        }>(`/v1/catalog/library/picker${toQuery(params)}`)
+        }>(`/v1/catalog/library/picker${toQuery(params)}`),
+      create: (input: ActivationTypedCreateInput) =>
+        apiFetch<ActivationTypedCreateResponse>(`/v1/catalog/library/create`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
     },
     offers: {
       list: (params: { key?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED"; q?: string } = {}) =>
@@ -1100,6 +1177,16 @@ export const apiClient = {
           body: JSON.stringify({ schemaJson })
         })
     },
+    campaignCalendar: (params: {
+      from?: string;
+      to?: string;
+      appKey?: string;
+      placementKey?: string;
+      status?: string;
+      assetKey?: string;
+      assetType?: ActivationAssetType;
+      includeArchived?: "true" | "false";
+    } = {}) => apiFetch<CampaignCalendarResponse>(`/v1/inapp/campaign-calendar${toQuery(params)}`),
     campaigns: {
       list: (params: {
         appKey?: string;
@@ -1130,6 +1217,11 @@ export const apiClient = {
             body: JSON.stringify(input)
           }
         ),
+      updateSchedule: (id: string, input: { startAt?: string | null; endAt?: string | null }) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/schedule`, {
+          method: "PATCH",
+          body: JSON.stringify(input)
+        }),
       activate: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/activate`, { method: "POST" }),
       archive: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/archive`, { method: "POST" }),
       submitForApproval: (id: string, comment?: string) =>

@@ -2535,6 +2535,92 @@ describe("API", () => {
     await app.close();
   });
 
+  it("creates typed activation assets through the library entry point", async () => {
+    const { prisma } = makePrisma();
+    const now = new Date("2026-04-15T10:00:00.000Z");
+    (prisma as any).catalogAuditLog = {
+      create: vi.fn().mockResolvedValue({})
+    };
+    (prisma as any).contentBlock = {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockImplementation(async ({ data }: any) => ({
+        id: "content-created",
+        environment: data.environment,
+        key: data.key,
+        name: data.name,
+        description: data.description ?? null,
+        status: data.status,
+        version: data.version,
+        tags: data.tags,
+        templateId: data.templateId,
+        schemaJson: data.schemaJson,
+        localesJson: data.localesJson,
+        tokenBindings: data.tokenBindings,
+        startAt: data.startAt ?? null,
+        endAt: data.endAt ?? null,
+        submittedAt: data.submittedAt ?? null,
+        approvedAt: data.approvedAt ?? null,
+        approvedBy: null,
+        archivedAt: data.archivedAt ?? null,
+        createdAt: now,
+        updatedAt: now,
+        activatedAt: data.activatedAt ?? null,
+        variants: (data.variants?.create ?? []).map((variant: any, index: number) => ({
+          id: `variant-${index}`,
+          ...variant,
+          createdAt: now,
+          updatedAt: now
+        }))
+      }))
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => now
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/catalog/library/create",
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      },
+      payload: {
+        assetType: "whatsapp_message",
+        name: "Winback WhatsApp",
+        locale: "en"
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.created).toMatchObject({
+      assetType: "whatsapp_message",
+      targetEntityType: "content",
+      routePath: "/catalog/content?key=WHATSAPP_WINBACK_WHATSAPP"
+    });
+    expect(body.item).toMatchObject({
+      key: "WHATSAPP_WINBACK_WHATSAPP",
+      templateId: "whatsapp_message_v1",
+      tags: expect.arrayContaining(["asset:whatsapp_message", "channel:whatsapp", "template:whatsapp_message_v1"])
+    });
+    expect(body.item.variants[0]).toMatchObject({
+      locale: "en",
+      channel: "whatsapp",
+      isDefault: true
+    });
+
+    await app.close();
+  });
+
   it("returns paginated logs with replay metadata and details", async () => {
     const { prisma } = makePrisma();
     const timestamp = new Date("2026-02-19T12:00:00.000Z");

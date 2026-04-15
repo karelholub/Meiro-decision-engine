@@ -80,6 +80,13 @@ const withPreferredDefaultLocale = (locales: Record<string, unknown>, preferredL
   };
 };
 
+const routeKeyParam = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("key")?.trim() || null;
+};
+
 const parsePayloadOrThrow = (editor: ContentEditorState) => {
   const schema = safeJsonParse<Record<string, unknown> | null>(editor.schemaJsonText);
   if (schema.value === null && editor.templateId.trim() === "banner_v1") {
@@ -168,7 +175,12 @@ export default function CatalogContentPage() {
       setTagSuggestions(tags.contentTags ?? []);
 
       if (content.items.length > 0) {
-        const active = selectedId ? content.items.find((item) => item.id === selectedId) : content.items[0];
+        const routeKey = routeKeyParam();
+        const active = routeKey
+          ? sortVersionsDesc(content.items.filter((item) => item.key === routeKey))[0]
+          : selectedId
+            ? content.items.find((item) => item.id === selectedId)
+            : content.items[0];
         if (active) {
           const seed = makeContentEditorSeed(active);
           setEditor(seed);

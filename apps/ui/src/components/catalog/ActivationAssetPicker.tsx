@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiClient, type ActivationAssetChannel, type ActivationLibraryItem } from "../../lib/api";
 import { Button } from "../ui/button";
-import { ActivationAssetMeta, ActivationAssetPreview, AssetBadge, ChannelBadges, assetHref } from "./ActivationAssetCard";
+import { ActivationAssetMeta, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, ChannelBadges, assetHref } from "./ActivationAssetCard";
 
 type ActivationAssetPickerProps = {
   channel: ActivationAssetChannel;
@@ -95,6 +95,7 @@ export function ActivationAssetPicker({ channel, templateKey, placementKey, loca
               </div>
               <ChannelBadges channels={item.compatibility.channels} />
               <ActivationAssetMeta item={item} />
+              <ActivationAssetUsageSummary item={item} compact />
               <p className="text-xs text-stone-600">
                 Will reference {item.runtimeRef.bundleKey ? `bundle ${item.runtimeRef.bundleKey}` : [item.runtimeRef.contentKey ? `content ${item.runtimeRef.contentKey}` : null, item.runtimeRef.offerKey ? `offer ${item.runtimeRef.offerKey}` : null].filter(Boolean).join(" and ") || "this governed asset"}.
               </p>

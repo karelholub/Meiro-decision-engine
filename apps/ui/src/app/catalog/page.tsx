@@ -11,7 +11,7 @@ import {
 } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 import { Button } from "../../components/ui/button";
-import { ActivationAssetCard, AssetBadge, ChannelBadges, assetHref } from "../../components/catalog/ActivationAssetCard";
+import { ActivationAssetCard, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, ChannelBadges, assetHref } from "../../components/catalog/ActivationAssetCard";
 
 const assetTypeOptions: Array<{ value: "" | ActivationAssetType; label: string }> = [
   { value: "", label: "All types" },
@@ -38,6 +38,110 @@ const channelOptions: Array<{ value: "" | ActivationAssetChannel; label: string 
   { value: "journey_canvas", label: "Journey canvas" }
 ];
 
+const channelLabel = (value: ActivationAssetChannel) => channelOptions.find((option) => option.value === value)?.label ?? value;
+
+type CreationOption = {
+  assetType: ActivationAssetType;
+  label: string;
+  group: "Primitive assets" | "Channel assets" | "Existing governed objects";
+  description: string;
+  channels: ActivationAssetChannel[];
+  templateHint: string;
+};
+
+const creationOptions: CreationOption[] = [
+  {
+    assetType: "image",
+    label: "Image",
+    group: "Primitive assets",
+    description: "Reusable image reference with source, description, and tags.",
+    channels: ["website_personalization", "popup_banner", "email"],
+    templateHint: "image_ref_v1"
+  },
+  {
+    assetType: "copy_snippet",
+    label: "Copy Snippet",
+    group: "Primitive assets",
+    description: "Token-aware reusable copy for messages, banners, and journey steps.",
+    channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"],
+    templateHint: "copy_snippet_v1"
+  },
+  {
+    assetType: "cta",
+    label: "CTA",
+    group: "Primitive assets",
+    description: "Reusable button label and target/action fields.",
+    channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"],
+    templateHint: "cta_v1"
+  },
+  {
+    assetType: "website_banner",
+    label: "Website Banner",
+    group: "Channel assets",
+    description: "Website personalization banner with title, subtitle, CTA, image, and URL starter fields.",
+    channels: ["website_personalization"],
+    templateHint: "banner_v1"
+  },
+  {
+    assetType: "popup_banner",
+    label: "Popup Banner",
+    group: "Channel assets",
+    description: "Popup or modal banner with short body, CTA, URL, and image reference.",
+    channels: ["popup_banner"],
+    templateHint: "popup_banner_v1"
+  },
+  {
+    assetType: "email_block",
+    label: "Email Block",
+    group: "Channel assets",
+    description: "Email content block with headline, body, CTA, image, and footer fields.",
+    channels: ["email"],
+    templateHint: "email_block_v1"
+  },
+  {
+    assetType: "push_message",
+    label: "Push Message",
+    group: "Channel assets",
+    description: "Short mobile push draft with title, body, deeplink, and action fields.",
+    channels: ["mobile_push"],
+    templateHint: "push_message_v1"
+  },
+  {
+    assetType: "whatsapp_message",
+    label: "WhatsApp Message",
+    group: "Channel assets",
+    description: "WhatsApp message draft with body, button, action, and variable guidance.",
+    channels: ["whatsapp"],
+    templateHint: "whatsapp_message_v1"
+  },
+  {
+    assetType: "journey_asset",
+    label: "Journey Asset",
+    group: "Channel assets",
+    description: "Journey-compatible content block for decision, message, or fallback nodes.",
+    channels: ["journey_canvas"],
+    templateHint: "journey_asset_v1"
+  },
+  {
+    assetType: "offer",
+    label: "Offer",
+    group: "Existing governed objects",
+    description: "Governed offer draft with starter value and constraints.",
+    channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"],
+    templateHint: "Offer editor"
+  },
+  {
+    assetType: "bundle",
+    label: "Bundle",
+    group: "Existing governed objects",
+    description: "Reusable package for governed offer and content block references.",
+    channels: [],
+    templateHint: "Bundle editor"
+  }
+];
+
+const creationGroups: CreationOption["group"][] = ["Primitive assets", "Channel assets", "Existing governed objects"];
+
 const browseTabs: Array<{
   id: string;
   label: string;
@@ -53,6 +157,12 @@ const browseTabs: Array<{
   { id: "channel", label: "Channel Assets", category: "channel", description: "Campaign-ready assets by channel and template." },
   { id: "bundles", label: "Bundles", assetType: "bundle", description: "Composed packages of governed assets." }
 ];
+
+const createTypeForTab = (tab: (typeof browseTabs)[number]): ActivationAssetType => {
+  if (tab.assetType) return tab.assetType;
+  if (tab.category === "channel") return "website_banner";
+  return "website_banner";
+};
 
 const noResultsMessage = (input: {
   query: string;
@@ -85,6 +195,13 @@ export default function CatalogLibraryPage() {
   const [readiness, setReadiness] = useState("");
   const [health, setHealth] = useState("");
   const [view, setView] = useState<"grid" | "table">("grid");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createType, setCreateType] = useState<ActivationAssetType>("website_banner");
+  const [createName, setCreateName] = useState("");
+  const [createKey, setCreateKey] = useState("");
+  const [createLocale, setCreateLocale] = useState("en");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -92,6 +209,9 @@ export default function CatalogLibraryPage() {
   }, []);
 
   const activeTab = browseTabs.find((tab) => tab.id === browseTab) ?? browseTabs[0]!;
+  const activeCreateOption = creationOptions.find((option) => option.assetType === createType) ?? creationOptions[3]!;
+  const tabCreateType = createTypeForTab(activeTab);
+  const tabCreateLabel = creationOptions.find((option) => option.assetType === tabCreateType)?.label ?? "Asset";
 
   const load = async () => {
     setLoading(true);
@@ -140,6 +260,33 @@ export default function CatalogLibraryPage() {
     [visibleItems]
   );
 
+  const openCreate = (assetType = tabCreateType) => {
+    const option = creationOptions.find((entry) => entry.assetType === assetType);
+    setCreateType(assetType);
+    setCreateName(option ? `New ${option.label}` : "");
+    setCreateKey("");
+    setCreateLocale("en");
+    setCreateError(null);
+    setCreateOpen(true);
+  };
+
+  const createAsset = async () => {
+    setCreating(true);
+    try {
+      const response = await apiClient.catalog.library.create({
+        assetType: createType,
+        name: createName.trim() || undefined,
+        key: createKey.trim() || undefined,
+        locale: createLocale.trim() || undefined
+      });
+      window.location.href = response.created.routePath;
+    } catch (createAssetError) {
+      setCreateError(createAssetError instanceof Error ? createAssetError.message : "Failed to create asset");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <section className="space-y-4">
       <header className="panel p-4">
@@ -152,9 +299,8 @@ export default function CatalogLibraryPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/catalog/content">Create channel asset</Link>
-            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/catalog/offers">Create offer</Link>
-            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/catalog/bundles">Create bundle</Link>
+            <Button onClick={() => openCreate()}>Create asset</Button>
+            <Button variant="outline" onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
           </div>
         </div>
       </header>
@@ -165,22 +311,22 @@ export default function CatalogLibraryPage() {
         <button className="panel p-3 text-left" onClick={() => setBrowseTab("images")}>
           <p className="text-xs uppercase tracking-wide text-stone-500">Primitive assets</p>
           <p className="text-2xl font-semibold">{counts.primitive}</p>
-          <p className="text-xs text-stone-600">Images, copy, CTAs, offers</p>
+          <p className="text-xs text-stone-600">Reusable images, copy, CTAs, offers</p>
         </button>
         <button className="panel p-3 text-left" onClick={() => setBrowseTab("channel")}>
           <p className="text-xs uppercase tracking-wide text-stone-500">Channel assets</p>
           <p className="text-2xl font-semibold">{counts.channel}</p>
-          <p className="text-xs text-stone-600">Ready for templates and placements</p>
+          <p className="text-xs text-stone-600">Ready for templates, placements, messages</p>
         </button>
         <button className="panel p-3 text-left" onClick={() => setBrowseTab("bundles")}>
           <p className="text-xs uppercase tracking-wide text-stone-500">Bundles</p>
           <p className="text-2xl font-semibold">{counts.composite}</p>
-          <p className="text-xs text-stone-600">Composed reusable packages</p>
+          <p className="text-xs text-stone-600">Reusable offer + content packages</p>
         </button>
         <button className="panel p-3 text-left" onClick={() => setHealth("critical")}>
           <p className="text-xs uppercase tracking-wide text-stone-500">Needs attention</p>
           <p className="text-2xl font-semibold">{counts.attention}</p>
-          <p className="text-xs text-stone-600">Blocked readiness or critical health</p>
+          <p className="text-xs text-stone-600">Blocked readiness, missing parts, critical health</p>
         </button>
       </section>
 
@@ -199,7 +345,10 @@ export default function CatalogLibraryPage() {
             </button>
           ))}
         </div>
-        <p className="text-sm text-stone-600">{activeTab.description}</p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-stone-600">{activeTab.description}</p>
+          <Button variant="outline" onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
+        </div>
 
         <div className="grid gap-3 md:grid-cols-7">
           <label className="text-sm md:col-span-2">
@@ -277,6 +426,7 @@ export default function CatalogLibraryPage() {
           <h3 className="text-lg font-semibold">No matching assets</h3>
           <p className="mx-auto mt-2 max-w-2xl text-sm text-stone-600">{noResultsMessage({ query, channel, templateKey, placementKey, readiness, health })}</p>
           <div className="mt-4 flex justify-center gap-2">
+            <Button onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
             <Button variant="outline" onClick={() => {
               setQuery("");
               setAssetType("");
@@ -294,6 +444,97 @@ export default function CatalogLibraryPage() {
         </section>
       ) : null}
 
+      {createOpen ? (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 px-4 py-8">
+          <section className="w-full max-w-5xl rounded-md bg-white shadow-xl">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 p-4">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-stone-500">Create asset</p>
+                <h3 className="text-xl font-semibold">{activeCreateOption.label}</h3>
+                <p className="max-w-2xl text-sm text-stone-700">{activeCreateOption.description}</p>
+              </div>
+              <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating}>Close</Button>
+            </div>
+            <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="space-y-4">
+                {creationGroups.map((group) => (
+                  <div key={group}>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">{group}</p>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {creationOptions.filter((option) => option.group === group).map((option) => (
+                        <button
+                          key={option.assetType}
+                          type="button"
+                          className={`rounded-md border p-3 text-left ${createType === option.assetType ? "border-ink bg-stone-100" : "border-stone-200 bg-white hover:border-stone-400"}`}
+                          onClick={() => {
+                            setCreateType(option.assetType);
+                            setCreateName((current) => (!current || current.startsWith("New ") ? `New ${option.label}` : current));
+                            setCreateError(null);
+                          }}
+                        >
+                          <span className="font-medium">{option.label}</span>
+                          <span className="mt-1 block text-xs text-stone-600">{option.description}</span>
+                          <span className="mt-2 block text-xs text-stone-500">Default: {option.templateHint}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <aside className="space-y-3 rounded-md border border-stone-200 bg-stone-50 p-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Where it works</p>
+                  <p className="mt-1 text-sm text-stone-700">
+                    {activeCreateOption.channels.length > 0 ? activeCreateOption.channels.map(channelLabel).join(", ") : "Composed from selected governed assets"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Starter defaults</p>
+                  <p className="mt-1 text-sm text-stone-700">{activeCreateOption.templateHint}</p>
+                </div>
+                <label className="block text-sm">
+                  Name
+                  <input
+                    className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1"
+                    value={createName}
+                    onChange={(event) => setCreateName(event.target.value)}
+                    placeholder={`New ${activeCreateOption.label}`}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Key
+                  <input
+                    className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1"
+                    value={createKey}
+                    onChange={(event) => setCreateKey(event.target.value)}
+                    placeholder="Generated from name"
+                  />
+                </label>
+                <label className="block text-sm">
+                  Locale
+                  <input
+                    className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1"
+                    value={createLocale}
+                    onChange={(event) => setCreateLocale(event.target.value)}
+                    placeholder="en"
+                  />
+                </label>
+                <div className="rounded-md border border-stone-200 bg-white p-3 text-sm text-stone-700">
+                  {activeCreateOption.assetType === "offer" ? "Creates an Offer draft and opens the Offer editor." : null}
+                  {activeCreateOption.assetType === "bundle" ? "Creates a Bundle draft and opens the Bundle editor." : null}
+                  {activeCreateOption.assetType !== "offer" && activeCreateOption.assetType !== "bundle" ? "Creates a typed Content Block draft and opens the Content Block editor." : null}
+                </div>
+                {createError ? <p className="text-sm text-red-700">{createError}</p> : null}
+                <Button className="w-full" onClick={() => void createAsset()} disabled={creating}>
+                  {creating ? "Creating..." : `Create ${activeCreateOption.label}`}
+                </Button>
+              </aside>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {view === "grid" && visibleItems.length > 0 ? (
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {visibleItems.map((item) => <ActivationAssetCard key={item.id} item={item} />)}
@@ -306,6 +547,7 @@ export default function CatalogLibraryPage() {
             <thead>
               <tr className="border-b border-stone-200 text-xs uppercase tracking-wide text-stone-500">
                 <th className="py-2 pr-3">Asset</th>
+                <th className="py-2 pr-3">Preview</th>
                 <th className="py-2 pr-3">Type</th>
                 <th className="py-2 pr-3">Works in</th>
                 <th className="py-2 pr-3">Compatibility</th>
@@ -320,7 +562,10 @@ export default function CatalogLibraryPage() {
                   <td className="py-3 pr-3">
                     <Link className="font-medium underline decoration-stone-300" href={assetHref(item)}>{item.name}</Link>
                     <p className="text-xs text-stone-500">{item.key}</p>
-                    <p className="max-w-xs text-xs text-stone-600">{item.preview.snippet ?? item.description ?? "No preview text"}</p>
+                    <ActivationAssetUsageSummary item={item} compact />
+                  </td>
+                  <td className="w-52 py-3 pr-3">
+                    <ActivationAssetPreview item={item} compact />
                   </td>
                   <td className="py-3 pr-3"><AssetBadge value={item.category}>{item.assetTypeLabel}</AssetBadge></td>
                   <td className="py-3 pr-3"><ChannelBadges channels={item.compatibility.channels} /></td>
@@ -334,8 +579,8 @@ export default function CatalogLibraryPage() {
                       {item.health ? <AssetBadge value={item.health}>{item.health}</AssetBadge> : null}
                     </div>
                   </td>
-                  <td className="py-3 pr-3">{item.usedInCount}</td>
-                  <td className="py-3 pr-3">{new Date(item.updatedAt).toLocaleString()}</td>
+                  <td className="py-3 pr-3 text-xs text-stone-700">{item.usedInCount === 0 ? "No active usage" : `${item.usedInCount} place${item.usedInCount === 1 ? "" : "s"}`}</td>
+                  <td className="py-3 pr-3">{new Date(item.updatedAt).toLocaleDateString()}</td>
                 </tr>
               ))}
             </tbody>

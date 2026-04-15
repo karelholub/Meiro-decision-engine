@@ -9,9 +9,9 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#1d2733",
-        paper: "#f7f4ed",
-        accent: "#c75146"
+        ink: "#252a36",
+        paper: "#f6f6f7",
+        accent: "#9637f2"
       }
     }
   },

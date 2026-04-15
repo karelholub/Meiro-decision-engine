@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { JsonCache } from "../lib/cache";
 import { createCatalogResolver, extractTemplateTokens } from "../services/catalogResolver";
 import {
+  buildTypedActivationAssetCreationDraft,
   buildActivationLibraryItem,
   collectActivationPrimitiveReferences,
   evaluateActivationCompatibility,
@@ -128,24 +129,24 @@ const assetQuerySchema = z.object({
   key: z.string().min(1)
 });
 
+const activationAssetTypeSchema = z.enum([
+  "image",
+  "copy_snippet",
+  "cta",
+  "offer",
+  "website_banner",
+  "popup_banner",
+  "email_block",
+  "push_message",
+  "whatsapp_message",
+  "journey_asset",
+  "bundle"
+]);
+
 const activationLibraryQuerySchema = z.object({
   q: z.string().optional(),
   category: z.enum(["primitive", "channel", "composite"]).optional(),
-  assetType: z
-    .enum([
-      "image",
-      "copy_snippet",
-      "cta",
-      "offer",
-      "website_banner",
-      "popup_banner",
-      "email_block",
-      "push_message",
-      "whatsapp_message",
-      "journey_asset",
-      "bundle"
-    ])
-    .optional(),
+  assetType: activationAssetTypeSchema.optional(),
   channel: z.string().optional(),
   templateKey: z.string().optional(),
   placementKey: z.string().optional(),
@@ -159,6 +160,13 @@ const activationLibraryQuerySchema = z.object({
 
 const activationPickerQuerySchema = activationLibraryQuerySchema.extend({
   journeyNodeContext: z.string().optional()
+});
+
+const activationTypedCreateBodySchema = z.object({
+  assetType: activationAssetTypeSchema,
+  key: z.string().trim().min(1).optional(),
+  name: z.string().trim().min(1).optional(),
+  locale: z.string().trim().min(1).optional()
 });
 
 const assetBundleBodySchema = z.object({
@@ -1639,6 +1647,247 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       },
       items: filtered
     };
+  });
+
+  deps.app.post("/v1/catalog/library/create", { preHandler: deps.requireWriteAuth }, async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const body = activationTypedCreateBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return deps.buildResponseError(reply, 400, "Invalid body", body.error.flatten());
+    }
+
+    const draft = buildTypedActivationAssetCreationDraft({
+      assetType: body.data.assetType,
+      key: body.data.key,
+      name: body.data.name,
+      locale: body.data.locale,
+      now: deps.now()
+    });
+    const actorId = normalizeActorId(request);
+
+    request.log.info(
+      {
+        event: "activation_asset_typed_create_selected",
+        environment,
+        assetType: draft.assetType,
+        targetEntityType: draft.targetEntityType,
+        key: draft.body.key,
+        templateKeys: draft.compatibility.templateKeys,
+        channels: draft.compatibility.channels
+      },
+      "Activation asset typed create selected"
+    );
+
+    if (draft.targetEntityType === "offer") {
+      const typedBody = offerCreateBodySchema.safeParse(draft.body);
+      if (!typedBody.success) {
+        request.log.warn(
+          { event: "activation_asset_typed_create_invalid_config", assetType: draft.assetType, issues: typedBody.error.flatten() },
+          "Invalid typed offer creation config"
+        );
+        return deps.buildResponseError(reply, 500, "Invalid typed offer creation config", typedBody.error.flatten());
+      }
+      const validation = validateOfferInput({
+        type: typedBody.data.type,
+        valueJson: typedBody.data.valueJson,
+        constraints: typedBody.data.constraints,
+        startAt: typedBody.data.startAt,
+        endAt: typedBody.data.endAt
+      });
+      const variantValidation = validateVariants(typedBody.data.variants);
+      if (!validation.valid || !variantValidation.valid) {
+        return deps.buildResponseError(reply, 400, "Typed offer validation failed", {
+          errors: [...validation.errors, ...variantValidation.errors],
+          warnings: [...validation.warnings, ...variantValidation.warnings]
+        });
+      }
+      const created = await deps.prisma.$transaction(async (tx) => {
+        const latest = await tx.offer.findFirst({ where: { environment, key: typedBody.data.key }, orderBy: { version: "desc" } });
+        const nowDate = deps.now();
+        return tx.offer.create({
+          data: {
+            environment,
+            key: typedBody.data.key,
+            version: (latest?.version ?? 0) + 1,
+            name: typedBody.data.name,
+            description: typedBody.data.description,
+            status: typedBody.data.status ?? "DRAFT",
+            tags: typedBody.data.tags ? toInputJson(typedBody.data.tags) : Prisma.JsonNull,
+            type: typedBody.data.type,
+            valueJson: toInputJson(typedBody.data.valueJson),
+            constraints: typedBody.data.constraints ? toInputJson(typedBody.data.constraints) : Prisma.JsonNull,
+            tokenBindings: typedBody.data.tokenBindings ? toInputJson(typedBody.data.tokenBindings) : Prisma.JsonNull,
+            startAt: typedBody.data.startAt ? new Date(typedBody.data.startAt) : null,
+            endAt: typedBody.data.endAt ? new Date(typedBody.data.endAt) : null,
+            submittedAt: typedBody.data.status === "PENDING_APPROVAL" ? nowDate : null,
+            approvedAt: typedBody.data.status === "ACTIVE" ? nowDate : null,
+            archivedAt: typedBody.data.status === "ARCHIVED" ? nowDate : null,
+            activatedAt: typedBody.data.status === "ACTIVE" ? nowDate : null,
+            variants: typedBody.data.variants ? { create: typedBody.data.variants.map(variantCreateData) } : undefined
+          },
+          include: { variants: { orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }] } }
+        });
+      });
+      await recordAudit({
+        environment,
+        entityType: "offer",
+        entityId: created.id,
+        entityKey: created.key,
+        version: created.version,
+        action: "typed_create",
+        actorId,
+        meta: { assetType: draft.assetType, targetEntityType: draft.targetEntityType, routePath: draft.routePath }
+      });
+      return reply.code(201).send({
+        item: serializeOffer(created),
+        created: {
+          assetType: draft.assetType,
+          assetTypeLabel: draft.assetTypeLabel,
+          category: draft.category,
+          targetEntityType: draft.targetEntityType,
+          routePath: draft.routePath,
+          compatibility: draft.compatibility,
+          guidance: draft.guidance
+        },
+        validation: { ...validation, warnings: [...validation.warnings, ...variantValidation.warnings] }
+      });
+    }
+
+    if (draft.targetEntityType === "bundle") {
+      const typedBody = assetBundleBodySchema.safeParse(draft.body);
+      if (!typedBody.success) {
+        request.log.warn(
+          { event: "activation_asset_typed_create_invalid_config", assetType: draft.assetType, issues: typedBody.error.flatten() },
+          "Invalid typed bundle creation config"
+        );
+        return deps.buildResponseError(reply, 500, "Invalid typed bundle creation config", typedBody.error.flatten());
+      }
+      const warnings = !typedBody.data.offerKey && !typedBody.data.contentKey ? ["Bundle should reference at least one offer or content block."] : [];
+      const latest = await (deps.prisma as any).assetBundle.findFirst({ where: { environment, key: typedBody.data.key }, orderBy: { version: "desc" } });
+      const created = await (deps.prisma as any).assetBundle.create({
+        data: {
+          environment,
+          key: typedBody.data.key,
+          name: typedBody.data.name,
+          description: typedBody.data.description ?? null,
+          status: typedBody.data.status ?? "DRAFT",
+          version: (latest?.version ?? 0) + 1,
+          offerKey: typedBody.data.offerKey ?? null,
+          contentKey: typedBody.data.contentKey ?? null,
+          templateKey: typedBody.data.templateKey ?? null,
+          placementKeys: toInputJson(typedBody.data.placementKeys ?? []),
+          channels: toInputJson(typedBody.data.channels ?? []),
+          locales: toInputJson(typedBody.data.locales ?? []),
+          tags: toInputJson(typedBody.data.tags ?? []),
+          useCase: typedBody.data.useCase ?? null,
+          metadataJson: toInputJson(typedBody.data.metadataJson ?? {}),
+          submittedAt: typedBody.data.status === "PENDING_APPROVAL" ? deps.now() : null,
+          approvedAt: typedBody.data.status === "ACTIVE" ? deps.now() : null,
+          activatedAt: typedBody.data.status === "ACTIVE" ? deps.now() : null,
+          archivedAt: typedBody.data.status === "ARCHIVED" ? deps.now() : null
+        }
+      });
+      await recordAudit({
+        environment,
+        entityType: "asset_bundle",
+        entityId: created.id,
+        entityKey: created.key,
+        version: created.version,
+        action: "typed_create",
+        actorId,
+        meta: { assetType: draft.assetType, targetEntityType: draft.targetEntityType, routePath: draft.routePath, warnings }
+      });
+      return reply.code(201).send({
+        item: serializeAssetBundle(created),
+        created: {
+          assetType: draft.assetType,
+          assetTypeLabel: draft.assetTypeLabel,
+          category: draft.category,
+          targetEntityType: draft.targetEntityType,
+          routePath: draft.routePath,
+          compatibility: draft.compatibility,
+          guidance: draft.guidance
+        },
+        validation: { valid: true, errors: [], warnings }
+      });
+    }
+
+    const typedBody = contentCreateBodySchema.safeParse(draft.body);
+    if (!typedBody.success) {
+      request.log.warn(
+        { event: "activation_asset_typed_create_invalid_config", assetType: draft.assetType, issues: typedBody.error.flatten() },
+        "Invalid typed content creation config"
+      );
+      return deps.buildResponseError(reply, 500, "Invalid typed content creation config", typedBody.error.flatten());
+    }
+    const validation = validateContentInput({
+      schemaJson: typedBody.data.schemaJson,
+      localesJson: typedBody.data.localesJson,
+      tokenBindings: typedBody.data.tokenBindings
+    });
+    const variantValidation = validateVariants(typedBody.data.variants);
+    if (!validation.valid || !variantValidation.valid) {
+      return deps.buildResponseError(reply, 400, "Typed content validation failed", {
+        errors: [...validation.errors, ...variantValidation.errors],
+        warnings: [...validation.warnings, ...variantValidation.warnings]
+      });
+    }
+    const created = await deps.prisma.$transaction(async (tx) => {
+      const latest = await tx.contentBlock.findFirst({ where: { environment, key: typedBody.data.key }, orderBy: { version: "desc" } });
+      const nowDate = deps.now();
+      return tx.contentBlock.create({
+        data: {
+          environment,
+          key: typedBody.data.key,
+          version: (latest?.version ?? 0) + 1,
+          name: typedBody.data.name,
+          description: typedBody.data.description,
+          status: typedBody.data.status ?? "DRAFT",
+          tags: typedBody.data.tags ? toInputJson(typedBody.data.tags) : Prisma.JsonNull,
+          templateId: typedBody.data.templateId,
+          schemaJson: typedBody.data.schemaJson ? toInputJson(typedBody.data.schemaJson) : Prisma.JsonNull,
+          localesJson: toInputJson(typedBody.data.localesJson),
+          tokenBindings: typedBody.data.tokenBindings ? toInputJson(typedBody.data.tokenBindings) : Prisma.JsonNull,
+          startAt: typedBody.data.startAt ? new Date(typedBody.data.startAt) : null,
+          endAt: typedBody.data.endAt ? new Date(typedBody.data.endAt) : null,
+          submittedAt: typedBody.data.status === "PENDING_APPROVAL" ? nowDate : null,
+          approvedAt: typedBody.data.status === "ACTIVE" ? nowDate : null,
+          archivedAt: typedBody.data.status === "ARCHIVED" ? nowDate : null,
+          activatedAt: typedBody.data.status === "ACTIVE" ? nowDate : null,
+          variants: typedBody.data.variants ? { create: typedBody.data.variants.map(variantCreateData) } : undefined
+        },
+        include: { variants: { orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }] } }
+      });
+    });
+    await recordAudit({
+      environment,
+      entityType: "content_block",
+      entityId: created.id,
+      entityKey: created.key,
+      version: created.version,
+      action: "typed_create",
+      actorId,
+      meta: { assetType: draft.assetType, targetEntityType: draft.targetEntityType, routePath: draft.routePath }
+    });
+    if (draft.compatibility.templateKeys.length === 0) {
+      request.log.warn({ event: "activation_asset_typed_create_missing_template_defaults", assetType: draft.assetType }, "Typed creation missing template defaults");
+    }
+    return reply.code(201).send({
+      item: serializeContentBlock(created),
+      created: {
+        assetType: draft.assetType,
+        assetTypeLabel: draft.assetTypeLabel,
+        category: draft.category,
+        targetEntityType: draft.targetEntityType,
+        routePath: draft.routePath,
+        compatibility: draft.compatibility,
+        guidance: draft.guidance
+      },
+      validation: { ...validation, warnings: [...validation.warnings, ...variantValidation.warnings] }
+    });
   });
 
   deps.app.get("/v1/catalog/library/picker", async (request, reply) => {

@@ -60,6 +60,13 @@ const parsePayloadOrThrow = (editor: OfferEditorState) => {
   };
 };
 
+const routeKeyParam = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return new URLSearchParams(window.location.search).get("key")?.trim() || null;
+};
+
 export default function CatalogOffersPage() {
   const { hasPermission } = usePermissions();
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -107,7 +114,12 @@ export default function CatalogOffersPage() {
       setTagSuggestions(tags.offerTags ?? []);
 
       if (offers.items.length > 0) {
-        const active = selectedId ? offers.items.find((item) => item.id === selectedId) : offers.items[0];
+        const routeKey = routeKeyParam();
+        const active = routeKey
+          ? sortVersionsDesc(offers.items.filter((item) => item.key === routeKey))[0]
+          : selectedId
+            ? offers.items.find((item) => item.id === selectedId)
+            : offers.items[0];
         if (active) {
           const seed = makeOfferEditorSeed(active);
           setEditor(seed);
@@ -157,6 +169,13 @@ export default function CatalogOffersPage() {
 
   const valueParse = useMemo(() => safeJsonParse<Record<string, unknown>>(editor.valueJsonText), [editor.valueJsonText]);
   const constraintsParse = useMemo(() => safeJsonParse<Record<string, unknown>>(editor.constraintsJsonText), [editor.constraintsJsonText]);
+  const offerPreviewPayload = useMemo(() => {
+    if (!previewResult) {
+      return null;
+    }
+    const result = previewResult as { item?: { payload?: unknown }; payload?: unknown };
+    return readObject(result.item?.payload ?? result.payload ?? previewResult);
+  }, [previewResult]);
 
   useEffect(() => {
     if (!valueParse.value || !constraintsParse.value) {
@@ -555,7 +574,17 @@ export default function CatalogOffersPage() {
           <Button variant="outline" onClick={() => void runPreview()}>
             Preview en / inapp / home_top
           </Button>
-          <pre className="max-h-80 overflow-auto rounded-md bg-stone-950 p-3 text-xs text-stone-50">{JSON.stringify(previewResult, null, 2)}</pre>
+          <div className="rounded-md border border-stone-200 bg-white p-3 text-sm">
+            {offerPreviewPayload ? (
+              <>
+                <p className="font-medium">{String(offerPreviewPayload.title ?? offerPreviewPayload.name ?? (editor.name || "Resolved offer"))}</p>
+                <p className="mt-1 text-stone-700">{String(offerPreviewPayload.subtitle ?? offerPreviewPayload.description ?? offerPreviewPayload.code ?? "Runtime payload resolved for this preview context.")}</p>
+                <p className="mt-2 text-xs text-stone-500">Payload fields: {Object.keys(offerPreviewPayload).slice(0, 8).join(", ") || "none"}</p>
+              </>
+            ) : (
+              <p className="text-stone-600">Run preview to inspect the resolved offer payload and token warnings.</p>
+            )}
+          </div>
         </div>
         <div className="space-y-2">
           <h3 className="font-semibold">Usage & Dependencies</h3>
