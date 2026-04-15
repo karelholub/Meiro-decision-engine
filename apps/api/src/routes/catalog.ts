@@ -6,6 +6,29 @@ import { WbsMappingConfigSchema, mapWbsLookupToProfile } from "@decisioning/wbs-
 import { z } from "zod";
 import type { JsonCache } from "../lib/cache";
 import { createCatalogResolver, extractTemplateTokens } from "../services/catalogResolver";
+import {
+  buildActivationLibraryItem,
+  collectActivationPrimitiveReferences,
+  evaluateActivationCompatibility,
+  filterActivationLibraryItems,
+  inferActivationAssetType,
+  normalizeActivationChannel,
+  type ActivationAssetEntityType,
+  type ActivationLibraryAssetInput,
+  type ActivationPrimitiveReference
+} from "../services/activationAssetLibrary";
+import {
+  analyzeCatalogImpact,
+  buildCatalogProductDiff,
+  buildCatalogTasks,
+  classifyArchiveConsequences,
+  evaluateCatalogReadiness,
+  normalizeStringList,
+  variantRuntimeEligible as changeVariantRuntimeEligible,
+  type CatalogChangeAsset,
+  type CatalogChangeCheck,
+  type CatalogReferenceCounts
+} from "../services/catalogChangeManagement";
 
 const isObject = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,6 +126,39 @@ const listQuerySchema = z.object({
 const assetQuerySchema = z.object({
   type: z.enum(["offer", "content", "bundle"]),
   key: z.string().min(1)
+});
+
+const activationLibraryQuerySchema = z.object({
+  q: z.string().optional(),
+  category: z.enum(["primitive", "channel", "composite"]).optional(),
+  assetType: z
+    .enum([
+      "image",
+      "copy_snippet",
+      "cta",
+      "offer",
+      "website_banner",
+      "popup_banner",
+      "email_block",
+      "push_message",
+      "whatsapp_message",
+      "journey_asset",
+      "bundle"
+    ])
+    .optional(),
+  channel: z.string().optional(),
+  templateKey: z.string().optional(),
+  placementKey: z.string().optional(),
+  locale: z.string().optional(),
+  status: catalogStatusSchema.optional(),
+  includeUnready: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((value) => value === true || value === "true")
+});
+
+const activationPickerQuerySchema = activationLibraryQuerySchema.extend({
+  journeyNodeContext: z.string().optional()
 });
 
 const assetBundleBodySchema = z.object({
@@ -871,6 +927,266 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     };
   };
 
+  const fetchAssetVersions = async (environment: Environment, type: "offer" | "content" | "bundle", key: string) => {
+    if (type === "offer") {
+      return deps.prisma.offer.findMany({
+        where: { environment, key },
+        include: { variants: true },
+        orderBy: { version: "desc" }
+      });
+    }
+    if (type === "content") {
+      return deps.prisma.contentBlock.findMany({
+        where: { environment, key },
+        include: { variants: true },
+        orderBy: { version: "desc" }
+      });
+    }
+    return ((deps.prisma as any).assetBundle?.findMany?.({
+      where: { environment, key },
+      orderBy: { version: "desc" }
+    }) ?? Promise.resolve([])) as Promise<any[]>;
+  };
+
+  const toChangeAsset = (type: "offer" | "content" | "bundle", item: any): CatalogChangeAsset => ({
+    type,
+    key: item.key,
+    name: item.name ?? null,
+    status: item.status ?? null,
+    version: item.version ?? null,
+    variants: Array.isArray(item.variants) ? item.variants : [],
+    startAt: item.startAt ?? null,
+    endAt: item.endAt ?? null,
+    valueJson: item.valueJson,
+    constraints: item.constraints,
+    tokenBindings: item.tokenBindings,
+    localesJson: item.localesJson,
+    schemaJson: item.schemaJson,
+    templateId: item.templateId ?? null,
+    offerKey: item.offerKey ?? null,
+    contentKey: item.contentKey ?? null,
+    templateKey: item.templateKey ?? null,
+    placementKeys: item.placementKeys,
+    channels: item.channels,
+    locales: item.locales,
+    metadataJson: item.metadataJson
+  });
+
+  const toLibraryAssetInput = (type: ActivationAssetEntityType, item: any): ActivationLibraryAssetInput => ({
+    entityType: type,
+    key: item.key,
+    name: item.name ?? item.key,
+    description: item.description ?? null,
+    status: item.status ?? "UNKNOWN",
+    version: item.version ?? 1,
+    updatedAt: item.updatedAt ?? deps.now(),
+    tags: item.tags,
+    templateId: item.templateId ?? null,
+    offerKey: item.offerKey ?? null,
+    contentKey: item.contentKey ?? null,
+    templateKey: item.templateKey ?? null,
+    placementKeys: item.placementKeys,
+    channels: item.channels,
+    locales: item.locales,
+    metadataJson: item.metadataJson,
+    schemaJson: item.schemaJson,
+    valueJson: item.valueJson,
+    localesJson: item.localesJson,
+    variants: Array.isArray(item.variants) ? item.variants : []
+  });
+
+  const activeReferenceCounts = (dependencies: Awaited<ReturnType<typeof findAssetDependencies>>): CatalogReferenceCounts => ({
+    decisions: dependencies.activeReferences.decisions.length,
+    campaigns: dependencies.activeReferences.campaigns.length,
+    experiments: dependencies.activeReferences.experiments.length,
+    bundles: Array.isArray((dependencies.activeReferences as any).bundles) ? (dependencies.activeReferences as any).bundles.length : 0
+  });
+
+  const fetchLatestLibrarySource = async (environment: Environment, filterType?: ActivationAssetEntityType, key?: string) => {
+    const [offers, contents, bundles] = await Promise.all([
+      !filterType || filterType === "offer"
+        ? deps.prisma.offer.findMany({
+            where: { environment, ...(key ? { key } : {}), status: { not: "ARCHIVED" } },
+            include: { variants: true },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([]),
+      !filterType || filterType === "content"
+        ? deps.prisma.contentBlock.findMany({
+            where: { environment, ...(key ? { key } : {}), status: { not: "ARCHIVED" } },
+            include: { variants: true },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([]),
+      !filterType || filterType === "bundle"
+        ? ((deps.prisma as any).assetBundle?.findMany?.({
+            where: { environment, ...(key ? { key } : {}), status: { not: "ARCHIVED" } },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          }) ?? Promise.resolve([]))
+        : Promise.resolve([])
+    ]);
+
+    const latestByKey = <T extends { key: string }>(items: T[]) => {
+      const seen = new Set<string>();
+      return items.filter((item) => {
+        if (seen.has(item.key)) return false;
+        seen.add(item.key);
+        return true;
+      });
+    };
+
+    return {
+      offers: latestByKey(offers),
+      contents: latestByKey(contents),
+      bundles: latestByKey(bundles as any[])
+    };
+  };
+
+  const knownPrimitiveKeys = (source: Awaited<ReturnType<typeof fetchLatestLibrarySource>>) => {
+    const known: Partial<Record<ActivationPrimitiveReference["kind"], Set<string>>> = {
+      offer: new Set(source.offers.map((offer) => offer.key))
+    };
+    for (const content of source.contents) {
+      const type = inferActivationAssetType(toLibraryAssetInput("content", content));
+      if (type === "image") known.image = new Set([...(known.image ?? []), content.key]);
+      if (type === "copy_snippet") known.copy_snippet = new Set([...(known.copy_snippet ?? []), content.key]);
+      if (type === "cta") known.cta = new Set([...(known.cta ?? []), content.key]);
+    }
+    return known;
+  };
+
+  const libraryPrimitiveChecks = async (environment: Environment, asset: CatalogChangeAsset): Promise<CatalogChangeCheck[]> => {
+    const source = await fetchLatestLibrarySource(environment);
+    const known = knownPrimitiveKeys(source);
+    const payloads = [asset.valueJson, asset.localesJson, ...(asset.variants ?? []).map((variant) => variant.payloadJson)].filter(
+      (entry) => entry !== undefined && entry !== null
+    );
+    const broken = payloads.flatMap((payload) => collectActivationPrimitiveReferences(payload, known)).filter((ref) => !ref.resolved);
+    return broken.map((ref) => ({
+      code: "LIBRARY_PRIMITIVE_REFERENCE_MISSING",
+      severity: "blocking",
+      message: `Activation asset references missing ${ref.kind} '${ref.key}' at ${ref.path}.`,
+      nextAction: "Create the referenced primitive asset or update the channel asset payload reference."
+    }));
+  };
+
+  const bundleComponentChecks = async (environment: Environment, asset: CatalogChangeAsset): Promise<CatalogChangeCheck[]> => {
+    if (asset.type !== "bundle") {
+      return [];
+    }
+    const checks: CatalogChangeCheck[] = [];
+    const now = deps.now();
+    const [offer, content] = await Promise.all([
+      asset.offerKey
+        ? deps.prisma.offer.findFirst({ where: { environment, key: asset.offerKey, status: "ACTIVE" }, include: { variants: true }, orderBy: { version: "desc" } })
+        : Promise.resolve(null),
+      asset.contentKey
+        ? deps.prisma.contentBlock.findFirst({ where: { environment, key: asset.contentKey, status: "ACTIVE" }, include: { variants: true }, orderBy: { version: "desc" } })
+        : Promise.resolve(null)
+    ]);
+    if (asset.offerKey && !offer) {
+      checks.push({
+        code: "BUNDLE_OFFER_NOT_RESOLVABLE",
+        severity: "blocking",
+        message: `Bundle references offer '${asset.offerKey}' but no ACTIVE version is available.`,
+        nextAction: "Activate the referenced offer or update the bundle to a resolvable offer."
+      });
+    }
+    if (asset.contentKey && !content) {
+      checks.push({
+        code: "BUNDLE_CONTENT_NOT_RESOLVABLE",
+        severity: "blocking",
+        message: `Bundle references content block '${asset.contentKey}' but no ACTIVE version is available.`,
+        nextAction: "Activate the referenced content block or update the bundle to a resolvable content block."
+      });
+    }
+    if (offer?.variants?.length && !offer.variants.some((variant) => changeVariantRuntimeEligible(variant, now))) {
+      checks.push({
+        code: "BUNDLE_OFFER_NO_RUNTIME_ELIGIBLE_VARIANTS",
+        severity: "blocking",
+        message: `Bundle offer '${asset.offerKey}' has no runtime-eligible variants.`,
+        nextAction: "Add an eligible offer variant or update the bundle offer."
+      });
+    }
+    if (content?.variants?.length && !content.variants.some((variant) => changeVariantRuntimeEligible(variant, now))) {
+      checks.push({
+        code: "BUNDLE_CONTENT_NO_RUNTIME_ELIGIBLE_VARIANTS",
+        severity: "blocking",
+        message: `Bundle content block '${asset.contentKey}' has no runtime-eligible variants.`,
+        nextAction: "Add an eligible content variant or update the bundle content block."
+      });
+    }
+    if (asset.templateKey) {
+      const template = await deps.prisma.inAppTemplate.findFirst({ where: { environment, key: asset.templateKey }, select: { key: true } });
+      if (!template) {
+        checks.push({
+          code: "BUNDLE_TEMPLATE_MISSING",
+          severity: "warning",
+          message: `Bundle template '${asset.templateKey}' does not exist in this environment.`,
+          nextAction: "Create the template or remove the template compatibility metadata."
+        });
+      }
+    }
+    const placementKeys = normalizeStringList(asset.placementKeys);
+    if (placementKeys.length > 0) {
+      const placements = await deps.prisma.inAppPlacement.findMany({ where: { environment, key: { in: placementKeys } }, select: { key: true } });
+      const existing = new Set(placements.map((placement) => placement.key));
+      const missing = placementKeys.filter((placementKey) => !existing.has(placementKey));
+      if (missing.length > 0) {
+        checks.push({
+          code: "BUNDLE_PLACEMENT_MISSING",
+          severity: "warning",
+          message: `Bundle placement compatibility includes missing key${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}.`,
+          nextAction: "Create the missing placement or update bundle placement compatibility."
+        });
+      }
+    }
+    return checks;
+  };
+
+  const buildChangeManagementPayload = async (environment: Environment, type: "offer" | "content" | "bundle", key: string) => {
+    const versions = await fetchAssetVersions(environment, type, key);
+    const current = versions[0] ? toChangeAsset(type, versions[0]) : null;
+    if (!current) {
+      return null;
+    }
+    const previous = versions[1] ? toChangeAsset(type, versions[1]) : null;
+    const dependencies = await findAssetDependencies(environment, type, key);
+    const componentChecks = [...(await bundleComponentChecks(environment, current)), ...(await libraryPrimitiveChecks(environment, current))];
+    const readiness = evaluateCatalogReadiness({
+      asset: current,
+      now: deps.now(),
+      componentChecks,
+      dependencyCounts: activeReferenceCounts(dependencies)
+    });
+    const impact = analyzeCatalogImpact({
+      before: previous,
+      after: current,
+      now: deps.now(),
+      activeReferences: activeReferenceCounts(dependencies)
+    });
+    const archive = classifyArchiveConsequences({
+      asset: current,
+      activeReferences: activeReferenceCounts(dependencies),
+      readiness
+    });
+    const diff = buildCatalogProductDiff(previous, current);
+    return {
+      asset: {
+        type,
+        key,
+        version: current.version,
+        status: current.status
+      },
+      comparedTo: previous ? { version: previous.version, status: previous.status } : null,
+      readiness,
+      impact,
+      archive,
+      diff,
+      dependencies
+    };
+  };
+
   deps.app.get("/v1/catalog/assets/dependencies", async (request, reply) => {
     const environment = deps.resolveEnvironment(request, reply);
     if (!environment) {
@@ -883,6 +1199,108 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     return {
       asset: query.data,
       dependencies: await findAssetDependencies(environment, query.data.type, query.data.key)
+    };
+  });
+
+  deps.app.get("/v1/catalog/assets/readiness", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = assetQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const payload = await buildChangeManagementPayload(environment, query.data.type, query.data.key);
+    if (!payload) {
+      return deps.buildResponseError(reply, 404, "Asset not found");
+    }
+    request.log.info(
+      {
+        event: "catalog_readiness_evaluated",
+        assetType: query.data.type,
+        assetKey: query.data.key,
+        status: payload.readiness.status,
+        riskLevel: payload.readiness.riskLevel,
+        checkCodes: payload.readiness.checks.map((check) => check.code)
+      },
+      "Catalog readiness evaluated"
+    );
+    return {
+      asset: payload.asset,
+      readiness: payload.readiness
+    };
+  });
+
+  deps.app.get("/v1/catalog/assets/impact", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = assetQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const payload = await buildChangeManagementPayload(environment, query.data.type, query.data.key);
+    if (!payload) {
+      return deps.buildResponseError(reply, 404, "Asset not found");
+    }
+    request.log.info(
+      {
+        event: "catalog_impact_evaluated",
+        assetType: query.data.type,
+        assetKey: query.data.key,
+        releaseRiskLevel: payload.impact.releaseRiskLevel,
+        activeReferences: payload.impact.activeReferences,
+        warningCodes: payload.impact.warnings.map((warning) => warning.code)
+      },
+      "Catalog impact evaluated"
+    );
+    return {
+      asset: payload.asset,
+      comparedTo: payload.comparedTo,
+      impact: payload.impact,
+      diff: payload.diff
+    };
+  });
+
+  deps.app.get("/v1/catalog/assets/diff", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = assetQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const payload = await buildChangeManagementPayload(environment, query.data.type, query.data.key);
+    if (!payload) {
+      return deps.buildResponseError(reply, 404, "Asset not found");
+    }
+    return {
+      asset: payload.asset,
+      comparedTo: payload.comparedTo,
+      diff: payload.diff
+    };
+  });
+
+  deps.app.get("/v1/catalog/assets/archive-preview", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = assetQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const payload = await buildChangeManagementPayload(environment, query.data.type, query.data.key);
+    if (!payload) {
+      return deps.buildResponseError(reply, 404, "Asset not found");
+    }
+    return {
+      asset: payload.asset,
+      archive: payload.archive,
+      impact: payload.impact
     };
   });
 
@@ -1122,6 +1540,165 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     };
   };
 
+  const buildActivationLibraryItems = async (environment: Environment) => {
+    const source = await fetchLatestLibrarySource(environment);
+    const known = knownPrimitiveKeys(source);
+    const inputs: Array<{ type: ActivationAssetEntityType; item: any }> = [
+      ...source.offers.map((item) => ({ type: "offer" as const, item })),
+      ...source.contents.map((item) => ({ type: "content" as const, item })),
+      ...source.bundles.map((item) => ({ type: "bundle" as const, item }))
+    ];
+
+    return Promise.all(
+      inputs.map(async ({ type, item }) => {
+        const [changePayload, health, dependencies] = await Promise.all([
+          buildChangeManagementPayload(environment, type, item.key),
+          buildHealthItem({
+            environment,
+            type,
+            key: item.key,
+            name: item.name,
+            status: item.status,
+            version: item.version,
+            variants: item.variants,
+            startAt: item.startAt,
+            endAt: item.endAt,
+            tags: item.tags,
+            offerKey: item.offerKey ?? null,
+            contentKey: item.contentKey ?? null,
+            templateKey: item.templateKey ?? null,
+            placementKeys: item.placementKeys
+          }),
+          findAssetDependencies(environment, type, item.key)
+        ]);
+        const usedInCount = dependencies.decisions.length + dependencies.campaigns.length + dependencies.experiments.length + dependencies.bundles.length;
+        return buildActivationLibraryItem({
+          asset: toLibraryAssetInput(type, item),
+          knownPrimitiveKeys: known,
+          readiness: changePayload?.readiness
+            ? {
+                status: changePayload.readiness.status,
+                riskLevel: changePayload.readiness.riskLevel,
+                summary: changePayload.readiness.summary
+              }
+            : undefined,
+          health: health.health as "healthy" | "warning" | "critical",
+          usedInCount
+        });
+      })
+    );
+  };
+
+  deps.app.get("/v1/catalog/library", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = activationLibraryQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const items = await buildActivationLibraryItems(environment);
+    const filtered = filterActivationLibraryItems(items, query.data);
+    request.log.info(
+      {
+        event: "activation_asset_library_listed",
+        environment,
+        filters: {
+          ...query.data,
+          channel: normalizeActivationChannel(query.data.channel) ?? query.data.channel ?? null
+        },
+        total: items.length,
+        returned: filtered.length
+      },
+      "Activation asset library listed"
+    );
+    return {
+      generatedAt: deps.now().toISOString(),
+      semantics: {
+        primitive: "Reusable building blocks such as images, copy snippets, CTAs, and offers.",
+        channel: "Channel-ready content assets that resolve through existing content and offer runtime paths.",
+        composite: "Asset bundles that package existing governed assets together.",
+        compatibility: "Derived from explicit metadata where present, then template, placement, channel, locale, variant, and tag conventions."
+      },
+      facets: {
+        assetTypes: [
+          "image",
+          "copy_snippet",
+          "cta",
+          "offer",
+          "website_banner",
+          "popup_banner",
+          "email_block",
+          "push_message",
+          "whatsapp_message",
+          "journey_asset",
+          "bundle"
+        ],
+        channels: ["website_personalization", "popup_banner", "email", "mobile_push", "whatsapp", "journey_canvas"]
+      },
+      items: filtered
+    };
+  });
+
+  deps.app.get("/v1/catalog/library/picker", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = activationPickerQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const items = await buildActivationLibraryItems(environment);
+    const selected = items.filter((item) => {
+      if (query.data.category && item.category !== query.data.category) return false;
+      if (query.data.assetType && item.assetType !== query.data.assetType) return false;
+      if (query.data.status && item.status !== query.data.status) return false;
+      if (query.data.q && !`${item.key} ${item.name} ${item.assetTypeLabel}`.toLowerCase().includes(query.data.q.toLowerCase())) return false;
+      return true;
+    });
+    const evaluated = selected.map((item) => ({
+      item,
+      decision: evaluateActivationCompatibility(item, query.data)
+    }));
+    const eligible = evaluated.filter((entry) => entry.decision.eligible).map((entry) => entry.item);
+    const rejected = evaluated
+      .filter((entry) => !entry.decision.eligible)
+      .map((entry) => ({
+        id: entry.item.id,
+        key: entry.item.key,
+        name: entry.item.name,
+        assetType: entry.item.assetType,
+        reasons: entry.decision.reasons
+      }));
+    request.log.info(
+      {
+        event: "activation_asset_picker_filtered",
+        environment,
+        channel: normalizeActivationChannel(query.data.channel) ?? null,
+        templateKey: query.data.templateKey ?? null,
+        placementKey: query.data.placementKey ?? null,
+        journeyNodeContext: query.data.journeyNodeContext ?? null,
+        eligibleCount: eligible.length,
+        rejectedCount: rejected.length
+      },
+      "Activation asset picker filtered"
+    );
+    return {
+      generatedAt: deps.now().toISOString(),
+      context: {
+        channel: normalizeActivationChannel(query.data.channel),
+        templateKey: query.data.templateKey ?? null,
+        placementKey: query.data.placementKey ?? null,
+        locale: query.data.locale ?? null,
+        journeyNodeContext: query.data.journeyNodeContext ?? null
+      },
+      items: eligible,
+      rejected
+    };
+  });
+
   deps.app.get("/v1/catalog/assets/health", async (request, reply) => {
     const environment = deps.resolveEnvironment(request, reply);
     if (!environment) {
@@ -1224,6 +1801,66 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
         critical: "The asset is expired or has no runtime-eligible variants."
       },
       items: healthItems.sort((a, b) => a.type.localeCompare(b.type) || a.key.localeCompare(b.key))
+    };
+  });
+
+  deps.app.get("/v1/catalog/assets/tasks", async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const query = assetQuerySchema.pick({ type: true }).partial().safeParse(request.query);
+    if (!query.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+    const [offers, contents, bundles] = await Promise.all([
+      !query.data.type || query.data.type === "offer"
+        ? deps.prisma.offer.findMany({ where: { environment, status: { not: "ARCHIVED" } }, orderBy: [{ key: "asc" }, { version: "desc" }] })
+        : Promise.resolve([]),
+      !query.data.type || query.data.type === "content"
+        ? deps.prisma.contentBlock.findMany({ where: { environment, status: { not: "ARCHIVED" } }, orderBy: [{ key: "asc" }, { version: "desc" }] })
+        : Promise.resolve([]),
+      !query.data.type || query.data.type === "bundle"
+        ? ((deps.prisma as any).assetBundle?.findMany?.({ where: { environment, status: { not: "ARCHIVED" } }, orderBy: [{ key: "asc" }, { version: "desc" }] }) ?? Promise.resolve([]))
+        : Promise.resolve([])
+    ]);
+    const latestKeys = (items: Array<{ key: string }>) => {
+      const seen = new Set<string>();
+      return items.filter((item) => {
+        if (seen.has(item.key)) return false;
+        seen.add(item.key);
+        return true;
+      });
+    };
+    const payloads = await Promise.all([
+      ...latestKeys(offers).map((offer) => buildChangeManagementPayload(environment, "offer", offer.key)),
+      ...latestKeys(contents).map((content) => buildChangeManagementPayload(environment, "content", content.key)),
+      ...latestKeys(bundles as any[]).map((bundle: any) => buildChangeManagementPayload(environment, "bundle", bundle.key))
+    ]);
+    const items = buildCatalogTasks(
+      payloads
+        .filter((payload): payload is NonNullable<typeof payload> => Boolean(payload))
+        .map((payload) => ({
+          asset: {
+            type: payload.asset.type,
+            key: payload.asset.key,
+            status: payload.asset.status,
+            version: payload.asset.version
+          },
+          readiness: payload.readiness,
+          archive: payload.archive
+        }))
+    );
+    request.log.info({ event: "catalog_operator_tasks_evaluated", environment, taskCount: items.length }, "Catalog operator tasks evaluated");
+    return {
+      generatedAt: deps.now().toISOString(),
+      semantics: {
+        blocking: "Fix before publishing or promoting.",
+        high: "Review before archive or release.",
+        medium: "Operational warning with likely remediation.",
+        low: "Informational."
+      },
+      items
     };
   });
 
@@ -1414,9 +2051,11 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       return deps.buildResponseError(reply, 404, "Bundle not found");
     }
     const dependencies = await findAssetDependencies(environment, "bundle", params.data.key);
+    const changePayload = await buildChangeManagementPayload(environment, "bundle", params.data.key);
     await (deps.prisma as any).assetBundle.updateMany({ where: { environment, key: params.data.key, status: { not: "ARCHIVED" } }, data: { status: "ARCHIVED", archivedAt: deps.now() } });
-    await recordAudit({ environment, entityType: "asset_bundle", entityId: existing.id, entityKey: existing.key, version: existing.version, action: "archive", actorId: normalizeActorId(request), meta: { archiveSafety: dependencies.archiveSafety } });
-    return { archivedKey: params.data.key, archiveSafety: dependencies.archiveSafety, dependencies };
+    await recordAudit({ environment, entityType: "asset_bundle", entityId: existing.id, entityKey: existing.key, version: existing.version, action: "archive", actorId: normalizeActorId(request), meta: { archiveSafety: dependencies.archiveSafety, archiveConsequence: changePayload?.archive } });
+    request.log.info({ event: "catalog_archive_consequence", assetType: "bundle", assetKey: params.data.key, riskLevel: changePayload?.archive.riskLevel, reasonCodes: changePayload?.archive.consequences.map((item) => item.code) ?? [] }, "Catalog archive consequence evaluated");
+    return { archivedKey: params.data.key, archiveSafety: dependencies.archiveSafety, archiveConsequence: changePayload?.archive, dependencies };
   });
 
   deps.app.post("/v1/catalog/bundles/:key/preview", async (request, reply) => {
@@ -1877,6 +2516,7 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     }
 
     const dependencies = await findAssetDependencies(environment, "offer", params.data.key);
+    const changePayload = await buildChangeManagementPayload(environment, "offer", params.data.key);
     await deps.prisma.offer.updateMany({
       where: {
         environment,
@@ -1900,13 +2540,16 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       action: "archive",
       actorId: normalizeActorId(request),
       meta: {
-        archiveSafety: dependencies.archiveSafety
+        archiveSafety: dependencies.archiveSafety,
+        archiveConsequence: changePayload?.archive
       }
     });
+    request.log.info({ event: "catalog_archive_consequence", assetType: "offer", assetKey: params.data.key, riskLevel: changePayload?.archive.riskLevel, reasonCodes: changePayload?.archive.consequences.map((item) => item.code) ?? [] }, "Catalog archive consequence evaluated");
 
     return {
       archivedKey: params.data.key,
       archiveSafety: dependencies.archiveSafety,
+      archiveConsequence: changePayload?.archive,
       dependencies
     };
   });
@@ -1977,13 +2620,20 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       ...(variant.endAt && variant.endAt.getTime() < deps.now().getTime() ? ["PROMOTING_EXPIRED_VARIANT"] : []),
       ...(variant.startAt && variant.startAt.getTime() > deps.now().getTime() ? ["PROMOTING_NOT_STARTED_VARIANT"] : [])
     ];
+    const beforeAsset = toChangeAsset("offer", offer);
     await deps.prisma.$transaction([
       deps.prisma.offerVariant.updateMany({ where: { offerId: offer.id }, data: { isDefault: false } }),
       deps.prisma.offerVariant.update({ where: { id: variant.id }, data: { isDefault: true, locale: null, channel: variant.channel, placementKey: null } })
     ]);
-    await recordAudit({ environment, entityType: "offer", entityId: offer.id, entityKey: offer.key, version: offer.version, action: "variant.make_default", actorId: normalizeActorId(request), meta: { variantId: variant.id, experimentKey: (variant as any).experimentKey ?? null, warnings } });
     const updated = await deps.prisma.offer.findFirst({ where: { id: offer.id }, include: { variants: { orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }] } } });
-    return { item: updated ? serializeOffer(updated) : null, warnings };
+    const dependencies = await findAssetDependencies(environment, "offer", offer.key);
+    const impact = updated
+      ? analyzeCatalogImpact({ before: beforeAsset, after: toChangeAsset("offer", updated), now: deps.now(), activeReferences: activeReferenceCounts(dependencies) })
+      : null;
+    const diff = updated ? buildCatalogProductDiff(beforeAsset, toChangeAsset("offer", updated)) : null;
+    await recordAudit({ environment, entityType: "offer", entityId: offer.id, entityKey: offer.key, version: offer.version, action: "variant.make_default", actorId: normalizeActorId(request), meta: { variantId: variant.id, experimentKey: (variant as any).experimentKey ?? null, warnings, impact, diff } });
+    request.log.info({ event: "catalog_make_default_consequence", assetType: "offer", assetKey: offer.key, variantId: variant.id, warningCodes: warnings, impactWarnings: impact?.warnings.map((item) => item.code) ?? [] }, "Catalog make-default consequence evaluated");
+    return { item: updated ? serializeOffer(updated) : null, warnings, impact, diff };
   });
 
   deps.app.get("/v1/catalog/content", async (request, reply) => {
@@ -2325,6 +2975,7 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     }
 
     const dependencies = await findAssetDependencies(environment, "content", params.data.key);
+    const changePayload = await buildChangeManagementPayload(environment, "content", params.data.key);
     await deps.prisma.contentBlock.updateMany({
       where: {
         environment,
@@ -2348,13 +2999,16 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       action: "archive",
       actorId: normalizeActorId(request),
       meta: {
-        archiveSafety: dependencies.archiveSafety
+        archiveSafety: dependencies.archiveSafety,
+        archiveConsequence: changePayload?.archive
       }
     });
+    request.log.info({ event: "catalog_archive_consequence", assetType: "content", assetKey: params.data.key, riskLevel: changePayload?.archive.riskLevel, reasonCodes: changePayload?.archive.consequences.map((item) => item.code) ?? [] }, "Catalog archive consequence evaluated");
 
     return {
       archivedKey: params.data.key,
       archiveSafety: dependencies.archiveSafety,
+      archiveConsequence: changePayload?.archive,
       dependencies
     };
   });
@@ -2381,13 +3035,20 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       ...(variant.endAt && variant.endAt.getTime() < deps.now().getTime() ? ["PROMOTING_EXPIRED_VARIANT"] : []),
       ...(variant.startAt && variant.startAt.getTime() > deps.now().getTime() ? ["PROMOTING_NOT_STARTED_VARIANT"] : [])
     ];
+    const beforeAsset = toChangeAsset("content", content);
     await deps.prisma.$transaction([
       deps.prisma.contentBlockVariant.updateMany({ where: { contentBlockId: content.id }, data: { isDefault: false } }),
       deps.prisma.contentBlockVariant.update({ where: { id: variant.id }, data: { isDefault: true, locale: null, channel: variant.channel, placementKey: null } })
     ]);
-    await recordAudit({ environment, entityType: "content_block", entityId: content.id, entityKey: content.key, version: content.version, action: "variant.make_default", actorId: normalizeActorId(request), meta: { variantId: variant.id, experimentKey: (variant as any).experimentKey ?? null, warnings } });
     const updated = await deps.prisma.contentBlock.findFirst({ where: { id: content.id }, include: { variants: { orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }] } } });
-    return { item: updated ? serializeContentBlock(updated) : null, warnings };
+    const dependencies = await findAssetDependencies(environment, "content", content.key);
+    const impact = updated
+      ? analyzeCatalogImpact({ before: beforeAsset, after: toChangeAsset("content", updated), now: deps.now(), activeReferences: activeReferenceCounts(dependencies) })
+      : null;
+    const diff = updated ? buildCatalogProductDiff(beforeAsset, toChangeAsset("content", updated)) : null;
+    await recordAudit({ environment, entityType: "content_block", entityId: content.id, entityKey: content.key, version: content.version, action: "variant.make_default", actorId: normalizeActorId(request), meta: { variantId: variant.id, experimentKey: (variant as any).experimentKey ?? null, warnings, impact, diff } });
+    request.log.info({ event: "catalog_make_default_consequence", assetType: "content", assetKey: content.key, variantId: variant.id, warningCodes: warnings, impactWarnings: impact?.warnings.map((item) => item.code) ?? [] }, "Catalog make-default consequence evaluated");
+    return { item: updated ? serializeContentBlock(updated) : null, warnings, impact, diff };
   });
 
   deps.app.post("/v1/catalog/offers/validate", async (request, reply) => {

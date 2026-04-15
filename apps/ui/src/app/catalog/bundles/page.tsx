@@ -6,6 +6,7 @@ import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
+import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 
 const emptyBundle = {
   key: "",
@@ -33,6 +34,11 @@ export default function CatalogBundlesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editor, setEditor] = useState(emptyBundle);
   const [preview, setPreview] = useState<unknown | null>(null);
+  const [changeSummary, setChangeSummary] = useState<{
+    readiness: Awaited<ReturnType<typeof apiClient.catalog.assets.readiness>> | null;
+    impact: Awaited<ReturnType<typeof apiClient.catalog.assets.impact>> | null;
+    archive: Awaited<ReturnType<typeof apiClient.catalog.assets.archivePreview>> | null;
+  }>({ readiness: null, impact: null, archive: null });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -105,13 +111,19 @@ export default function CatalogBundlesPage() {
 
   const runPreview = async () => {
     if (!editor.key.trim()) return;
-    const response = await apiClient.catalog.bundles.preview(editor.key.trim(), {
-      locale: splitList(editor.localesText)[0] ?? "en",
-      channel: splitList(editor.channelsText)[0] ?? "inapp",
-      placementKey: splitList(editor.placementKeysText)[0] ?? "home_top",
-      context: { channel: splitList(editor.channelsText)[0] ?? "inapp", placement: splitList(editor.placementKeysText)[0] ?? "home_top" }
-    });
+    const [response, readiness, impact, archive] = await Promise.all([
+      apiClient.catalog.bundles.preview(editor.key.trim(), {
+        locale: splitList(editor.localesText)[0] ?? "en",
+        channel: splitList(editor.channelsText)[0] ?? "inapp",
+        placementKey: splitList(editor.placementKeysText)[0] ?? "home_top",
+        context: { channel: splitList(editor.channelsText)[0] ?? "inapp", placement: splitList(editor.placementKeysText)[0] ?? "home_top" }
+      }),
+      apiClient.catalog.assets.readiness({ type: "bundle", key: editor.key.trim() }),
+      apiClient.catalog.assets.impact({ type: "bundle", key: editor.key.trim() }),
+      apiClient.catalog.assets.archivePreview({ type: "bundle", key: editor.key.trim() })
+    ]);
     setPreview(response);
+    setChangeSummary({ readiness, impact, archive });
   };
 
   const loadIntoEditor = (item: CatalogAssetBundle) => {
@@ -165,6 +177,7 @@ export default function CatalogBundlesPage() {
         </aside>
 
         <div className="space-y-4">
+          {selected && editor.key.trim() ? <ActivationAssetProfilePanel entityType="bundle" assetKey={editor.key.trim()} /> : null}
           <section className="panel grid gap-3 p-4 md:grid-cols-2">
             <label className="text-sm">Key<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.key} onChange={(event) => setEditor((current) => ({ ...current, key: event.target.value }))} disabled={Boolean(selected)} /></label>
             <label className="text-sm">Name<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.name} onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))} /></label>
@@ -185,6 +198,17 @@ export default function CatalogBundlesPage() {
               <Button variant="danger" onClick={() => void archive()} disabled={!selected || !canWrite}>Archive</Button>
             </div>
           </section>
+          {changeSummary.readiness ? (
+            <section className="panel space-y-2 p-4 text-sm">
+              <h3 className="font-semibold">Readiness & Impact</h3>
+              <p>Publish readiness: {changeSummary.readiness.readiness.status} / risk {changeSummary.readiness.readiness.riskLevel}</p>
+              <p>Impact risk: {changeSummary.impact?.impact.releaseRiskLevel ?? "unknown"} · archive risk {changeSummary.archive?.archive.riskLevel ?? "unknown"}</p>
+              {changeSummary.impact?.diff.labels.length ? <p>Diff: {changeSummary.impact.diff.labels.slice(0, 4).join(" | ")}</p> : null}
+              {changeSummary.readiness.readiness.checks.slice(0, 4).map((check) => (
+                <p key={check.code} className={check.severity === "blocking" ? "text-red-700" : "text-stone-700"}>{check.code}: {check.nextAction}</p>
+              ))}
+            </section>
+          ) : null}
           <pre className="max-h-96 overflow-auto rounded-md bg-stone-950 p-3 text-xs text-stone-50">{JSON.stringify(preview, null, 2)}</pre>
         </div>
       </div>

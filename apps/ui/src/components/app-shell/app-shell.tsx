@@ -52,8 +52,9 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "catalog",
     label: "Catalog",
-    hint: "Reusable offers and content blocks",
+    hint: "Activation asset library",
     items: [
+      { href: "/catalog", label: "All Assets" },
       { href: "/catalog/offers", label: "Offers" },
       { href: "/catalog/content", label: "Content Blocks" },
       { href: "/catalog/bundles", label: "Asset Bundles" }
@@ -99,7 +100,7 @@ const defaultOpenState: Record<NavGroup["id"], boolean> = {
   configure: false
 };
 
-const isItemActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
+const isItemActive = (pathname: string, href: string) => pathname === href || (href !== "/catalog" && pathname.startsWith(`${href}/`));
 
 const navPermissionByHref: Record<string, string> = {
   "/overview": "logs.read",
@@ -115,6 +116,7 @@ const navPermissionByHref: Record<string, string> = {
   "/decisions": "decision.read",
   "/stacks": "stack.read",
   "/simulate": "simulator.run",
+  "/catalog": "catalog.content.read",
   "/catalog/offers": "catalog.offer.read",
   "/catalog/content": "catalog.content.read",
   "/catalog/bundles": "catalog.content.read",

@@ -3,6 +3,8 @@ import type { ActionType, DecisionOutput } from "@decisioning/dsl";
 import { parseLegacyKey, toLegacyKey } from "@decisioning/shared";
 import { RefSelect } from "../registry/RefSelect";
 import { useRegistry } from "../../lib/registry";
+import { ActivationAssetPicker } from "../catalog/ActivationAssetPicker";
+import type { ActivationAssetChannel, ActivationLibraryItem } from "../../lib/api";
 
 interface ActionTemplatePickerProps {
   title?: string;
@@ -49,6 +51,16 @@ const actionHints: Record<ActionType, string> = {
   message: "Use for in-app messaging outcomes with placement/template/ttl and tracking metadata.",
   personalize: "Use for deterministic variant selection and downstream personalization.",
   experiment: "Use to resolve an active experiment into a concrete in-app treatment at runtime."
+};
+
+const inferActivationChannelFromPayload = (payload: Record<string, unknown>): ActivationAssetChannel => {
+  const text = `${typeof payload.templateId === "string" ? payload.templateId : ""} ${typeof payload.placement === "string" ? payload.placement : ""}`.toLowerCase();
+  if (text.includes("whatsapp")) return "whatsapp";
+  if (text.includes("push")) return "mobile_push";
+  if (text.includes("email")) return "email";
+  if (text.includes("journey")) return "journey_canvas";
+  if (text.includes("popup") || text.includes("modal") || text.includes("inapp")) return "popup_banner";
+  return "website_personalization";
 };
 
 const ensureObjectPayload = (output: DecisionOutput): DecisionOutput => {
@@ -149,6 +161,17 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
     }
     return safeValue.actionType;
   }, [safeValue.actionType]);
+
+  const selectActivationAsset = (item: ActivationLibraryItem) => {
+    updatePayloadRef(
+      {
+        contentKey: item.runtimeRef.contentKey,
+        offerKey: item.runtimeRef.offerKey,
+        bundleKey: item.runtimeRef.bundleKey
+      },
+      item.runtimeRef.contentKey ? { templateId: item.compatibility.templateKeys[0] ?? payload.templateId } : {}
+    );
+  };
 
   return (
     <section className="space-y-3">
@@ -257,6 +280,15 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
                 disabled={readOnly}
               />
             </label>
+            <div className="md:col-span-2">
+              <ActivationAssetPicker
+                channel={inferActivationChannelFromPayload(payload)}
+                templateKey={typeof payload.templateId === "string" ? payload.templateId : undefined}
+                placementKey={typeof payload.placement === "string" ? payload.placement : undefined}
+                disabled={readOnly}
+                onSelect={selectActivationAsset}
+              />
+            </div>
           </div>
           {registry.list("content", { status: "ACTIVE" }).length === 0 || registry.list("offer", { status: "ACTIVE" }).length === 0 ? (
             <p className="text-[11px] text-amber-700">

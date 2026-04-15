@@ -10,6 +10,7 @@ import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../.
 import { usePermissions } from "../../../lib/permissions";
 import { useRegistry } from "../../../lib/registry";
 import { Button } from "../../../components/ui/button";
+import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import {
   AssetVariantsEditor,
   CatalogActionBar,
@@ -143,6 +144,11 @@ export default function CatalogContentPage() {
   const [previewContext, setPreviewContext] = useState('{\n  "offer": { "code": "WINBACK10", "percent": 10 },\n  "profile": { "first_name": "Alex" }\n}\n');
   const [previewResult, setPreviewResult] = useState<unknown | null>(null);
   const [assetReport, setAssetReport] = useState<Awaited<ReturnType<typeof apiClient.catalog.assets.report>> | null>(null);
+  const [changeSummary, setChangeSummary] = useState<{
+    readiness: Awaited<ReturnType<typeof apiClient.catalog.assets.readiness>> | null;
+    impact: Awaited<ReturnType<typeof apiClient.catalog.assets.impact>> | null;
+    archive: Awaited<ReturnType<typeof apiClient.catalog.assets.archivePreview>> | null;
+  }>({ readiness: null, impact: null, archive: null });
 
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [archiveConfirmKey, setArchiveConfirmKey] = useState("");
@@ -434,8 +440,14 @@ export default function CatalogContentPage() {
       return;
     }
     try {
-      const response = await apiClient.catalog.assets.report({ type: "content", key: editor.key.trim() });
+      const [response, readiness, impact, archive] = await Promise.all([
+        apiClient.catalog.assets.report({ type: "content", key: editor.key.trim() }),
+        apiClient.catalog.assets.readiness({ type: "content", key: editor.key.trim() }),
+        apiClient.catalog.assets.impact({ type: "content", key: editor.key.trim() }),
+        apiClient.catalog.assets.archivePreview({ type: "content", key: editor.key.trim() })
+      ]);
       setAssetReport(response);
+      setChangeSummary({ readiness, impact, archive });
     } catch (reportError) {
       setError(reportError instanceof Error ? reportError.message : "Report failed");
     }
@@ -473,6 +485,8 @@ export default function CatalogContentPage() {
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
       {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
+
+      {!createMode && editor.key.trim() ? <ActivationAssetProfilePanel entityType="content" assetKey={editor.key.trim()} /> : null}
 
       <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
         <aside className="panel space-y-3 p-3">
@@ -640,6 +654,16 @@ export default function CatalogContentPage() {
             {assetReport.dependencies.archiveSafety?.warning ? <p className="rounded-md border border-red-200 bg-red-50 p-2 text-red-700 md:col-span-3">{assetReport.dependencies.archiveSafety.warning}</p> : null}
             {(assetReport.warnings ?? []).length > 0 ? <p className="text-stone-600 md:col-span-3">Report caveats: {assetReport.warnings?.join(", ")}</p> : null}
             {(assetReport.dataCaveats ?? []).length > 0 ? <p className="text-stone-600 md:col-span-3">{assetReport.dataCaveats?.[0]}</p> : null}
+            {changeSummary.readiness ? (
+              <div className="rounded-md border border-stone-200 p-3 md:col-span-3">
+                <p className="font-medium">Publish readiness: {changeSummary.readiness.readiness.status} / risk {changeSummary.readiness.readiness.riskLevel}</p>
+                <p>Impact risk: {changeSummary.impact?.impact.releaseRiskLevel ?? "unknown"} · active refs {Object.values(changeSummary.impact?.impact.activeReferences ?? {}).reduce((sum, value) => sum + value, 0)}</p>
+                {changeSummary.impact?.diff.labels.length ? <p>Diff: {changeSummary.impact.diff.labels.slice(0, 3).join(" | ")}</p> : null}
+                {changeSummary.readiness.readiness.checks.slice(0, 3).map((check) => (
+                  <p key={check.code} className={check.severity === "blocking" ? "text-red-700" : "text-stone-700"}>{check.code}: {check.nextAction}</p>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-sm text-stone-600">Load usage to inspect references, engagement counts, and archive risk.</p>

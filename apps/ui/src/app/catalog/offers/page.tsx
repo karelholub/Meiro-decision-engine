@@ -6,6 +6,7 @@ import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
+import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import { AssetVariantsEditor, CatalogActionBar, OfferEditor, makeVariantEditorRows, serializeVariantRows, type AssetVariantEditorRow } from "../../../components/catalog";
 import {
   DEFAULT_OFFER_VALUE,
@@ -80,6 +81,11 @@ export default function CatalogOffersPage() {
   const [previewContext, setPreviewContext] = useState('{\n  "profile": { "first_name": "Alex" }\n}\n');
   const [previewResult, setPreviewResult] = useState<unknown | null>(null);
   const [assetReport, setAssetReport] = useState<Awaited<ReturnType<typeof apiClient.catalog.assets.report>> | null>(null);
+  const [changeSummary, setChangeSummary] = useState<{
+    readiness: Awaited<ReturnType<typeof apiClient.catalog.assets.readiness>> | null;
+    impact: Awaited<ReturnType<typeof apiClient.catalog.assets.impact>> | null;
+    archive: Awaited<ReturnType<typeof apiClient.catalog.assets.archivePreview>> | null;
+  }>({ readiness: null, impact: null, archive: null });
 
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [searchText, setSearchText] = useState("");
@@ -379,8 +385,14 @@ export default function CatalogOffersPage() {
       return;
     }
     try {
-      const response = await apiClient.catalog.assets.report({ type: "offer", key: editor.key.trim() });
+      const [response, readiness, impact, archive] = await Promise.all([
+        apiClient.catalog.assets.report({ type: "offer", key: editor.key.trim() }),
+        apiClient.catalog.assets.readiness({ type: "offer", key: editor.key.trim() }),
+        apiClient.catalog.assets.impact({ type: "offer", key: editor.key.trim() }),
+        apiClient.catalog.assets.archivePreview({ type: "offer", key: editor.key.trim() })
+      ]);
       setAssetReport(response);
+      setChangeSummary({ readiness, impact, archive });
     } catch (reportError) {
       setError(reportError instanceof Error ? reportError.message : "Report failed");
     }
@@ -418,6 +430,8 @@ export default function CatalogOffersPage() {
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
       {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
+
+      {!createMode && editor.key.trim() ? <ActivationAssetProfilePanel entityType="offer" assetKey={editor.key.trim()} /> : null}
 
       <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
         <aside className="panel space-y-3 p-3">
@@ -562,6 +576,16 @@ export default function CatalogOffersPage() {
           ) : (
             <p className="text-sm text-stone-600">Load usage to see references, engagement counts, and archive risk.</p>
           )}
+          {changeSummary.readiness ? (
+            <div className="mt-3 space-y-2 rounded-md border border-stone-200 p-3 text-sm">
+              <p className="font-medium">Publish readiness: {changeSummary.readiness.readiness.status} / risk {changeSummary.readiness.readiness.riskLevel}</p>
+              <p>Impact risk: {changeSummary.impact?.impact.releaseRiskLevel ?? "unknown"} · active refs {Object.values(changeSummary.impact?.impact.activeReferences ?? {}).reduce((sum, value) => sum + value, 0)}</p>
+              {changeSummary.impact?.diff.labels.length ? <p>Diff: {changeSummary.impact.diff.labels.slice(0, 3).join(" | ")}</p> : null}
+              {changeSummary.readiness.readiness.checks.slice(0, 3).map((check) => (
+                <p key={check.code} className={check.severity === "blocking" ? "text-red-700" : "text-stone-700"}>{check.code}: {check.nextAction}</p>
+              ))}
+            </div>
+          ) : null}
         </div>
       </section>
 

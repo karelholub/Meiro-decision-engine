@@ -274,13 +274,19 @@ export type MeResponse = {
 export type DevLoginProfile = "viewer" | "builder" | "publisher" | "operator" | "admin";
 
 export type ReleasePlanItem = {
-  type: "decision" | "stack" | "offer" | "content" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";
+  type: "decision" | "stack" | "offer" | "content" | "bundle" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";
   key: string;
   version: number;
   action: "create_new" | "update_new_version" | "noop";
   dependsOn: Array<{ type: string; key: string; version: number }>;
   diff: { hasChanges: boolean; summary: string; jsonPatch?: Array<Record<string, unknown>> };
   riskFlags: string[];
+  riskSummary?: {
+    riskLevel: "low" | "medium" | "high" | "blocking";
+    notes: string[];
+    remediationHints: string[];
+  };
+  changeNotes?: string[];
   targetVersion: number;
 };
 
@@ -302,10 +308,116 @@ export type ReleaseRecord = {
     sourceEnv: "DEV" | "STAGE" | "PROD";
     targetEnv: "DEV" | "STAGE" | "PROD";
     mode: "copy_as_draft" | "copy_and_activate";
+    riskSummary?: {
+      riskLevel: "low" | "medium" | "high" | "blocking";
+      blockingCount: number;
+      highCount: number;
+      mediumCount: number;
+      notes: string[];
+      remediationHints: string[];
+    };
     items: ReleasePlanItem[];
     graph?: Array<{ id: string; dependsOn: string[] }>;
     applyResult?: unknown;
   };
+};
+
+export type CatalogChangeCheck = {
+  code: string;
+  severity: "info" | "warning" | "blocking";
+  message: string;
+  nextAction: string;
+};
+
+export type CatalogReadiness = {
+  status: "ready" | "ready_with_warnings" | "blocked";
+  riskLevel: "low" | "medium" | "high" | "blocking";
+  checks: CatalogChangeCheck[];
+  summary: string;
+};
+
+export type CatalogImpact = {
+  activeReferences: { decisions: number; campaigns: number; experiments: number; bundles: number };
+  criticalScopesAffected: string[];
+  fallbackBehaviorChanged: boolean;
+  bundleDependenciesAffected: boolean;
+  experimentLinksAffected: boolean;
+  releaseRiskLevel: "low" | "medium" | "high" | "blocking";
+  warnings: CatalogChangeCheck[];
+};
+
+export type CatalogArchiveConsequence = {
+  riskLevel: "low" | "medium" | "high" | "blocking";
+  consequences: CatalogChangeCheck[];
+  safeAlternatives: string[];
+  summary: string;
+};
+
+export type CatalogProductDiff = {
+  labels: string[];
+  changedFields: string[];
+  changeTypes: string[];
+};
+
+export type ActivationAssetCategory = "primitive" | "channel" | "composite";
+export type ActivationAssetType =
+  | "image"
+  | "copy_snippet"
+  | "cta"
+  | "offer"
+  | "website_banner"
+  | "popup_banner"
+  | "email_block"
+  | "push_message"
+  | "whatsapp_message"
+  | "journey_asset"
+  | "bundle";
+export type ActivationAssetChannel =
+  | "website_personalization"
+  | "popup_banner"
+  | "email"
+  | "mobile_push"
+  | "whatsapp"
+  | "journey_canvas";
+
+export type ActivationLibraryItem = {
+  id: string;
+  entityType: "offer" | "content" | "bundle";
+  key: string;
+  name: string;
+  description: string | null;
+  version: number;
+  status: string;
+  category: ActivationAssetCategory;
+  assetType: ActivationAssetType;
+  assetTypeLabel: string;
+  compatibility: {
+    channels: ActivationAssetChannel[];
+    templateKeys: string[];
+    placementKeys: string[];
+    locales: string[];
+    journeyNodeContexts: string[];
+  };
+  primitiveReferences: Array<{ kind: "image" | "copy_snippet" | "cta" | "offer"; key: string; path: string; resolved: boolean }>;
+  brokenPrimitiveReferences: Array<{ kind: "image" | "copy_snippet" | "cta" | "offer"; key: string; path: string; resolved: boolean }>;
+  readiness?: Pick<CatalogReadiness, "status" | "riskLevel" | "summary">;
+  health?: "healthy" | "warning" | "critical";
+  usedInCount: number;
+  updatedAt: string;
+  preview: { title: string; subtitle: string | null; thumbnailUrl: string | null; snippet: string | null };
+  runtimeRef: { offerKey?: string; contentKey?: string; bundleKey?: string };
+};
+
+export type ActivationLibraryQuery = {
+  q?: string;
+  category?: ActivationAssetCategory;
+  assetType?: ActivationAssetType;
+  channel?: ActivationAssetChannel | string;
+  templateKey?: string;
+  placementKey?: string;
+  locale?: string;
+  status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+  includeUnready?: boolean;
 };
 
 export type PipesInlineEvaluateResponse = {
@@ -661,6 +773,28 @@ export const apiClient = {
   catalog: {
     tags: (params: { env?: "DEV" | "STAGE" | "PROD"; q?: string } = {}) =>
       apiFetch<CatalogTagsResponse>(`/v1/catalog/tags${toQuery(params)}`),
+    library: {
+      list: (params: ActivationLibraryQuery = {}) =>
+        apiFetch<{
+          generatedAt: string;
+          semantics: Record<string, string>;
+          facets: { assetTypes: ActivationAssetType[]; channels: ActivationAssetChannel[] };
+          items: ActivationLibraryItem[];
+        }>(`/v1/catalog/library${toQuery(params)}`),
+      picker: (params: ActivationLibraryQuery & { journeyNodeContext?: string } = {}) =>
+        apiFetch<{
+          generatedAt: string;
+          context: {
+            channel: ActivationAssetChannel | null;
+            templateKey: string | null;
+            placementKey: string | null;
+            locale: string | null;
+            journeyNodeContext: string | null;
+          };
+          items: ActivationLibraryItem[];
+          rejected: Array<{ id: string; key: string; name: string; assetType: ActivationAssetType; reasons: string[] }>;
+        }>(`/v1/catalog/library/picker${toQuery(params)}`)
+    },
     offers: {
       list: (params: { key?: string; status?: "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "ARCHIVED"; q?: string } = {}) =>
         apiFetch<{ items: CatalogOffer[] }>(`/v1/catalog/offers${toQuery(params)}`),
@@ -680,7 +814,7 @@ export const apiClient = {
           body: JSON.stringify(version ? { version } : {})
         }),
       archive: (key: string) =>
-        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null } }>(`/v1/catalog/offers/${key}/archive`, {
+        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null }; archiveConsequence?: CatalogArchiveConsequence }>(`/v1/catalog/offers/${key}/archive`, {
           method: "POST",
           body: JSON.stringify({})
         }),
@@ -737,7 +871,7 @@ export const apiClient = {
           body: JSON.stringify(version ? { version } : {})
         }),
       archive: (key: string) =>
-        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null } }>(`/v1/catalog/content/${key}/archive`, {
+        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null }; archiveConsequence?: CatalogArchiveConsequence }>(`/v1/catalog/content/${key}/archive`, {
           method: "POST",
           body: JSON.stringify({})
         }),
@@ -809,7 +943,7 @@ export const apiClient = {
           body: JSON.stringify(version ? { version } : {})
         }),
       archive: (key: string) =>
-        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null } }>(`/v1/catalog/bundles/${key}/archive`, {
+        apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null }; archiveConsequence?: CatalogArchiveConsequence }>(`/v1/catalog/bundles/${key}/archive`, {
           method: "POST",
           body: JSON.stringify({})
         }),
@@ -837,6 +971,29 @@ export const apiClient = {
             archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null };
           };
         }>(`/v1/catalog/assets/dependencies${toQuery(params)}`),
+      readiness: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
+        apiFetch<{ asset: { type: "offer" | "content" | "bundle"; key: string; version?: number; status?: string }; readiness: CatalogReadiness }>(
+          `/v1/catalog/assets/readiness${toQuery(params)}`
+        ),
+      impact: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
+        apiFetch<{
+          asset: { type: "offer" | "content" | "bundle"; key: string; version?: number; status?: string };
+          comparedTo: { version?: number; status?: string } | null;
+          impact: CatalogImpact;
+          diff: CatalogProductDiff;
+        }>(`/v1/catalog/assets/impact${toQuery(params)}`),
+      diff: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
+        apiFetch<{
+          asset: { type: "offer" | "content" | "bundle"; key: string; version?: number; status?: string };
+          comparedTo: { version?: number; status?: string } | null;
+          diff: CatalogProductDiff;
+        }>(`/v1/catalog/assets/diff${toQuery(params)}`),
+      archivePreview: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
+        apiFetch<{
+          asset: { type: "offer" | "content" | "bundle"; key: string; version?: number; status?: string };
+          archive: CatalogArchiveConsequence;
+          impact: CatalogImpact;
+        }>(`/v1/catalog/assets/archive-preview${toQuery(params)}`),
       report: (params: { type: "offer" | "content" | "bundle"; key: string }) =>
         apiFetch<{
           windowDays: number;
@@ -888,7 +1045,23 @@ export const apiClient = {
             dependencyCounts: { decisions: number; campaigns: number; experiments: number };
             tags: string[];
           }>;
-        }>(`/v1/catalog/assets/health${toQuery(params)}`)
+        }>(`/v1/catalog/assets/health${toQuery(params)}`),
+      tasks: (params: { type?: "offer" | "content" | "bundle" } = {}) =>
+        apiFetch<{
+          generatedAt: string;
+          semantics: Record<string, string>;
+          items: Array<{
+            id: string;
+            type: "offer" | "content" | "bundle";
+            key: string;
+            title: string;
+            severity: "low" | "medium" | "high" | "blocking";
+            reasonCode: string;
+            message: string;
+            nextAction: string;
+            href?: string;
+          }>;
+        }>(`/v1/catalog/assets/tasks${toQuery(params)}`)
     }
   },
   inapp: {
@@ -1512,7 +1685,7 @@ export const apiClient = {
       sourceEnv: "DEV" | "STAGE" | "PROD";
       targetEnv: "DEV" | "STAGE" | "PROD";
       selection: Array<{
-        type: "decision" | "stack" | "offer" | "content" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";
+        type: "decision" | "stack" | "offer" | "content" | "bundle" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";
         key: string;
         version?: number;
       }>;

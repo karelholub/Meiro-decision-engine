@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { deriveDecisionRequiredAttributes } from "../lib/requirements";
 import { stableStringify } from "../lib/cacheKey";
+import { classifyReleaseRisk } from "../services/catalogChangeManagement";
+import { describeActivationAssetSnapshot, type ActivationAssetEntityType, type ActivationLibraryAssetInput } from "../services/activationAssetLibrary";
 
 const environmentSchema = z.enum(["DEV", "STAGE", "PROD"]);
 const releaseEntityTypeSchema = z.enum([
@@ -54,6 +56,12 @@ interface ReleasePlanItem {
     jsonPatch?: Array<Record<string, unknown>>;
   };
   riskFlags: string[];
+  riskSummary?: {
+    riskLevel: "low" | "medium" | "high" | "blocking";
+    notes: string[];
+    remediationHints: string[];
+  };
+  changeNotes?: string[];
   sourceSnapshot: unknown;
   targetVersion: number;
 }
@@ -330,6 +338,29 @@ const assetChangeSummary = (source: any, target: any) => {
   ].join("; ");
   return `${base}; ${visibility}`;
 };
+
+const toActivationLibrarySnapshot = (type: ActivationAssetEntityType, source: any): ActivationLibraryAssetInput => ({
+  entityType: type,
+  key: source?.key ?? "",
+  name: source?.name ?? source?.key ?? "",
+  description: source?.description ?? null,
+  status: source?.status ?? "UNKNOWN",
+  version: source?.version ?? 1,
+  updatedAt: source?.updatedAt ?? new Date().toISOString(),
+  tags: source?.tags,
+  templateId: source?.templateId ?? null,
+  offerKey: source?.offerKey ?? null,
+  contentKey: source?.contentKey ?? null,
+  templateKey: source?.templateKey ?? null,
+  placementKeys: source?.placementKeys,
+  channels: source?.channels,
+  locales: source?.locales,
+  metadataJson: source?.metadataJson,
+  schemaJson: source?.schemaJson,
+  valueJson: source?.valueJson,
+  localesJson: source?.localesJson,
+  variants: Array.isArray(source?.variants) ? source.variants : []
+});
 
 const buildAssetVariantRiskFlags = (sourceSnapshot: unknown) => {
   const flags = new Set<string>();
@@ -997,6 +1028,24 @@ export const registerReleaseRoutes = async (deps: {
         }
       }
 
+      const activationNotes =
+        source.type === "offer" || source.type === "content" || source.type === "bundle"
+          ? describeActivationAssetSnapshot(toActivationLibrarySnapshot(source.type as ActivationAssetEntityType, source.sourceSnapshot))
+          : [];
+      if ((source.type === "offer" || source.type === "content" || source.type === "bundle") && activationNotes.length === 1) {
+        riskFlags.add("LIBRARY_COMPATIBILITY_METADATA_MISSING");
+      }
+
+      const riskFlagList = [...riskFlags];
+      const riskSummary = classifyReleaseRisk({ riskFlags: riskFlagList, action: targetMeta.action });
+      const changeNotes = [
+        ...activationNotes,
+        ...(source.type === "offer" || source.type === "content"
+          ? assetChangeSummary(source.sourceSnapshot, targetMeta.existingSnapshot).split("; ").filter((entry) => entry.includes(":changed"))
+          : []),
+        ...(source.type === "bundle" ? [`Bundle ${topLevelDiffSummary(bundleSnapshotForDiff(source.sourceSnapshot), bundleSnapshotForDiff(targetMeta.existingSnapshot))}`] : []),
+        ...riskSummary.notes
+      ].filter((entry, index, list) => entry && list.indexOf(entry) === index);
       const newItem: ReleasePlanItem = {
         type: source.type,
         key: source.key,
@@ -1012,7 +1061,9 @@ export const registerReleaseRoutes = async (deps: {
                 ? `Bundle ${topLevelDiffSummary(bundleSnapshotForDiff(source.sourceSnapshot), bundleSnapshotForDiff(targetMeta.existingSnapshot))}`
               : topLevelDiffSummary(source.sourceSnapshot, targetMeta.existingSnapshot)
         },
-        riskFlags: [...riskFlags],
+        riskFlags: riskFlagList,
+        riskSummary,
+        changeNotes,
         sourceSnapshot: source.sourceSnapshot,
         targetVersion: targetMeta.targetVersion
       };
@@ -1124,10 +1175,24 @@ export const registerReleaseRoutes = async (deps: {
     }
 
     const items = [...itemsById.values()];
+    const riskRank = { low: 0, medium: 1, high: 2, blocking: 3 } as const;
+    const highestRisk = items.reduce<"low" | "medium" | "high" | "blocking">((current, item) => {
+      const next = item.riskSummary?.riskLevel ?? "low";
+      return riskRank[next] > riskRank[current] ? next : current;
+    }, "low");
+    const releaseRiskSummary = {
+      riskLevel: highestRisk,
+      blockingCount: items.filter((item) => item.riskSummary?.riskLevel === "blocking").length,
+      highCount: items.filter((item) => item.riskSummary?.riskLevel === "high").length,
+      mediumCount: items.filter((item) => item.riskSummary?.riskLevel === "medium").length,
+      notes: [...new Set(items.flatMap((item) => item.riskSummary?.notes ?? []))],
+      remediationHints: [...new Set(items.flatMap((item) => item.riskSummary?.remediationHints ?? []))]
+    };
     const plan = {
       sourceEnv: parsed.data.sourceEnv,
       targetEnv: parsed.data.targetEnv,
       mode: parsed.data.mode,
+      riskSummary: releaseRiskSummary,
       items,
       graph: items.map((item) => ({
         id: releaseItemId(item),

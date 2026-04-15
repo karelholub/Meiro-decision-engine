@@ -6,6 +6,7 @@ import { getEnvironment, onEnvironmentChange } from "../../../lib/environment";
 import { Button } from "../../../components/ui/button";
 
 type HealthResponse = Awaited<ReturnType<typeof apiClient.catalog.assets.health>>;
+type TaskResponse = Awaited<ReturnType<typeof apiClient.catalog.assets.tasks>>;
 
 const healthClass = {
   healthy: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -16,6 +17,7 @@ const healthClass = {
 export default function AssetHealthPage() {
   const [environment, setEnvironment] = useState(getEnvironment());
   const [response, setResponse] = useState<HealthResponse | null>(null);
+  const [tasks, setTasks] = useState<TaskResponse | null>(null);
   const [type, setType] = useState<"" | "offer" | "content" | "bundle">("");
   const [error, setError] = useState("");
 
@@ -24,7 +26,9 @@ export default function AssetHealthPage() {
   const load = async () => {
     try {
       const health = await apiClient.catalog.assets.health(type ? { type } : {});
+      const taskResponse = await apiClient.catalog.assets.tasks(type ? { type } : {});
       setResponse(health);
+      setTasks(taskResponse);
       setError("");
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load asset health");
@@ -57,6 +61,22 @@ export default function AssetHealthPage() {
         </label>
         <Button variant="outline" onClick={() => void load()}>Refresh</Button>
         {response ? <span className="text-sm text-stone-600">Generated {new Date(response.generatedAt).toLocaleString()}</span> : null}
+      </section>
+
+      <section className="panel p-4">
+        <h2 className="font-semibold">Operator Tasks</h2>
+        <p className="text-sm text-stone-600">Prioritized readiness, archive, and dependency tasks from deterministic catalog checks.</p>
+        <div className="mt-3 space-y-2">
+          {(tasks?.items ?? []).slice(0, 12).map((task) => (
+            <a key={task.id} href={task.href ?? "#"} className="block rounded-md border border-stone-200 px-3 py-2 text-sm hover:bg-stone-50">
+              <span className={task.severity === "blocking" ? "font-medium text-red-700" : task.severity === "high" ? "font-medium text-amber-700" : "font-medium text-stone-900"}>{task.title}</span>
+              <span className="ml-2 text-xs text-stone-500">{task.type}:{task.key}</span>
+              <span className="block text-stone-700">{task.message}</span>
+              <span className="block text-xs text-stone-600">Next: {task.nextAction}</span>
+            </a>
+          ))}
+          {tasks && tasks.items.length === 0 ? <p className="text-sm text-stone-600">No operator tasks were generated.</p> : null}
+        </div>
       </section>
 
       <section className="grid gap-3">

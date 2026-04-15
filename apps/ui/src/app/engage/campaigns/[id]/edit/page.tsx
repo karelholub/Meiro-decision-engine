@@ -13,8 +13,9 @@ import type {
 import { parseLegacyKey, toLegacyKey } from "@decisioning/shared";
 import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
 import { RefSelect } from "../../../../../components/registry/RefSelect";
+import { ActivationAssetPicker } from "../../../../../components/catalog/ActivationAssetPicker";
 import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
-import { apiClient } from "../../../../../lib/api";
+import { apiClient, type ActivationAssetChannel, type ActivationLibraryItem } from "../../../../../lib/api";
 import { validateCampaignDependencies } from "../../../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
 import { usePermissions } from "../../../../../lib/permissions";
@@ -141,6 +142,16 @@ const getValueByPath = (value: unknown, path: string): unknown => {
   return cursor;
 };
 
+const inferActivationChannelFromContext = (templateKey?: string, placementKey?: string): ActivationAssetChannel => {
+  const text = `${templateKey ?? ""} ${placementKey ?? ""}`.toLowerCase();
+  if (text.includes("whatsapp")) return "whatsapp";
+  if (text.includes("push")) return "mobile_push";
+  if (text.includes("email")) return "email";
+  if (text.includes("journey")) return "journey_canvas";
+  if (text.includes("popup") || text.includes("modal") || text.includes("inapp")) return "popup_banner";
+  return "website_personalization";
+};
+
 export default function InAppCampaignEditPage() {
   const params = useParams<{ id: string }>();
   const campaignId = String(params.id ?? "");
@@ -204,6 +215,25 @@ export default function InAppCampaignEditPage() {
       }),
     [registry, placementRef, templateRef, contentRef, offerRef, experimentMode, experimentRef]
   );
+  const pickerChannel = useMemo(
+    () => inferActivationChannelFromContext(templateRef?.key, placementRef?.key),
+    [templateRef?.key, placementRef?.key]
+  );
+
+  const selectActivationAsset = (item: ActivationLibraryItem) => {
+    if (item.runtimeRef.contentKey) {
+      setContentRef(parseLegacyKey("content", item.runtimeRef.contentKey));
+    }
+    if (item.runtimeRef.offerKey) {
+      setOfferRef(parseLegacyKey("offer", item.runtimeRef.offerKey));
+    }
+    if (item.runtimeRef.bundleKey && !item.runtimeRef.contentKey && !item.runtimeRef.offerKey) {
+      setMessage("Selected bundle has no direct content or offer component for this campaign form.");
+      return;
+    }
+    setExperimentMode("static");
+    setMessage(`Selected activation asset ${item.name}.`);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -799,6 +829,18 @@ export default function InAppCampaignEditPage() {
               allowVersionPin
             />
           </label>
+
+          {experimentMode === "static" ? (
+            <div className="md:col-span-3">
+              <ActivationAssetPicker
+                channel={pickerChannel}
+                templateKey={templateRef?.key}
+                placementKey={placementRef?.key}
+                disabled={false}
+                onSelect={selectActivationAsset}
+              />
+            </div>
+          ) : null}
 
           <label className="flex flex-col gap-1 text-sm">
             Priority

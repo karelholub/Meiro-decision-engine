@@ -81,6 +81,17 @@ export default function ReleaseDetailPage() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
+      {item.planJson.riskSummary ? (
+        <article className="panel p-4">
+          <h3 className="font-semibold">Release Risk</h3>
+          <p className="text-sm">
+            Level: <span className="font-medium">{item.planJson.riskSummary.riskLevel}</span> · blocking {item.planJson.riskSummary.blockingCount} · high {item.planJson.riskSummary.highCount} · medium {item.planJson.riskSummary.mediumCount}
+          </p>
+          {item.planJson.riskSummary.notes.length > 0 ? <p className="mt-2 text-sm text-stone-700">Notes: {item.planJson.riskSummary.notes.join(" | ")}</p> : null}
+          {item.planJson.riskSummary.remediationHints.length > 0 ? <p className="mt-1 text-sm text-stone-700">Remediation: {item.planJson.riskSummary.remediationHints.join(" | ")}</p> : null}
+        </article>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2">
         <article className="panel p-4">
           <h3 className="mb-2 font-semibold">Plan Items</h3>
@@ -106,7 +117,10 @@ export default function ReleaseDetailPage() {
             <div className="space-y-2 text-sm">
               <p>{selected.diff.summary}</p>
               <p>Target version: v{selected.targetVersion}</p>
+              {selected.riskSummary ? <p>Risk level: {selected.riskSummary.riskLevel}</p> : null}
               <p>Risk flags: {selected.riskFlags.length > 0 ? selected.riskFlags.join(", ") : "None"}</p>
+              {(selected.changeNotes ?? []).length > 0 ? <p>Change notes: {selected.changeNotes?.join(" | ")}</p> : null}
+              {selected.riskSummary?.remediationHints.length ? <p>Remediation: {selected.riskSummary.remediationHints.join(" | ")}</p> : null}
               <p>
                 Depends on: {selected.dependsOn.length > 0 ? selected.dependsOn.map((dep) => `${dep.type}:${dep.key}:v${dep.version}`).join(", ") : "None"}
               </p>
