@@ -1,6 +1,7 @@
 export * from "./ActionTemplatePicker";
 export * from "./DecisionActionBar";
 export * from "./ConditionBuilder";
+export * from "./ConditionTreeBuilder";
 export * from "./DecisionWizard";
 export * from "./FieldPicker";
 export * from "./GuardrailsEditor";
@@ -9,4 +10,5 @@ export * from "./SummaryPanel";
 export * from "./TestAndActivate";
 export * from "./field-registry";
 export * from "./types";
+export * from "./useAuthoringFieldRegistry";
 export * from "./wizard-utils";

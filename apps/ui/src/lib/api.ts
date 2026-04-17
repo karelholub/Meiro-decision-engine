@@ -2,12 +2,26 @@ import { getEnvironment } from "./environment";
 import type {
   AppEnumSettings,
   AppEnumSettingsResponse,
+  ActivationAssetCategory as SharedActivationAssetCategory,
+  ActivationAssetChannel as SharedActivationAssetChannel,
+  ActivationAssetEntityType as SharedActivationAssetEntityType,
+  ActivationAssetType as SharedActivationAssetType,
+  ActivationCompatibility as SharedActivationCompatibility,
   ActivationPreviewResponse,
   CatalogTagsResponse,
   CatalogAssetBundle,
   CatalogContentBlock,
   CatalogOffer,
+  DecisionApprovalRequestResponse,
+  DecisionApprovalQueueResponse,
+  DecisionApprovalReviewResponse,
+  DecisionAuthoringEvidenceResponse,
   DecisionDetailsResponse,
+  DecisionAuthoringRequirementsResponse,
+  DecisionDependenciesResponse,
+  DecisionScenarioRunResponse,
+  DecisionScenarioTestsResponse,
+  DecisionReadinessResponse,
   DecisionReportResponse,
   DecisionStackDetailsResponse,
   DecisionStackValidationResponse,
@@ -359,30 +373,15 @@ export type CatalogProductDiff = {
   changeTypes: string[];
 };
 
-export type ActivationAssetCategory = "primitive" | "channel" | "composite";
-export type ActivationAssetType =
-  | "image"
-  | "copy_snippet"
-  | "cta"
-  | "offer"
-  | "website_banner"
-  | "popup_banner"
-  | "email_block"
-  | "push_message"
-  | "whatsapp_message"
-  | "journey_asset"
-  | "bundle";
-export type ActivationAssetChannel =
-  | "website_personalization"
-  | "popup_banner"
-  | "email"
-  | "mobile_push"
-  | "whatsapp"
-  | "journey_canvas";
+export type ActivationAssetCategory = SharedActivationAssetCategory;
+export type ActivationAssetType = SharedActivationAssetType;
+export type ActivationAssetChannel = SharedActivationAssetChannel;
+export type ActivationAssetEntityType = SharedActivationAssetEntityType;
+export type ActivationCompatibility = SharedActivationCompatibility;
 
 export type ActivationLibraryItem = {
   id: string;
-  entityType: "offer" | "content" | "bundle";
+  entityType: ActivationAssetEntityType;
   key: string;
   name: string;
   description: string | null;
@@ -391,13 +390,7 @@ export type ActivationLibraryItem = {
   category: ActivationAssetCategory;
   assetType: ActivationAssetType;
   assetTypeLabel: string;
-  compatibility: {
-    channels: ActivationAssetChannel[];
-    templateKeys: string[];
-    placementKeys: string[];
-    locales: string[];
-    journeyNodeContexts: string[];
-  };
+  compatibility: ActivationCompatibility;
   primitiveReferences: Array<{ kind: "image" | "copy_snippet" | "cta" | "offer"; key: string; path: string; resolved: boolean }>;
   brokenPrimitiveReferences: Array<{ kind: "image" | "copy_snippet" | "cta" | "offer"; key: string; path: string; resolved: boolean }>;
   readiness?: Pick<CatalogReadiness, "status" | "riskLevel" | "summary">;
@@ -449,23 +442,142 @@ export type CampaignCalendarLinkedAsset = {
   category: ActivationAssetCategory;
   assetType: ActivationAssetType;
   assetTypeLabel: string;
+  channels: ActivationAssetChannel[];
   thumbnailUrl: string | null;
   startAt: string | null;
   endAt: string | null;
 };
 
+export type CampaignCalendarPlanningState =
+  | "briefing"
+  | "drafting"
+  | "in_review"
+  | "approved"
+  | "scheduled"
+  | "live"
+  | "completed"
+  | "blocked"
+  | "archived";
+export type CampaignCalendarSeverity = "info" | "warning" | "blocking";
+export type CampaignCalendarCheckStatus = "passed" | "warning" | "blocking";
+export type CampaignCalendarRiskLevel = "none" | "low" | "medium" | "high" | "critical";
+export type CampaignCalendarReadinessCheck = {
+  code: string;
+  label: string;
+  status: CampaignCalendarCheckStatus;
+  detail: string;
+};
+export type CampaignCalendarPressureSignal = {
+  code: string;
+  label: string;
+  riskLevel: CampaignCalendarRiskLevel;
+  detail: string;
+  refs: string[];
+  count?: number;
+  threshold?: number;
+};
+export type CampaignCalendarDensity = {
+  sameDay: number;
+  sameWeek: number;
+  overlapping: number;
+};
+export type CampaignCalendarNearbyOverlap = {
+  campaignId: string;
+  campaignKey: string;
+  name: string;
+  sourceType: "in_app_campaign";
+  channel: ActivationAssetChannel | "unknown";
+  startAt: string | null;
+  endAt: string | null;
+  riskLevel: CampaignCalendarRiskLevel;
+  reasons: string[];
+};
+export type CampaignCalendarOverlapSummary = {
+  riskLevel: CampaignCalendarRiskLevel;
+  overlapCount: number;
+  sameDayCollisionCount: number;
+  sameWeekCollisionCount: number;
+  sharedAudienceRefs: string[];
+  sharedPlacementRefs: string[];
+  sharedAssetRefs: string[];
+  nearbyCampaigns: CampaignCalendarNearbyOverlap[];
+};
+export type CampaignCalendarPressureSummary = {
+  riskLevel: CampaignCalendarRiskLevel;
+  pressureSignals: CampaignCalendarPressureSignal[];
+  capSignals: CampaignCalendarPressureSignal[];
+  channelDensity: CampaignCalendarDensity;
+  audienceDensity: CampaignCalendarDensity;
+  placementDensity: CampaignCalendarDensity;
+  assetDensity: CampaignCalendarDensity;
+  reachabilityNotes: string[];
+  exclusionNotes: string[];
+  alwaysOnContext: string[];
+};
+export type CampaignCalendarHotspot = {
+  id: string;
+  type: "day" | "week" | "channel" | "audience" | "placement" | "asset" | "cap";
+  label: string;
+  riskLevel: CampaignCalendarRiskLevel;
+  count: number;
+  detail: string;
+  refs: string[];
+};
+export type CampaignCalendarPlanningReadiness = {
+  state: CampaignCalendarPlanningState;
+  status: "ready" | "at_risk" | "blocked";
+  severity: CampaignCalendarSeverity;
+  score: number;
+  summary: string;
+  checks: CampaignCalendarReadinessCheck[];
+};
+export type CampaignCalendarAssetPressure = {
+  key: string;
+  kind: CampaignCalendarLinkedAsset["kind"];
+  name: string;
+  assetType: ActivationAssetType;
+  assetTypeLabel: string;
+  category: ActivationAssetCategory;
+  plannedCampaigns: number;
+  activeCampaigns: number;
+  warningCount: number;
+  blockingCount: number;
+  campaignKeys: string[];
+};
+
 export type CampaignCalendarItem = {
   id: string;
+  sourceType: "in_app_campaign";
+  sourceId: string;
+  sourceKey: string;
   campaignId: string;
   campaignKey: string;
   name: string;
   description: string | null;
   status: InAppCampaign["status"];
   approvalState: "draft" | "pending_approval" | "approved_or_active" | "archived";
+  owner: string | null;
+  channel: ActivationAssetChannel | "unknown";
+  channels: ActivationAssetChannel[];
   appKey: string;
   placementKey: string;
   templateKey: string;
   priority: number;
+  capsPerProfilePerDay: number | null;
+  capsPerProfilePerWeek: number | null;
+  audienceKeys: string[];
+  audienceSummary: string | null;
+  placementSummary: string;
+  templateSummary: string;
+  assetSummary: string | null;
+  approvalSummary: string;
+  orchestrationSummary: string | null;
+  orchestrationMarkers: string[];
+  drilldownTargets: Array<{
+    type: "campaign" | "campaign_editor" | "content" | "offer";
+    label: string;
+    href: string;
+  }>;
   startAt: string | null;
   endAt: string | null;
   submittedAt: string | null;
@@ -473,7 +585,24 @@ export type CampaignCalendarItem = {
   lastReviewComment: string | null;
   linkedAssets: CampaignCalendarLinkedAsset[];
   warnings: string[];
-  conflicts: Array<{ campaignId: string; campaignKey: string; reason: string }>;
+  conflicts: Array<{ campaignId: string; campaignKey: string; type: string; severity: CampaignCalendarSeverity; reason: string }>;
+  planningReadiness: CampaignCalendarPlanningReadiness;
+  overlapRiskLevel: CampaignCalendarRiskLevel;
+  pressureRiskLevel: CampaignCalendarRiskLevel;
+  overlapSummary: CampaignCalendarOverlapSummary;
+  pressureSummary: CampaignCalendarPressureSummary;
+  pressureSignals: CampaignCalendarPressureSignal[];
+  capSignals: CampaignCalendarPressureSignal[];
+  sharedAudienceRefs: string[];
+  sharedPlacementRefs: string[];
+  sharedAssetRefs: string[];
+  channelDensity: CampaignCalendarDensity;
+  weeklyDensity: CampaignCalendarDensity;
+  sameDayCollisionCount: number;
+  sameWeekCollisionCount: number;
+  reachabilityNotes: string[];
+  exclusionNotes: string[];
+  alwaysOnContext: string[];
   updatedAt: string | null;
 };
 
@@ -488,7 +617,135 @@ export type CampaignCalendarResponse = {
     unscheduled: number;
     byStatus: Record<string, number>;
     warnings: Record<string, number>;
+    planningStates: Record<CampaignCalendarPlanningState, number>;
+    readiness: Record<CampaignCalendarPlanningReadiness["status"], number>;
+    blockingIssues: number;
+    atRisk: number;
     conflicts: number;
+    conflictsBySeverity: Record<CampaignCalendarSeverity, number>;
+    overlapRisk: Record<CampaignCalendarRiskLevel, number>;
+    pressureRisk: Record<CampaignCalendarRiskLevel, number>;
+    needsAttention: number;
+    hotspots: CampaignCalendarHotspot[];
+    assetPressure: CampaignCalendarAssetPressure[];
+  };
+};
+
+export type CampaignCalendarView = "month" | "week" | "list";
+export type CampaignCalendarSwimlane =
+  | "none"
+  | "planning_state"
+  | "readiness"
+  | "app"
+  | "placement"
+  | "status"
+  | "asset"
+  | "channel"
+  | "source_type"
+  | "audience"
+  | "overlap_risk"
+  | "pressure_risk";
+export type CampaignCalendarFilters = {
+  status?: string;
+  appKey?: string;
+  placementKey?: string;
+  assetKey?: string;
+  assetType?: ActivationAssetType | "";
+  channel?: ActivationAssetChannel | "";
+  readiness?: CampaignCalendarPlanningReadiness["status"] | "";
+  sourceType?: "in_app_campaign" | "";
+  audienceKey?: string;
+  overlapRisk?: CampaignCalendarRiskLevel | "";
+  pressureRisk?: CampaignCalendarRiskLevel | "";
+  pressureSignal?: "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density" | "";
+  needsAttentionOnly?: boolean;
+  includeArchived?: boolean;
+};
+export type CampaignCalendarSavedViewRecord = {
+  id: string;
+  name: string;
+  view: CampaignCalendarView;
+  swimlane: CampaignCalendarSwimlane;
+  filters: Required<CampaignCalendarFilters>;
+  createdAt: string;
+  updatedAt: string;
+};
+export type CampaignCalendarExportAuditRecord = {
+  id: string;
+  userId: string;
+  userRole: "VIEWER" | "EDITOR" | "APPROVER" | "ADMIN";
+  action: string;
+  meta: Record<string, unknown> | null;
+  createdAt: string;
+};
+export type CampaignCalendarReviewPackRecord = {
+  id: string;
+  name: string;
+  createdByUserId: string;
+  view: CampaignCalendarView;
+  swimlane: CampaignCalendarSwimlane;
+  from: string;
+  to: string;
+  filters: Required<CampaignCalendarFilters>;
+  summary: CampaignCalendarResponse["summary"];
+  snapshot: {
+    risks?: {
+      atRisk: number;
+      blockingIssues: number;
+      conflicts: number;
+      overlapRisk?: Record<CampaignCalendarRiskLevel, number>;
+      pressureRisk?: Record<CampaignCalendarRiskLevel, number>;
+      needsAttention?: number;
+    };
+    approvalQueue?: Array<{ campaignId: string; campaignKey: string; name: string; status: string; startAt: string | null; readiness: string; planningState: string; summary: string }>;
+    placementPressure?: Array<{ id: string; appKey: string; placementKey: string; campaignCount: number; blockedCount: number; atRiskCount: number; conflictCount: number }>;
+    assetPressure?: CampaignCalendarAssetPressure[];
+    hotspots?: CampaignCalendarHotspot[];
+    campaigns?: Array<{
+      campaignId: string;
+      campaignKey: string;
+      name: string;
+      status: string;
+      appKey?: string;
+      placementKey?: string;
+      templateKey?: string;
+      startAt?: string | null;
+      endAt?: string | null;
+      readiness: string;
+      planningState: string;
+      score?: number;
+      overlapRisk?: CampaignCalendarRiskLevel;
+      pressureRisk?: CampaignCalendarRiskLevel;
+      pressureSignals?: CampaignCalendarPressureSignal[];
+      capSignals?: CampaignCalendarPressureSignal[];
+      sharedAudienceRefs?: string[];
+      sharedPlacementRefs?: string[];
+      sharedAssetRefs?: string[];
+      sameDayCollisionCount?: number;
+      sameWeekCollisionCount?: number;
+      reachabilityNotes?: string[];
+      conflicts?: number;
+      warnings?: string[];
+      linkedAssets?: Array<{ kind: string; key: string; assetType: string; assetTypeLabel: string; status: string }>;
+    }>;
+    campaignIds?: string[];
+    [key: string]: unknown;
+  };
+  campaignIds: string[];
+  createdAt: string;
+};
+
+export type CampaignSchedulePreviewResponse = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  conflicts: CampaignCalendarItem["conflicts"];
+  item: CampaignCalendarItem | null;
+  summary: {
+    readiness: CampaignCalendarPlanningReadiness["status"] | "unknown";
+    planningState: CampaignCalendarPlanningState | "unknown";
+    score: number;
+    affectedCampaigns: number;
   };
 };
 
@@ -723,6 +980,8 @@ export const apiClient = {
       apiFetch<{ items: DecisionVersionSummary[]; page: number; limit: number; total: number; totalPages: number }>(
         `/v1/decisions${toQuery(params)}`
       ),
+    approvals: (params: { status?: "pending" | "approved" | "rejected"; limit?: number } = {}) =>
+      apiFetch<DecisionApprovalQueueResponse>(`/v1/decisions/approvals${toQuery(params)}`),
     get: (decisionId: string) => apiFetch<DecisionDetailsResponse>(`/v1/decisions/${decisionId}`),
     create: (input: { key: string; name: string; description?: string; definition?: DecisionDefinition }) =>
       apiFetch<{ decisionId: string; versionId: string }>(`/v1/decisions`, {
@@ -731,7 +990,7 @@ export const apiClient = {
       }),
     duplicate: (decisionId: string) => apiFetch(`/v1/decisions/${decisionId}/duplicate`, { method: "POST" }),
     updateDraft: (decisionId: string, definition: DecisionDefinition) =>
-      apiFetch<{ definition: DecisionDefinition }>(`/v1/decisions/${decisionId}`, {
+      apiFetch<{ decisionId: string; versionId: string; version: number; status: string; definition: DecisionDefinition }>(`/v1/decisions/${decisionId}`, {
         method: "PUT",
         body: JSON.stringify({ definition })
       }),
@@ -740,12 +999,134 @@ export const apiClient = {
         method: "POST",
         body: JSON.stringify(definition ? { definition } : {})
       }),
+    requirements: (decisionId: string, definition?: DecisionDefinition) =>
+      apiFetch<DecisionAuthoringRequirementsResponse>(`/v1/decisions/${decisionId}/requirements`, {
+        method: "POST",
+        body: JSON.stringify(definition ? { definition } : {})
+      }),
+    dependencies: (decisionId: string, definition?: DecisionDefinition) =>
+      apiFetch<DecisionDependenciesResponse>(`/v1/decisions/${decisionId}/dependencies`, {
+        method: "POST",
+        body: JSON.stringify(definition ? { definition } : {})
+      }),
+    readiness: (
+      decisionId: string,
+      input: {
+        definition?: DecisionDefinition;
+        testResults?: Array<{
+          id: string;
+          name: string;
+          status: "pending" | "pass" | "fail";
+          required?: boolean;
+          detail?: string;
+        }>;
+      } = {}
+    ) =>
+      apiFetch<DecisionReadinessResponse>(`/v1/decisions/${decisionId}/readiness`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
+    evidence: (decisionId: string) =>
+      apiFetch<DecisionAuthoringEvidenceResponse>(`/v1/decisions/${decisionId}/evidence`),
+    scenarios: (decisionId: string) =>
+      apiFetch<DecisionScenarioTestsResponse>(`/v1/decisions/${decisionId}/scenarios`),
+    saveScenarios: (
+      decisionId: string,
+      input: {
+        version?: number | null;
+        items: Array<{
+          name: string;
+          required?: boolean;
+          enabled?: boolean;
+          profile: Record<string, unknown>;
+          expected?: Record<string, unknown>;
+          lastStatus?: "pending" | "pass" | "fail";
+          lastDetail?: string | null;
+          lastResult?: Record<string, unknown> | null;
+          lastRunAt?: string | null;
+        }>;
+      }
+    ) =>
+      apiFetch<DecisionScenarioTestsResponse>(`/v1/decisions/${decisionId}/scenarios`, {
+        method: "PUT",
+        body: JSON.stringify(input)
+      }),
+    runScenarios: (
+      decisionId: string,
+      input: {
+        version?: number | null;
+        scenarioIds?: string[];
+        context?: Record<string, unknown>;
+      } = {}
+    ) =>
+      apiFetch<DecisionScenarioRunResponse>(`/v1/decisions/${decisionId}/scenarios/run`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
+    saveEvidence: (
+      decisionId: string,
+      input: {
+        version?: number;
+        evidenceType: "scenario_test" | "approval_request";
+        status: "passed" | "failed" | "pending" | "approved" | "rejected";
+        summary?: string;
+        payload?: Record<string, unknown>;
+      }
+    ) =>
+      apiFetch<{ decisionId: string; evidence: DecisionAuthoringEvidenceResponse["items"][number] }>(
+        `/v1/decisions/${decisionId}/evidence`,
+        {
+          method: "POST",
+          body: JSON.stringify(input)
+        }
+      ),
+    submitApproval: (
+      decisionId: string,
+      input: {
+        note?: string;
+        expectedDraftVersion?: number;
+        testResults?: Array<{
+          id: string;
+          name: string;
+          status: "pending" | "pass" | "fail";
+          required?: boolean;
+          detail?: string;
+        }>;
+      } = {}
+    ) =>
+      apiFetch<DecisionApprovalRequestResponse>(`/v1/decisions/${decisionId}/submit-approval`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
+    reviewApproval: (
+      decisionId: string,
+      evidenceId: string,
+      input: {
+        action: "approve" | "reject";
+        note?: string;
+      }
+    ) =>
+      apiFetch<DecisionApprovalReviewResponse>(`/v1/decisions/${decisionId}/evidence/${evidenceId}/review`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
     previewActivation: (decisionId: string) =>
       apiFetch<ActivationPreviewResponse>(`/v1/decisions/${decisionId}/preview-activation`, {
         method: "POST",
         body: JSON.stringify({})
       }),
-    activate: (decisionId: string) => apiFetch(`/v1/decisions/${decisionId}/activate`, { method: "POST" }),
+    activate: (
+      decisionId: string,
+      input: {
+        activationNote?: string;
+        expectedDraftVersion?: number;
+        approvalOverride?: { reason: string };
+      } = {}
+    ) =>
+      apiFetch(`/v1/decisions/${decisionId}/activate`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
     archive: (decisionId: string) => apiFetch(`/v1/decisions/${decisionId}/archive`, { method: "POST" }),
     report: (decisionId: string, input: { from?: string; to?: string } = {}) =>
       apiFetch<DecisionReportResponse>(
@@ -1185,8 +1566,104 @@ export const apiClient = {
       status?: string;
       assetKey?: string;
       assetType?: ActivationAssetType;
+      channel?: ActivationAssetChannel;
+      readiness?: CampaignCalendarPlanningReadiness["status"];
+      sourceType?: "in_app_campaign";
+      audienceKey?: string;
+      overlapRisk?: CampaignCalendarRiskLevel;
+      pressureRisk?: CampaignCalendarRiskLevel;
+      pressureSignal?: "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density";
+      needsAttentionOnly?: "true" | "false";
       includeArchived?: "true" | "false";
     } = {}) => apiFetch<CampaignCalendarResponse>(`/v1/inapp/campaign-calendar${toQuery(params)}`),
+    campaignCalendarIcs: (params: {
+      from?: string;
+      to?: string;
+      appKey?: string;
+      placementKey?: string;
+      status?: string;
+      assetKey?: string;
+      assetType?: ActivationAssetType;
+      channel?: ActivationAssetChannel;
+      readiness?: CampaignCalendarPlanningReadiness["status"];
+      sourceType?: "in_app_campaign";
+      audienceKey?: string;
+      overlapRisk?: CampaignCalendarRiskLevel;
+      pressureRisk?: CampaignCalendarRiskLevel;
+      pressureSignal?: "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density";
+      needsAttentionOnly?: "true" | "false";
+      includeArchived?: "true" | "false";
+    } = {}) => apiFetchText(`/v1/inapp/campaign-calendar/export.ics${toQuery(params)}`),
+    campaignCalendarViews: {
+      list: () => apiFetch<{ items: CampaignCalendarSavedViewRecord[] }>(`/v1/inapp/campaign-calendar/views`),
+      create: (input: {
+        name: string;
+        view: CampaignCalendarView;
+        swimlane: CampaignCalendarSwimlane;
+        filters: CampaignCalendarFilters;
+      }) =>
+        apiFetch<{ item: CampaignCalendarSavedViewRecord }>(`/v1/inapp/campaign-calendar/views`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      update: (
+        id: string,
+        input: {
+          name: string;
+          view: CampaignCalendarView;
+          swimlane: CampaignCalendarSwimlane;
+          filters: CampaignCalendarFilters;
+        }
+      ) =>
+        apiFetch<{ item: CampaignCalendarSavedViewRecord }>(`/v1/inapp/campaign-calendar/views/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(input)
+        }),
+      delete: (id: string) =>
+        apiFetch<void>(`/v1/inapp/campaign-calendar/views/${id}`, {
+          method: "DELETE"
+        })
+    },
+    campaignCalendarReviewPacks: {
+      list: (limit = 10) => apiFetch<{ items: CampaignCalendarReviewPackRecord[] }>(`/v1/inapp/campaign-calendar/review-packs${toQuery({ limit })}`),
+      get: (id: string) => apiFetch<{ item: CampaignCalendarReviewPackRecord }>(`/v1/inapp/campaign-calendar/review-packs/${id}`),
+      create: (input: {
+        name: string;
+        from: string;
+        to: string;
+        view: CampaignCalendarView;
+        swimlane: CampaignCalendarSwimlane;
+        filters: CampaignCalendarFilters;
+      }) =>
+        apiFetch<{ item: CampaignCalendarReviewPackRecord }>(`/v1/inapp/campaign-calendar/review-packs`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        })
+    },
+    campaignCalendarExportAudit: {
+      record: (input: {
+        kind: "csv" | "brief" | "ics";
+        from: string;
+        to: string;
+        view: CampaignCalendarView;
+        swimlane: CampaignCalendarSwimlane;
+        filters: CampaignCalendarFilters;
+        itemCount: number;
+        summary?: {
+          total: number;
+          scheduled: number;
+          unscheduled: number;
+          atRisk: number;
+          blockingIssues: number;
+          conflicts: number;
+        };
+      }) =>
+        apiFetch<{ ok: boolean }>(`/v1/inapp/campaign-calendar/export-audit`, {
+          method: "POST",
+          body: JSON.stringify(input)
+        }),
+      list: (limit = 10) => apiFetch<{ items: CampaignCalendarExportAuditRecord[] }>(`/v1/inapp/campaign-calendar/export-audit${toQuery({ limit })}`)
+    },
     campaigns: {
       list: (params: {
         appKey?: string;
@@ -1220,6 +1697,11 @@ export const apiClient = {
       updateSchedule: (id: string, input: { startAt?: string | null; endAt?: string | null }) =>
         apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/schedule`, {
           method: "PATCH",
+          body: JSON.stringify(input)
+        }),
+      schedulePreview: (id: string, input: { startAt?: string | null; endAt?: string | null }) =>
+        apiFetch<CampaignSchedulePreviewResponse>(`/v1/inapp/campaigns/${id}/schedule-preview`, {
+          method: "POST",
           body: JSON.stringify(input)
         }),
       activate: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/activate`, { method: "POST" }),

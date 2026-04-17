@@ -9,6 +9,16 @@ import type {
   InAppPlacement,
   LogsQueryResponseItem
 } from "@decisioning/shared";
+import { InlineError } from "../../components/ui/app-state";
+import { Button, ButtonLink } from "../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../components/ui/page";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 
@@ -152,13 +162,14 @@ export default function LogsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Logs</h2>
-        <p className="text-sm text-stone-700">Decision and in-app logs with replay support. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Logs"
+        description={`Decision and in-app logs with replay support. Environment: ${environment}.`}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-6">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="grid gap-x-2 gap-y-2 md:grid-cols-2 lg:grid-cols-6">
+        <FieldLabel className="flex flex-col gap-1">
           Type
           <select
             value={logType}
@@ -166,21 +177,21 @@ export default function LogsPage() {
               setLogType(event.target.value as "decision" | "stack" | "inapp");
               setPage(1);
             }}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           >
             <option value="decision">decision</option>
             <option value="stack">stack</option>
             <option value="inapp">inapp</option>
           </select>
-        </label>
+        </FieldLabel>
 
         {logType === "decision" ? (
-          <label className="flex flex-col gap-1 text-sm lg:col-span-2">
+          <FieldLabel className="flex flex-col gap-1 lg:col-span-2">
             Decision ID
             <select
               value={decisionId}
               onChange={(event) => setDecisionId(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             >
               <option value="">All active decisions</option>
               {decisionOptions.map((item) => (
@@ -189,14 +200,14 @@ export default function LogsPage() {
                 </option>
               ))}
             </select>
-          </label>
+          </FieldLabel>
         ) : logType === "stack" ? (
-          <label className="flex flex-col gap-1 text-sm lg:col-span-2">
+          <FieldLabel className="flex flex-col gap-1 lg:col-span-2">
             Stack key
             <select
               value={stackKey}
               onChange={(event) => setStackKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             >
               <option value="">All active stacks</option>
               {stackOptions.map((item) => (
@@ -205,15 +216,15 @@ export default function LogsPage() {
                 </option>
               ))}
             </select>
-          </label>
+          </FieldLabel>
         ) : (
           <>
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel className="flex flex-col gap-1">
               Campaign Key
               <select
                 value={campaignKey}
                 onChange={(event) => setCampaignKey(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
               >
                 <option value="">All campaigns</option>
                 {campaignOptions.map((item) => (
@@ -222,13 +233,13 @@ export default function LogsPage() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+            </FieldLabel>
+            <FieldLabel className="flex flex-col gap-1">
               Placement
               <select
                 value={placement}
                 onChange={(event) => setPlacement(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
               >
                 <option value="">All placements</option>
                 {placementOptions.map((item) => (
@@ -237,41 +248,41 @@ export default function LogsPage() {
                   </option>
                 ))}
               </select>
-            </label>
+            </FieldLabel>
           </>
         )}
 
-        <label className="flex flex-col gap-1 text-sm">
+        <FieldLabel className="flex flex-col gap-1">
           Profile ID
           <input
             value={profileId}
             onChange={(event) => setProfileId(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           From
           <input
             type="datetime-local"
             value={from}
             onChange={(event) => setFrom(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           To
           <input
             type="datetime-local"
             value={to}
             onChange={(event) => setTo(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
-      </div>
+        </FieldLabel>
+      </FilterPanel>
 
       <div className="flex items-center gap-2">
-        <button
-          className="rounded-md bg-ink px-4 py-2 text-sm text-white"
+        <Button
+          size="sm"
           onClick={() => {
             setPage(1);
             void load();
@@ -279,39 +290,39 @@ export default function LogsPage() {
           disabled={loading}
         >
           {loading ? "Loading..." : "Apply Filters"}
-        </button>
+        </Button>
       </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Logs unavailable" description={error} /> : null}
 
-      <div className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Time</th>
-              <th className="border-b border-stone-200 px-3 py-2">
+      <OperationalTableShell tableMinWidth="1180px">
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
+            <tr>
+              <th className={operationalTableHeaderCellClassName}>Time</th>
+              <th className={operationalTableHeaderCellClassName}>
                 {logType === "decision" ? "Decision" : logType === "stack" ? "Stack" : "Campaign"}
               </th>
-              <th className="border-b border-stone-200 px-3 py-2">Profile</th>
-              <th className="border-b border-stone-200 px-3 py-2">Outcome</th>
-              <th className="border-b border-stone-200 px-3 py-2">Action</th>
-              <th className="border-b border-stone-200 px-3 py-2">Reasons</th>
-              <th className="border-b border-stone-200 px-3 py-2">Policy</th>
-              <th className="border-b border-stone-200 px-3 py-2">Latency</th>
-              <th className="border-b border-stone-200 px-3 py-2">Actions</th>
+              <th className={operationalTableHeaderCellClassName}>Profile</th>
+              <th className={operationalTableHeaderCellClassName}>Outcome</th>
+              <th className={operationalTableHeaderCellClassName}>Action</th>
+              <th className={operationalTableHeaderCellClassName}>Reasons</th>
+              <th className={operationalTableHeaderCellClassName}>Policy</th>
+              <th className={operationalTableHeaderCellClassName}>Latency</th>
+              <th className={operationalTableHeaderCellClassName}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
               <Fragment key={item.id}>
                 <tr key={item.id}>
-                  <td className="border-b border-stone-100 px-3 py-2">{new Date(item.timestamp).toLocaleString()}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.stackKey ?? item.decisionId}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.profileId}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.outcome}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.actionType}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.reasons.map((reason) => reason.code).join(", ")}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">
+                  <td className={operationalTableCellClassName}>{new Date(item.timestamp).toLocaleString()}</td>
+                  <td className={operationalTableCellClassName}>{item.stackKey ?? item.decisionId}</td>
+                  <td className={operationalTableCellClassName}>{item.profileId}</td>
+                  <td className={operationalTableCellClassName}>{item.outcome}</td>
+                  <td className={operationalTableCellClassName}>{item.actionType}</td>
+                  <td className={operationalTableCellClassName}>{item.reasons.map((reason) => reason.code).join(", ")}</td>
+                  <td className={operationalTableCellClassName}>
                     {item.policy ? (
                       item.policy.allowed ? (
                         "Allowed"
@@ -330,16 +341,16 @@ export default function LogsPage() {
                         .join(", ") || "none"
                     )}
                   </td>
-                  <td className="border-b border-stone-100 px-3 py-2">{item.latencyMs}ms</td>
-                  <td className="border-b border-stone-100 px-3 py-2">
+                  <td className={operationalTableCellClassName}>{item.latencyMs}ms</td>
+                  <td className={operationalTableCellClassName}>
                     <div className="flex gap-2">
-                      <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void toggleExpand(item.id)}>
+                      <Button size="xs" variant="outline" onClick={() => void toggleExpand(item.id)}>
                         {expanded[item.id] ? "Hide" : "Expand"}
-                      </button>
+                      </Button>
                       {item.replayAvailable ? (
-                        <Link className="rounded border border-stone-300 px-2 py-1 text-xs" href={`/simulate?logId=${item.id}&logType=${logType}`}>
+                        <ButtonLink size="xs" href={`/simulate?logId=${item.id}&logType=${logType}`}>
                           Replay
-                        </Link>
+                        </ButtonLink>
                       ) : null}
                     </div>
                   </td>
@@ -382,26 +393,28 @@ export default function LogsPage() {
             ))}
           </tbody>
         </table>
-      </div>
+      </OperationalTableShell>
 
       <div className="flex items-center justify-between text-sm">
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
+        <Button
+          size="sm"
+          variant="outline"
           onClick={() => setPage((value) => Math.max(1, value - 1))}
           disabled={page <= 1}
         >
           Previous
-        </button>
+        </Button>
         <p>
           Page {page} / {Math.max(1, totalPages)}
         </p>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
+        <Button
+          size="sm"
+          variant="outline"
           onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
           disabled={page >= totalPages}
         >
           Next
-        </button>
+        </Button>
       </div>
     </section>
   );

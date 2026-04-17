@@ -6,6 +6,8 @@ import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
+import { InlineError, LoadingState } from "../../../components/ui/app-state";
+import { PageHeader } from "../../../components/ui/page";
 import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import { AssetVariantsEditor, CatalogActionBar, OfferEditor, makeVariantEditorRows, serializeVariantRows, type AssetVariantEditorRow } from "../../../components/catalog";
 import {
@@ -419,10 +421,11 @@ export default function CatalogOffersPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Catalog / Offers</h2>
-        <p className="text-sm text-stone-700">Form-first offer editing with Advanced JSON escape hatch and explicit version lifecycle.</p>
-      </header>
+      <PageHeader
+        eyebrow="Catalog"
+        title="Offers"
+        description="Form-first governed offer editing with an advanced JSON escape hatch and explicit version lifecycle."
+      />
 
       <CatalogActionBar
         status={editor.status}
@@ -446,9 +449,9 @@ export default function CatalogOffersPage() {
         onDuplicate={duplicate}
       />
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Offers unavailable" description={error} /> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
-      {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
+      {loading ? <LoadingState title="Loading offers" /> : null}
 
       {!createMode && editor.key.trim() ? <ActivationAssetProfilePanel entityType="offer" assetKey={editor.key.trim()} /> : null}
 
@@ -563,7 +566,7 @@ export default function CatalogOffersPage() {
         fallbackPayload={readObject(valueParse.value)}
       />
 
-      <section className="panel grid gap-4 p-4 lg:grid-cols-2">
+      <section className="panel grid gap-3 p-3 lg:grid-cols-2">
         <div className="space-y-2">
           <h3 className="font-semibold">Preview Resolution</h3>
           <textarea
@@ -618,7 +621,7 @@ export default function CatalogOffersPage() {
         </div>
       </section>
 
-      <section className="panel space-y-3 border-red-300 p-4">
+      <section className="panel space-y-3 border-red-300 p-3">
         <h3 className="font-semibold text-red-700">Danger zone</h3>
         <p className="text-sm text-stone-700">Archive key permanently hides all versions of this offer key from active use.</p>
         {assetReport?.dependencies.archiveSafety?.warning ? <p className="text-sm font-medium text-red-700">{assetReport.dependencies.archiveSafety.warning}</p> : null}
@@ -653,7 +656,7 @@ export default function CatalogOffersPage() {
       </section>
 
       {versionsForKey.length > 0 ? (
-        <section className="panel p-4">
+        <section className="panel p-3">
           <h3 className="font-semibold">Version history - {editor.key}</h3>
           <ul className="mt-2 space-y-1 text-sm text-stone-700">
             {versionsForKey.map((item) => (

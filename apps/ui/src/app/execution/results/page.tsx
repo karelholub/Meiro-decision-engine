@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "../../../components/ui/button";
+import { OperationalCard } from "../../../components/ui/card";
+import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 import { apiClient } from "../../../lib/api";
 import { useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
@@ -73,47 +76,48 @@ export default function DecisionResultsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Decision Results</h2>
-        <p className="text-sm text-stone-700">Lookup latest READY precomputed result. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Decision Results"
+        description={`Lookup latest READY precomputed result. Environment: ${environment}.`}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="grid gap-x-2 gap-y-2 md:grid-cols-2">
+        <FieldLabel className="flex flex-col gap-1">
           Mode
-          <select className="rounded-md border border-stone-300 px-2 py-1" value={mode} onChange={(event) => setMode(event.target.value as "decision" | "stack")}>
+          <select className={inputClassName} value={mode} onChange={(event) => setMode(event.target.value as "decision" | "stack")}>
             <option value="decision">decision</option>
             <option value="stack">stack</option>
           </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           Key
-          <input className="rounded-md border border-stone-300 px-2 py-1" value={key} onChange={(event) => setKey(event.target.value)} />
-        </label>
+          <input className={inputClassName} value={key} onChange={(event) => setKey(event.target.value)} />
+        </FieldLabel>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <FieldLabel className="flex flex-col gap-1">
           Identity Type
           <select
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             value={identityMode}
             onChange={(event) => setIdentityMode(event.target.value as "profile" | "lookup")}
           >
             <option value="profile">profile</option>
             <option value="lookup">lookup</option>
           </select>
-        </label>
+        </FieldLabel>
 
         {identityMode === "profile" ? (
-          <label className="flex flex-col gap-1 text-sm">
+          <FieldLabel className="flex flex-col gap-1">
             Profile ID
-            <input className="rounded-md border border-stone-300 px-2 py-1" value={profileId} onChange={(event) => setProfileId(event.target.value)} />
-          </label>
+            <input className={inputClassName} value={profileId} onChange={(event) => setProfileId(event.target.value)} />
+          </FieldLabel>
         ) : (
           <>
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel className="flex flex-col gap-1">
               Lookup Attribute
               <select
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={lookupAttributeSelectValue}
                 onChange={(event) => {
                   const next = event.target.value;
@@ -135,28 +139,24 @@ export default function DecisionResultsPage() {
               </select>
               {lookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
                 <input
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                   value={lookupAttribute}
                   onChange={(event) => setLookupAttribute(event.target.value)}
                   placeholder="custom attribute key"
                 />
               ) : null}
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+            </FieldLabel>
+            <FieldLabel className="flex flex-col gap-1">
               Lookup Value
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={lookupValue} onChange={(event) => setLookupValue(event.target.value)} />
-            </label>
+              <input className={inputClassName} value={lookupValue} onChange={(event) => setLookupValue(event.target.value)} />
+            </FieldLabel>
           </>
         )}
-      </div>
+      </FilterPanel>
 
-      <button
-        className="rounded-md bg-ink px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
-        onClick={() => void load()}
-        disabled={loading || !canFetch}
-      >
+      <Button size="sm" onClick={() => void load()} disabled={loading || !canFetch}>
         Fetch Latest
-      </button>
+      </Button>
 
       {!canFetch ? (
         <p className="text-xs text-stone-600">
@@ -167,10 +167,21 @@ export default function DecisionResultsPage() {
       {message ? <p className="text-sm text-stone-800">{message}</p> : null}
 
       {result ? (
-        <div className="panel space-y-3 p-4">
-          <p className="text-sm">Status: {String(result.status ?? "-")}</p>
-          <p className="text-sm">Action: {String(result.actionType ?? "-")}</p>
-          <p className="text-sm">Reason: {String(result.reasonCode ?? "-")}</p>
+        <PagePanel density="compact" className="space-y-3">
+          <div className="grid gap-2 md:grid-cols-3">
+            <OperationalCard density="dense">
+              <p className="text-xs uppercase tracking-wide text-stone-500">Status</p>
+              <p className="mt-1 text-sm font-medium">{String(result.status ?? "-")}</p>
+            </OperationalCard>
+            <OperationalCard density="dense">
+              <p className="text-xs uppercase tracking-wide text-stone-500">Action</p>
+              <p className="mt-1 text-sm font-medium">{String(result.actionType ?? "-")}</p>
+            </OperationalCard>
+            <OperationalCard density="dense">
+              <p className="text-xs uppercase tracking-wide text-stone-500">Reason</p>
+              <p className="mt-1 text-sm font-medium">{String(result.reasonCode ?? "-")}</p>
+            </OperationalCard>
+          </div>
           <div>
             <p className="mb-1 text-xs uppercase text-stone-500">Payload</p>
             <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{JSON.stringify(result.payload ?? {}, null, 2)}</pre>
@@ -183,7 +194,7 @@ export default function DecisionResultsPage() {
             <p className="mb-1 text-xs uppercase text-stone-500">Debug</p>
             <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{JSON.stringify(result.debug ?? {}, null, 2)}</pre>
           </div>
-        </div>
+        </PagePanel>
       ) : null}
     </section>
   );

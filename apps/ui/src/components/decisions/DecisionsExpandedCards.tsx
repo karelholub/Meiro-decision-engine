@@ -1,4 +1,11 @@
 import React from "react";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../ui/operational-table";
 import { DecisionRowActions } from "./DecisionRowActions";
 import type { DecisionSummary } from "./utils";
 
@@ -26,7 +33,7 @@ export function DecisionsExpandedCards({
   return (
     <div className="space-y-3">
       {summaries.map((summary) => (
-        <article key={summary.decisionId} className="panel p-4">
+        <article key={summary.decisionId} className="panel p-3">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold">{summary.name}</h3>
@@ -48,28 +55,28 @@ export function DecisionsExpandedCards({
               onExportJson={onExportJson}
             />
           </div>
-          <div className="overflow-auto">
-            <table className="w-full border-collapse text-sm">
-              <thead>
+          <OperationalTableShell>
+            <table className={operationalTableClassName}>
+              <thead className={operationalTableHeadClassName}>
                 <tr className="text-left text-stone-600">
-                  <th className="border-b border-stone-200 py-2">Version</th>
-                  <th className="border-b border-stone-200 py-2">Status</th>
-                  <th className="border-b border-stone-200 py-2">Updated</th>
-                  <th className="border-b border-stone-200 py-2">Activated</th>
+                  <th className={operationalTableHeaderCellClassName}>Version</th>
+                  <th className={operationalTableHeaderCellClassName}>Status</th>
+                  <th className={operationalTableHeaderCellClassName}>Updated</th>
+                  <th className={operationalTableHeaderCellClassName}>Activated</th>
                 </tr>
               </thead>
               <tbody>
                 {summary.versions.map((version) => (
                   <tr key={version.versionId}>
-                    <td className="border-b border-stone-100 py-2">v{version.version}</td>
-                    <td className="border-b border-stone-100 py-2">{version.status}</td>
-                    <td className="border-b border-stone-100 py-2">{new Date(version.updatedAt).toLocaleString()}</td>
-                    <td className="border-b border-stone-100 py-2">{version.activatedAt ? new Date(version.activatedAt).toLocaleString() : "-"}</td>
+                    <td className={operationalTableCellClassName}>v{version.version}</td>
+                    <td className={operationalTableCellClassName}>{version.status}</td>
+                    <td className={operationalTableCellClassName}>{new Date(version.updatedAt).toLocaleString()}</td>
+                    <td className={operationalTableCellClassName}>{version.activatedAt ? new Date(version.activatedAt).toLocaleString() : "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </OperationalTableShell>
         </article>
       ))}
     </div>

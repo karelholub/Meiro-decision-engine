@@ -1,11 +1,21 @@
 "use client";
 
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppCampaignReport, InAppOverviewReport } from "@decisioning/shared";
 import { apiClient } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
+import { EmptyState, InlineError } from "../../../../components/ui/app-state";
+import { Button, ButtonLink } from "../../../../components/ui/button";
+import { MetricCard } from "../../../../components/ui/card";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../../components/ui/page";
 
 const asIso = (value: string) => {
   if (!value) {
@@ -124,92 +134,84 @@ export default function InAppCampaignReportPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <h2 className="text-xl font-semibold">Campaign Report: {campaignKey}</h2>
-            <p className="text-sm text-stone-700">Variant performance and daily time series in {environment}.</p>
-          </div>
-          <Link href="/engage/reports" className="rounded-md border border-stone-300 px-3 py-2 text-sm">
-            Back
-          </Link>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        title={`Campaign Report: ${campaignKey}`}
+        description={`Variant performance and daily time series in ${environment}.`}
+        actions={<ButtonLink href="/engage/reports" size="sm" variant="outline">Back</ButtonLink>}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-3">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-3">
+        <FieldLabel>
           From
-          <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+          <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className={inputClassName} />
+        </FieldLabel>
+        <FieldLabel>
           To
-          <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
+          <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className={inputClassName} />
+        </FieldLabel>
         <div className="flex items-end gap-2">
-          <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" onClick={() => void load()} disabled={loading}>
             {loading ? "Loading..." : "Apply"}
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void exportCsv()}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void exportCsv()}>
             Export CSV
-          </button>
+          </Button>
         </div>
-        <label className="flex flex-col gap-1 text-sm">
+        <FieldLabel>
           Compare From
           <input
             type="datetime-local"
             value={compareFrom}
             onChange={(event) => setCompareFrom(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel>
           Compare To
           <input
             type="datetime-local"
             value={compareTo}
             onChange={(event) => setCompareTo(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
-      </div>
+        </FieldLabel>
+      </FilterPanel>
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Campaign report unavailable" description={error} /> : null}
 
       {compareDeltaSummary ? (
         <div className="grid gap-3 md:grid-cols-3">
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">Current CTR</p>
-            <p className="text-2xl font-semibold">{(compareDeltaSummary.currentCtr * 100).toFixed(2)}%</p>
-          </article>
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">Compare CTR</p>
-            <p className="text-2xl font-semibold">
-              {compareDeltaSummary.compareCtr === null ? "-" : `${(compareDeltaSummary.compareCtr * 100).toFixed(2)}%`}
-            </p>
-          </article>
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">Uplift Vs Compare</p>
-            <p className={`text-2xl font-semibold ${compareDeltaSummary.uplift !== null && compareDeltaSummary.uplift < 0 ? "text-red-700" : ""}`}>
-              {compareDeltaSummary.uplift === null
-                ? "-"
-                : `${compareDeltaSummary.uplift >= 0 ? "+" : ""}${(compareDeltaSummary.uplift * 100).toFixed(2)} pp`}
-            </p>
-          </article>
+          <MetricCard label="Current CTR" value={`${(compareDeltaSummary.currentCtr * 100).toFixed(2)}%`} />
+          <MetricCard
+            label="Compare CTR"
+            value={compareDeltaSummary.compareCtr === null ? "-" : `${(compareDeltaSummary.compareCtr * 100).toFixed(2)}%`}
+          />
+          <MetricCard
+            label="Uplift Vs Compare"
+            value={
+              <span className={compareDeltaSummary.uplift !== null && compareDeltaSummary.uplift < 0 ? "text-red-700" : undefined}>
+                {compareDeltaSummary.uplift === null
+                  ? "-"
+                  : `${compareDeltaSummary.uplift >= 0 ? "+" : ""}${(compareDeltaSummary.uplift * 100).toFixed(2)} pp`}
+              </span>
+            }
+          />
         </div>
       ) : null}
 
-      <article className="panel overflow-auto">
+      <OperationalTableShell>
         <h3 className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Variant Comparison</h3>
-        <table className="w-full border-collapse text-sm">
-          <thead>
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
             <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Variant</th>
-              <th className="border-b border-stone-200 px-3 py-2">Placement</th>
-              <th className="border-b border-stone-200 px-3 py-2">Impressions</th>
-              <th className="border-b border-stone-200 px-3 py-2">Clicks</th>
-              <th className="border-b border-stone-200 px-3 py-2">CTR</th>
-              <th className="border-b border-stone-200 px-3 py-2">CTR vs Compare</th>
-              <th className="border-b border-stone-200 px-3 py-2">CI 95%</th>
+              <th className={operationalTableHeaderCellClassName}>Variant</th>
+              <th className={operationalTableHeaderCellClassName}>Placement</th>
+              <th className={operationalTableHeaderCellClassName}>Impressions</th>
+              <th className={operationalTableHeaderCellClassName}>Clicks</th>
+              <th className={operationalTableHeaderCellClassName}>CTR</th>
+              <th className={operationalTableHeaderCellClassName}>CTR vs Compare</th>
+              <th className={operationalTableHeaderCellClassName}>CI 95%</th>
             </tr>
           </thead>
           <tbody>
@@ -218,19 +220,19 @@ export default function InAppCampaignReportPage() {
               const ctrDelta = compareGroup ? group.ctr - compareGroup.ctr : null;
               return (
                 <tr key={`${group.variantKey}:${group.placement}`}>
-                  <td className="border-b border-stone-100 px-3 py-2">{group.variantKey}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{group.placement}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{group.impressions}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{group.clicks}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{(group.ctr * 100).toFixed(2)}%</td>
+                  <td className={operationalTableCellClassName}>{group.variantKey}</td>
+                  <td className={operationalTableCellClassName}>{group.placement}</td>
+                  <td className={operationalTableCellClassName}>{group.impressions}</td>
+                  <td className={operationalTableCellClassName}>{group.clicks}</td>
+                  <td className={operationalTableCellClassName}>{(group.ctr * 100).toFixed(2)}%</td>
                   <td
-                    className={`border-b border-stone-100 px-3 py-2 ${
+                    className={`${operationalTableCellClassName} ${
                       ctrDelta === null ? "text-stone-600" : ctrDelta < 0 ? "text-red-700" : "text-green-700"
                     }`}
                   >
                     {ctrDelta === null ? "-" : `${ctrDelta >= 0 ? "+" : ""}${(ctrDelta * 100).toFixed(2)} pp`}
                   </td>
-                  <td className="border-b border-stone-100 px-3 py-2">
+                  <td className={operationalTableCellClassName}>
                     {group.ctr_ci_low === null || group.ctr_ci_high === null
                       ? "-"
                       : `${(group.ctr_ci_low * 100).toFixed(2)}% - ${(group.ctr_ci_high * 100).toFixed(2)}%`}
@@ -240,37 +242,37 @@ export default function InAppCampaignReportPage() {
             })}
           </tbody>
         </table>
-        {!loading && !overview?.groups.length ? <p className="p-3 text-sm text-stone-600">No aggregate data yet.</p> : null}
-      </article>
+        {!loading && !overview?.groups.length ? <EmptyState title="No aggregate data yet" className="p-4" /> : null}
+      </OperationalTableShell>
 
-      <article className="panel overflow-auto">
+      <OperationalTableShell>
         <h3 className="border-b border-stone-200 px-3 py-2 text-sm font-semibold">Daily Time Series</h3>
-        <table className="w-full border-collapse text-sm">
-          <thead>
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
             <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Date</th>
-              <th className="border-b border-stone-200 px-3 py-2">Variant</th>
-              <th className="border-b border-stone-200 px-3 py-2">Impressions</th>
-              <th className="border-b border-stone-200 px-3 py-2">Clicks</th>
-              <th className="border-b border-stone-200 px-3 py-2">CTR</th>
+              <th className={operationalTableHeaderCellClassName}>Date</th>
+              <th className={operationalTableHeaderCellClassName}>Variant</th>
+              <th className={operationalTableHeaderCellClassName}>Impressions</th>
+              <th className={operationalTableHeaderCellClassName}>Clicks</th>
+              <th className={operationalTableHeaderCellClassName}>CTR</th>
             </tr>
           </thead>
           <tbody>
             {series?.series.flatMap((bucket) =>
               bucket.variants.map((variant) => (
                 <tr key={`${bucket.date}:${variant.variantKey}`}>
-                  <td className="border-b border-stone-100 px-3 py-2">{bucket.date}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{variant.variantKey}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{variant.impressions}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{variant.clicks}</td>
-                  <td className="border-b border-stone-100 px-3 py-2">{(variant.ctr * 100).toFixed(2)}%</td>
+                  <td className={operationalTableCellClassName}>{bucket.date}</td>
+                  <td className={operationalTableCellClassName}>{variant.variantKey}</td>
+                  <td className={operationalTableCellClassName}>{variant.impressions}</td>
+                  <td className={operationalTableCellClassName}>{variant.clicks}</td>
+                  <td className={operationalTableCellClassName}>{(variant.ctr * 100).toFixed(2)}%</td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
-        {!loading && !series?.series.length ? <p className="p-3 text-sm text-stone-600">No time series data yet.</p> : null}
-      </article>
+        {!loading && !series?.series.length ? <EmptyState title="No time series data yet" className="p-4" /> : null}
+      </OperationalTableShell>
     </section>
   );
 }

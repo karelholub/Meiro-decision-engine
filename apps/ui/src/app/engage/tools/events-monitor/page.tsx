@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { apiClient, type InAppV2EventsMonitorResponse } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
+import { InlineError } from "../../../../components/ui/app-state";
+import { Button } from "../../../../components/ui/button";
+import { PageHeader, PagePanel } from "../../../../components/ui/page";
 
 export default function InAppEventsMonitorPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -38,22 +41,23 @@ export default function InAppEventsMonitorPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Events Monitor (v2)</h2>
-        <p className="text-sm text-stone-700">Stream lag and worker health for async tracking ingest in {environment}.</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Events Monitor (v2)"
+        description={`Stream lag and worker health for async tracking ingest in ${environment}.`}
+      />
 
       <div className="flex gap-2">
-        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()} disabled={loading}>
+        <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
           {loading ? "Refreshing..." : "Refresh"}
-        </button>
+        </Button>
       </div>
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Events monitor unavailable" description={error} /> : null}
 
       {snapshot ? (
         <>
-          <article className="panel grid gap-3 p-4 md:grid-cols-4">
+          <PagePanel density="compact" className="grid gap-3 md:grid-cols-4">
             <div>
               <p className="text-xs uppercase text-stone-500">Stream</p>
               <p className="text-sm font-medium">{snapshot.stream.key}</p>
@@ -70,9 +74,9 @@ export default function InAppEventsMonitorPage() {
               <p className="text-xs uppercase text-stone-500">Lag</p>
               <p className="text-sm font-medium">{snapshot.stream.lag ?? "-"}</p>
             </div>
-          </article>
+          </PagePanel>
 
-          <article className="panel grid gap-3 p-4 md:grid-cols-4">
+          <PagePanel density="compact" className="grid gap-3 md:grid-cols-4">
             <div>
               <p className="text-xs uppercase text-stone-500">Worker Enabled</p>
               <p className="text-sm font-medium">{String(snapshot.worker?.enabled ?? false)}</p>
@@ -141,7 +145,7 @@ export default function InAppEventsMonitorPage() {
               <p className="text-xs uppercase text-stone-500">Last Error</p>
               <p className="text-sm font-medium">{snapshot.worker?.lastError ?? "-"}</p>
             </div>
-          </article>
+          </PagePanel>
         </>
       ) : null}
     </section>

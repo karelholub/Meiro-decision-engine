@@ -39,7 +39,11 @@ data class DecideRequest(
 data class Tracking(
     @SerialName("campaign_id") val campaignId: String,
     @SerialName("message_id") val messageId: String,
-    @SerialName("variant_id") val variantId: String
+    @SerialName("variant_id") val variantId: String,
+    @SerialName("experiment_id") val experimentId: String? = null,
+    @SerialName("experiment_version") val experimentVersion: Int? = null,
+    @SerialName("is_holdout") val isHoldout: Boolean? = null,
+    @SerialName("allocation_id") val allocationId: String? = null
 )
 
 @Serializable
@@ -79,6 +83,7 @@ private data class DecideRequestBodyPayload(
     val decisionKey: String? = null,
     val stackKey: String? = null,
     val profileId: String? = null,
+    val anonymousId: String? = null,
     val lookup: IdentityLookup? = null,
     val context: Map<String, JsonElement>? = null
 )
@@ -417,7 +422,8 @@ class DecisioningClient(
             placement = input.placement,
             decisionKey = input.decisionKey,
             stackKey = input.stackKey,
-            profileId = profileId ?: anonymousId,
+            profileId = profileId,
+            anonymousId = anonymousId,
             lookup = lookup,
             context = mergedContext
         )

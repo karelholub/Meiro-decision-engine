@@ -2,6 +2,16 @@
 
 import { useEffect, useState } from "react";
 import type { InAppCampaign, InAppEvent } from "@decisioning/shared";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 
@@ -80,15 +90,12 @@ export default function InAppEventsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Event Inventory</h2>
-        <p className="text-sm text-stone-700">Recent event stream in {environment}.</p>
-      </header>
+      <PageHeader density="compact" title="Event Inventory" description={`Recent event stream in ${environment}.`} />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-6">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="grid gap-x-2 gap-y-2 md:grid-cols-6">
+        <FieldLabel className="flex flex-col gap-1">
           Campaign Key
-          <select value={campaignKey} onChange={(event) => setCampaignKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+          <select value={campaignKey} onChange={(event) => setCampaignKey(event.target.value)} className={inputClassName}>
             <option value="">All campaigns</option>
             {campaigns.map((item) => (
               <option key={item.id} value={item.key}>
@@ -96,71 +103,71 @@ export default function InAppEventsPage() {
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           Message ID
-          <input list="inapp-message-ids" value={messageId} onChange={(event) => setMessageId(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+          <input list="inapp-message-ids" value={messageId} onChange={(event) => setMessageId(event.target.value)} className={inputClassName} />
           <datalist id="inapp-message-ids">
             {messageIds.map((id) => (
               <option key={id} value={id} />
             ))}
           </datalist>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           Profile ID
-          <input value={profileId} onChange={(event) => setProfileId(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+          <input value={profileId} onChange={(event) => setProfileId(event.target.value)} className={inputClassName} />
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           From
-          <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+          <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className={inputClassName} />
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           To
-          <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
+          <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className={inputClassName} />
+        </FieldLabel>
         <div className="flex items-end">
-          <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" onClick={() => void load()} disabled={loading}>
             {loading ? "Loading..." : "Apply"}
-          </button>
+          </Button>
         </div>
-      </div>
+      </FilterPanel>
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Event inventory unavailable" description={error} /> : null}
 
-      <article className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Time</th>
-              <th className="border-b border-stone-200 px-3 py-2">Type</th>
-              <th className="border-b border-stone-200 px-3 py-2">Campaign</th>
-              <th className="border-b border-stone-200 px-3 py-2">Variant</th>
-              <th className="border-b border-stone-200 px-3 py-2">Message ID</th>
-              <th className="border-b border-stone-200 px-3 py-2">Profile</th>
+      <OperationalTableShell tableMinWidth="960px">
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
+            <tr>
+              <th className={operationalTableHeaderCellClassName}>Time</th>
+              <th className={operationalTableHeaderCellClassName}>Type</th>
+              <th className={operationalTableHeaderCellClassName}>Campaign</th>
+              <th className={operationalTableHeaderCellClassName}>Variant</th>
+              <th className={operationalTableHeaderCellClassName}>Message ID</th>
+              <th className={operationalTableHeaderCellClassName}>Profile</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td className="border-b border-stone-100 px-3 py-2">{new Date(item.ts).toLocaleString()}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.eventType}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.campaignKey}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.variantKey}</td>
-                <td className="border-b border-stone-100 px-3 py-2">
+                <td className={operationalTableCellClassName}>{new Date(item.ts).toLocaleString()}</td>
+                <td className={operationalTableCellClassName}>{item.eventType}</td>
+                <td className={operationalTableCellClassName}>{item.campaignKey}</td>
+                <td className={operationalTableCellClassName}>{item.variantKey}</td>
+                <td className={operationalTableCellClassName}>
                   <div className="flex items-center gap-2">
                     <code className="max-w-64 truncate">{item.messageId}</code>
-                    <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copy(item.messageId)}>
+                    <Button size="xs" variant="outline" onClick={() => void copy(item.messageId)}>
                       Copy
-                    </button>
+                    </Button>
                   </div>
                 </td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.profileId ?? "-"}</td>
+                <td className={operationalTableCellClassName}>{item.profileId ?? "-"}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!loading && items.length === 0 ? <p className="p-3 text-sm text-stone-600">No events found.</p> : null}
-      </article>
+        {!loading && items.length === 0 ? <EmptyState title="No events found" className="border-0 p-4" /> : null}
+      </OperationalTableShell>
     </section>
   );
 }

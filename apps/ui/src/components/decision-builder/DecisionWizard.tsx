@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DecisionDefinition } from "@decisioning/dsl";
-import type { ActivationPreviewResponse, DecisionValidationResponse } from "@decisioning/shared";
+import type {
+  ActivationPreviewResponse,
+  DecisionDependenciesResponse,
+  DecisionAuthoringRequirementsResponse,
+  DecisionReadinessResponse,
+  DecisionScenarioTestItem,
+  DecisionValidationResponse
+} from "@decisioning/shared";
 import { ActionTemplatePicker } from "./ActionTemplatePicker";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { GuardrailsEditor } from "./GuardrailsEditor";
 import { RuleListBuilder } from "./RuleListBuilder";
 import { SummaryPanel } from "./SummaryPanel";
-import { TestAndActivate, type WizardSimulationResult } from "./TestAndActivate";
-import { fieldRegistry } from "./field-registry";
+import { TestAndActivate, type ScenarioSuiteSaveItem, type WizardSimulationResult } from "./TestAndActivate";
 import type { WizardStepId } from "./types";
+import { useAuthoringFieldRegistry } from "./useAuthoringFieldRegistry";
 import {
   WIZARD_STEPS,
   attributesToConditionRows,
@@ -29,8 +36,19 @@ interface DecisionWizardProps {
   onOpenAdvanced: () => void;
   onRunSimulation: (definition: DecisionDefinition, profileJson: string) => Promise<WizardSimulationResult>;
   onActivate: (activationNote: string) => Promise<void>;
+  onSaveScenarioEvidence?: (definition: DecisionDefinition, note: string) => Promise<void>;
+  onSaveScenarioSuite?: (definition: DecisionDefinition, items: ScenarioSuiteSaveItem[]) => Promise<void>;
+  onRunScenarioSuite?: (definition: DecisionDefinition) => Promise<void>;
+  onSubmitApproval?: (definition: DecisionDefinition, note: string) => Promise<void>;
   activationPreview?: ActivationPreviewResponse | null;
+  requirements?: DecisionAuthoringRequirementsResponse | null;
+  dependencies?: DecisionDependenciesResponse | null;
+  scenarioTests?: DecisionScenarioTestItem[];
+  readiness?: DecisionReadinessResponse | null;
   onActivationReadyChange?: (ready: boolean) => void;
+  onScenarioResultsChange?: (
+    results: Array<{ id: string; name: string; status: "pending" | "pass" | "fail"; required?: boolean; detail?: string }>
+  ) => void;
 }
 
 const STEP_PREFIX: Record<WizardStepId, string[]> = {
@@ -54,7 +72,7 @@ const STEP_HINTS: Record<WizardStepId, { title: string; tip: string }> = {
   },
   eligibility: {
     title: "Think from broad to narrow",
-    tip: "Start with audiences, then add profile conditions. Every condition row is combined with AND in this version."
+    tip: "Start with audiences, then add broad profile conditions. Rule cards support more detailed AND/OR branching."
   },
   rules: {
     title: "Order defines priority",
@@ -126,7 +144,16 @@ export function DecisionWizard({
   onOpenAdvanced,
   onRunSimulation,
   onActivate,
-  activationPreview
+  onSaveScenarioEvidence,
+  onSaveScenarioSuite,
+  onRunScenarioSuite,
+  onSubmitApproval,
+  activationPreview,
+  requirements,
+  dependencies,
+  scenarioTests = [],
+  readiness,
+  onScenarioResultsChange
 }: DecisionWizardProps) {
   const [activeStep, setActiveStep] = useState<WizardStepId>("template");
   const [draft, setDraft] = useState<DecisionDefinition>(() => ensureDecisionDefinitionDefaults(initialDefinition));
@@ -155,6 +182,7 @@ export function DecisionWizard({
     test_activate: {}
   });
   const lastScrolledErrorRef = useRef<string | null>(null);
+  const authoringFields = useAuthoringFieldRegistry();
 
   useEffect(() => {
     const normalized = ensureDecisionDefinitionDefaults(initialDefinition);
@@ -559,7 +587,7 @@ export function DecisionWizard({
         ) : null}
 
         {activeStep === "template" ? (
-          <section className="panel space-y-3 p-4">
+          <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Quick-start templates</h3>
             <p className="text-sm text-stone-700">Apply a template or continue with your current draft.</p>
             <div className="grid gap-2 md:grid-cols-3">
@@ -595,7 +623,7 @@ export function DecisionWizard({
         ) : null}
 
         {activeStep === "basics" ? (
-          <section className="panel space-y-3 p-4">
+          <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Basics</h3>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="flex flex-col gap-1 text-sm" data-error-path="key">
@@ -642,8 +670,12 @@ export function DecisionWizard({
         ) : null}
 
         {activeStep === "eligibility" ? (
-          <section className="panel space-y-3 p-4">
+          <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Eligibility</h3>
+            <p className="text-xs text-stone-600">
+              Field registry: {authoringFields.sourceLabel}
+              {authoringFields.mappedFieldCount > 0 ? ` (${authoringFields.mappedFieldCount} mapped fields)` : ""}
+            </p>
             {emptyEligibility && hasMessagingAction ? (
               <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
                 Eligibility is empty. This messaging decision currently applies to everyone.
@@ -668,9 +700,9 @@ export function DecisionWizard({
 
             <ConditionBuilder
               title="Profile conditions"
-              rows={attributesToConditionRows(draft.eligibility.attributes ?? [], fieldRegistry)}
+              rows={attributesToConditionRows(draft.eligibility.attributes ?? [], authoringFields.registry)}
               onChange={(rows) => {
-                const attributes = conditionRowsToAttributes(rows, fieldRegistry);
+                const attributes = conditionRowsToAttributes(rows, authoringFields.registry);
                 setDraft((current) => ({
                   ...current,
                   eligibility: {
@@ -679,7 +711,7 @@ export function DecisionWizard({
                   }
                 }));
               }}
-              registry={fieldRegistry}
+              registry={authoringFields.registry}
               readOnly={readOnly}
               errorByPath={errorByPathMerged}
               pathPrefix="eligibility.attributes"
@@ -688,7 +720,7 @@ export function DecisionWizard({
         ) : null}
 
         {activeStep === "rules" ? (
-          <section className="panel space-y-3 p-4">
+          <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Rules</h3>
             <RuleListBuilder
               rules={draft.flow.rules}
@@ -700,7 +732,7 @@ export function DecisionWizard({
                   }
                 }))
               }
-              registry={fieldRegistry}
+              registry={authoringFields.registry}
               readOnly={readOnly}
               errorByPath={errorByPathMerged}
             />
@@ -709,14 +741,14 @@ export function DecisionWizard({
         ) : null}
 
         {activeStep === "guardrails" ? (
-          <section className="panel space-y-3 p-4">
+          <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Guardrails</h3>
             <GuardrailsEditor definition={draft} onChange={setDraft} readOnly={readOnly} errorByPath={errorByPathMerged} />
           </section>
         ) : null}
 
         {activeStep === "fallback" ? (
-          <section className="panel space-y-3 p-4">
+          <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Performance & Defaults</h3>
             <p className="text-xs text-stone-600">
               Fail-open: return stale/default action on timeout. Fail-closed: disable fallback and return runtime errors.
@@ -1214,7 +1246,7 @@ export function DecisionWizard({
         ) : null}
 
         {activeStep === "test_activate" ? (
-          <section className="panel p-4">
+          <section className="panel p-3">
             <TestAndActivate
               environment={environment}
               decisionKey={draft.key}
@@ -1224,10 +1256,16 @@ export function DecisionWizard({
               simulationError={simulationError}
               onRunSimulation={runSimulation}
               onActivate={runActivation}
+              onSaveScenarioEvidence={onSaveScenarioEvidence ? (note) => onSaveScenarioEvidence(draft, note) : undefined}
+              onSaveScenarioSuite={onSaveScenarioSuite ? (items) => onSaveScenarioSuite(draft, items) : undefined}
+              onRunScenarioSuite={onRunScenarioSuite ? () => onRunScenarioSuite(draft) : undefined}
+              onSubmitApproval={onSubmitApproval ? (note) => onSubmitApproval(draft, note) : undefined}
               activating={activating}
               activationPreview={activationPreview}
+              scenarioTests={scenarioTests}
               onChecklistChange={setChecklistConfirmed}
               onSkipSimulationChange={setSkipSimulation}
+              onScenarioResultsChange={onScenarioResultsChange}
               validationPassed={Boolean(validation?.valid)}
             />
           </section>
@@ -1270,7 +1308,15 @@ export function DecisionWizard({
         </section>
       </main>
 
-      <SummaryPanel definition={draft} validation={validation} groupedErrors={groupedErrors} readOnlyReasons={readOnlyReasons} />
+      <SummaryPanel
+        definition={draft}
+        validation={validation}
+        groupedErrors={groupedErrors}
+        readOnlyReasons={readOnlyReasons}
+        requirements={requirements}
+        dependencies={dependencies}
+        readiness={readiness}
+      />
     </div>
   );
 }

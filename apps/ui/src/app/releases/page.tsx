@@ -3,6 +3,16 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient, type ReleaseRecord } from "../../lib/api";
+import { InlineError } from "../../components/ui/app-state";
+import { Button } from "../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../components/ui/page";
 import PermissionDenied from "../../components/permission-denied";
 import { usePermissions } from "../../lib/permissions";
 
@@ -54,14 +64,17 @@ export default function ReleasesPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Releases</h2>
-        <p className="text-sm text-stone-600">Create plans, review diffs, approve, and apply promotions across environments.</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Releases"
+        description="Create plans, review diffs, approve, and apply promotions across environments."
+      />
 
       {hasPermission("promotion.create") ? (
-        <div className="panel grid gap-2 p-4 text-sm md:grid-cols-6">
-          <select className="rounded border border-stone-300 px-2 py-2" value={selectionType} onChange={(event) => setSelectionType(event.target.value as any)}>
+        <FilterPanel density="compact" className="grid gap-2 md:grid-cols-6">
+          <FieldLabel>
+            Type
+          <select className={inputClassName} value={selectionType} onChange={(event) => setSelectionType(event.target.value as any)}>
             <option value="decision">decision</option>
             <option value="stack">stack</option>
             <option value="offer">offer</option>
@@ -74,57 +87,70 @@ export default function ReleasesPage() {
             <option value="placement">placement</option>
             <option value="app">app</option>
           </select>
-          <input className="rounded border border-stone-300 px-2 py-2" placeholder="key" value={selectionKey} onChange={(event) => setSelectionKey(event.target.value)} />
-          <select className="rounded border border-stone-300 px-2 py-2" value={sourceEnv} onChange={(event) => setSourceEnv(event.target.value as any)}>
+          </FieldLabel>
+          <FieldLabel>
+            Key
+          <input className={inputClassName} placeholder="key" value={selectionKey} onChange={(event) => setSelectionKey(event.target.value)} />
+          </FieldLabel>
+          <FieldLabel>
+            Source
+          <select className={inputClassName} value={sourceEnv} onChange={(event) => setSourceEnv(event.target.value as any)}>
             <option value="DEV">DEV</option>
             <option value="STAGE">STAGE</option>
             <option value="PROD">PROD</option>
           </select>
-          <select className="rounded border border-stone-300 px-2 py-2" value={targetEnv} onChange={(event) => setTargetEnv(event.target.value as any)}>
+          </FieldLabel>
+          <FieldLabel>
+            Target
+          <select className={inputClassName} value={targetEnv} onChange={(event) => setTargetEnv(event.target.value as any)}>
             <option value="DEV">DEV</option>
             <option value="STAGE">STAGE</option>
             <option value="PROD">PROD</option>
           </select>
-          <select className="rounded border border-stone-300 px-2 py-2" value={mode} onChange={(event) => setMode(event.target.value as any)}>
+          </FieldLabel>
+          <FieldLabel>
+            Mode
+          <select className={inputClassName} value={mode} onChange={(event) => setMode(event.target.value as any)}>
             <option value="copy_as_draft">Copy as draft</option>
             <option value="copy_and_activate">Copy and activate</option>
           </select>
-          <button className="rounded bg-ink px-3 py-2 text-white" onClick={() => void createRelease()}>
+          </FieldLabel>
+          <Button size="sm" className="self-end" onClick={() => void createRelease()}>
             Create Release
-          </button>
-        </div>
+          </Button>
+        </FilterPanel>
       ) : null}
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Releases unavailable" description={error} /> : null}
 
-      <article className="panel p-4">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 py-2">Key</th>
-              <th className="border-b border-stone-200 py-2">Flow</th>
-              <th className="border-b border-stone-200 py-2">Status</th>
-              <th className="border-b border-stone-200 py-2">Created</th>
+      <OperationalTableShell tableMinWidth="760px">
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
+            <tr>
+              <th className={operationalTableHeaderCellClassName}>Key</th>
+              <th className={operationalTableHeaderCellClassName}>Flow</th>
+              <th className={operationalTableHeaderCellClassName}>Status</th>
+              <th className={operationalTableHeaderCellClassName}>Created</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td className="border-b border-stone-100 py-2">
+                <td className={operationalTableCellClassName}>
                   <Link href={`/releases/${item.id}`} className="text-ink underline">
                     {item.key}
                   </Link>
                 </td>
-                <td className="border-b border-stone-100 py-2">
+                <td className={operationalTableCellClassName}>
                   {item.sourceEnv} -&gt; {item.targetEnv}
                 </td>
-                <td className="border-b border-stone-100 py-2">{item.status}</td>
-                <td className="border-b border-stone-100 py-2">{new Date(item.createdAt).toLocaleString()}</td>
+                <td className={operationalTableCellClassName}>{item.status}</td>
+                <td className={operationalTableCellClassName}>{new Date(item.createdAt).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </article>
+      </OperationalTableShell>
     </section>
   );
 }

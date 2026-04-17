@@ -7,6 +7,8 @@ import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange } from "../../../lib/environment";
 import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
+import { InlineError } from "../../../components/ui/app-state";
+import { PageHeader } from "../../../components/ui/page";
 import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import { AssetBadge, ChannelBadges } from "../../../components/catalog/ActivationAssetCard";
 
@@ -90,7 +92,7 @@ function BundlePreviewPanel({
 }) {
   if (!preview) {
     return (
-      <section className="panel p-4">
+      <section className="panel p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="font-semibold">Bundle preview</h3>
@@ -99,7 +101,7 @@ function BundlePreviewPanel({
           <AssetBadge value="ready_with_warnings">Not previewed</AssetBadge>
         </div>
         <div className="mt-4 rounded-md border border-dashed border-stone-300 bg-white p-4 text-sm text-stone-600">
-          Preview will show the selected offer, selected content block, resolved payload fields, and runtime warnings for the current locale/channel/placement.
+          Preview will show the selected offer, selected reusable asset, resolved payload fields, and runtime warnings for the current locale/channel/placement.
         </div>
       </section>
     );
@@ -116,7 +118,7 @@ function BundlePreviewPanel({
   ];
 
   return (
-    <section className="panel space-y-4 p-4">
+    <section className="panel space-y-3 p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold">Resolved bundle preview</h3>
@@ -275,16 +277,17 @@ export default function CatalogBundlesPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h1 className="text-2xl font-semibold">Asset Bundles</h1>
-        <p className="text-sm text-stone-700">Reusable packages of governed offers, content blocks, and compatibility metadata.</p>
-      </header>
+      <PageHeader
+        eyebrow="Catalog"
+        title="Asset Bundles"
+        description="Reusable packages of governed offers, assets, and compatibility metadata."
+      />
 
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{message}</div> : null}
-      {error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+      {error ? <InlineError title="Asset bundles unavailable" description={error} /> : null}
 
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        <aside className="panel space-y-2 p-4">
+        <aside className="panel space-y-2 p-3">
           <Button
             variant="outline"
             onClick={() => {
@@ -306,7 +309,7 @@ export default function CatalogBundlesPage() {
 
         <div className="space-y-4">
           {selected && editor.key.trim() ? <ActivationAssetProfilePanel entityType="bundle" assetKey={editor.key.trim()} /> : null}
-          <section className="panel space-y-4 p-4">
+          <section className="panel space-y-3 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-wide text-stone-500">Bundle composition</p>
@@ -320,7 +323,7 @@ export default function CatalogBundlesPage() {
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <BundleComponentCard label="Offer" asset={selectedOffer} selectedKey={editor.offerKey} href={`/catalog/offers?key=${encodeURIComponent(editor.offerKey)}`} />
-              <BundleComponentCard label="Content Block" asset={selectedContent} selectedKey={editor.contentKey} href={`/catalog/content?key=${encodeURIComponent(editor.contentKey)}`} />
+              <BundleComponentCard label="Reusable asset" asset={selectedContent} selectedKey={editor.contentKey} href={`/catalog/content?key=${encodeURIComponent(editor.contentKey)}`} />
             </div>
             <div className="rounded-md border border-stone-200 bg-white p-3">
               <p className="mb-2 text-xs uppercase tracking-wide text-stone-500">Works in</p>
@@ -332,7 +335,7 @@ export default function CatalogBundlesPage() {
               </div>
             </div>
           </section>
-          <section className="panel grid gap-3 p-4 md:grid-cols-2">
+          <section className="panel grid gap-3 p-3 md:grid-cols-2">
             <h3 className="font-semibold md:col-span-2">Bundle details</h3>
             <label className="text-sm">Key<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.key} onChange={(event) => setEditor((current) => ({ ...current, key: event.target.value }))} disabled={Boolean(selected)} /></label>
             <label className="text-sm">Name<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.name} onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))} /></label>
@@ -340,7 +343,7 @@ export default function CatalogBundlesPage() {
             <label className="text-sm">Status<select className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.status} onChange={(event) => setEditor((current) => ({ ...current, status: event.target.value }))}><option>DRAFT</option><option>PENDING_APPROVAL</option><option>ACTIVE</option><option>PAUSED</option><option>ARCHIVED</option></select></label>
             <label className="text-sm">Use case<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.useCase} onChange={(event) => setEditor((current) => ({ ...current, useCase: event.target.value }))} placeholder="win-back modal" /></label>
             <label className="text-sm">Offer<select className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.offerKey} onChange={(event) => setEditor((current) => ({ ...current, offerKey: event.target.value }))}><option value="">None</option>{offers.map((offer) => <option key={offer.id} value={offer.key}>{offer.key}</option>)}</select></label>
-            <label className="text-sm">Content Block<select className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.contentKey} onChange={(event) => setEditor((current) => ({ ...current, contentKey: event.target.value }))}><option value="">None</option>{contents.map((content) => <option key={content.id} value={content.key}>{content.key}</option>)}</select></label>
+            <label className="text-sm">Reusable asset<select className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.contentKey} onChange={(event) => setEditor((current) => ({ ...current, contentKey: event.target.value }))}><option value="">None</option>{contents.map((content) => <option key={content.id} value={content.key}>{content.key}</option>)}</select></label>
             <label className="text-sm">Template key<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.templateKey} onChange={(event) => setEditor((current) => ({ ...current, templateKey: event.target.value }))} /></label>
             <label className="text-sm">Placements<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.placementKeysText} onChange={(event) => setEditor((current) => ({ ...current, placementKeysText: event.target.value }))} placeholder="home_top, modal" /></label>
             <label className="text-sm">Channels<input className="mt-1 w-full rounded-md border border-stone-300 px-2 py-1" value={editor.channelsText} onChange={(event) => setEditor((current) => ({ ...current, channelsText: event.target.value }))} /></label>
@@ -354,7 +357,7 @@ export default function CatalogBundlesPage() {
             </div>
           </section>
           {changeSummary.readiness ? (
-            <section className="panel space-y-2 p-4 text-sm">
+            <section className="panel space-y-2 p-3 text-sm">
               <h3 className="font-semibold">Readiness & Impact</h3>
               <p>Publish readiness: {changeSummary.readiness.readiness.status} / risk {changeSummary.readiness.readiness.riskLevel}</p>
               <p>Impact risk: {changeSummary.impact?.impact.releaseRiskLevel ?? "unknown"} · archive risk {changeSummary.archive?.archive.riskLevel ?? "unknown"}</p>

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import type { DecisionValidationResponse } from "@decisioning/shared";
+import type {
+  DecisionAuthoringRequirementsResponse,
+  DecisionDependenciesResponse,
+  DecisionReadinessResponse,
+  DecisionValidationResponse
+} from "@decisioning/shared";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import type { ValidationByStep } from "./types";
 import { deriveRequiredFieldsFromDraft, draftRiskFlags, getDecisionSummaryText } from "./wizard-utils";
@@ -12,17 +17,46 @@ interface SummaryPanelProps {
   validation: DecisionValidationResponse | null;
   groupedErrors: ValidationByStep[];
   readOnlyReasons: string[];
+  requirements?: DecisionAuthoringRequirementsResponse | null;
+  dependencies?: DecisionDependenciesResponse | null;
+  readiness?: DecisionReadinessResponse | null;
 }
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 
-export function SummaryPanel({ definition, validation, groupedErrors, readOnlyReasons }: SummaryPanelProps) {
+const dependencyHref = (type: string, key: string) => {
+  if (!key) return null;
+  if (type === "content") return "/catalog/content";
+  if (type === "offer") return "/catalog/offers";
+  if (type === "bundle") return `/catalog/bundles?key=${encodeURIComponent(key)}`;
+  if (type === "experiment") return `/engage/experiments/${encodeURIComponent(key)}`;
+  if (type === "template") return "/engage/templates";
+  if (type === "placement") return "/engage/placements";
+  return null;
+};
+
+export function SummaryPanel({ definition, validation, groupedErrors, readOnlyReasons, requirements, dependencies, readiness }: SummaryPanelProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [catalogPreview, setCatalogPreview] = useState<unknown | null>(null);
   const [copyRequirementsStatus, setCopyRequirementsStatus] = useState<"idle" | "copied">("idle");
 
   const summaryText = useMemo(() => getDecisionSummaryText(definition), [definition]);
-  const requirements = useMemo(() => deriveRequiredFieldsFromDraft(definition), [definition]);
+  const localRequirements = useMemo(() => deriveRequiredFieldsFromDraft(definition), [definition]);
+  const displayedRequirements = requirements
+    ? {
+        requiredAttributes: requirements.required.attributes,
+        requiredAudiences: requirements.required.audiences,
+        requiredContextKeys: requirements.required.contextKeys,
+        optionalAttributes: requirements.optional.attributes,
+        optionalContextKeys: requirements.optional.contextKeys,
+        notes: requirements.notes
+      }
+    : {
+        ...localRequirements,
+        optionalAttributes: [],
+        optionalContextKeys: [],
+        notes: []
+      };
   const riskFlags = useMemo(() => draftRiskFlags(definition), [definition]);
   const jsonPreview = useMemo(() => (previewOpen ? pretty(definition) : ""), [definition, previewOpen]);
   const referencedContentKey = useMemo(() => {
@@ -81,7 +115,7 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
 
   const copyRequirements = async () => {
     try {
-      await navigator.clipboard.writeText(pretty(requirements));
+      await navigator.clipboard.writeText(pretty(displayedRequirements));
       setCopyRequirementsStatus("copied");
       window.setTimeout(() => setCopyRequirementsStatus("idle"), 1200);
     } catch {
@@ -122,17 +156,26 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
               {copyRequirementsStatus === "copied" ? "Copied" : "Copy requirements for Pipes"}
             </button>
           </div>
-          {requirements.requiredAttributes.length === 0 &&
-          requirements.requiredAudiences.length === 0 &&
-          requirements.requiredContextKeys.length === 0 ? (
+          {displayedRequirements.requiredAttributes.length === 0 &&
+          displayedRequirements.requiredAudiences.length === 0 &&
+          displayedRequirements.requiredContextKeys.length === 0 ? (
             <p className="mt-1 text-xs text-stone-600">Data requirements (derived from rules): none yet.</p>
           ) : (
             <div className="mt-1 space-y-1 text-xs text-stone-700">
-              <p>Attributes: {requirements.requiredAttributes.length ? requirements.requiredAttributes.join(", ") : "none"}</p>
-              <p>Audiences: {requirements.requiredAudiences.length ? requirements.requiredAudiences.join(", ") : "none"}</p>
-              <p>Context keys: {requirements.requiredContextKeys.length ? requirements.requiredContextKeys.join(", ") : "none"}</p>
+              <p>Attributes: {displayedRequirements.requiredAttributes.length ? displayedRequirements.requiredAttributes.join(", ") : "none"}</p>
+              <p>Audiences: {displayedRequirements.requiredAudiences.length ? displayedRequirements.requiredAudiences.join(", ") : "none"}</p>
+              <p>Context keys: {displayedRequirements.requiredContextKeys.length ? displayedRequirements.requiredContextKeys.join(", ") : "none"}</p>
+              {displayedRequirements.optionalAttributes.length > 0 ? <p>Optional attributes: {displayedRequirements.optionalAttributes.join(", ")}</p> : null}
+              {displayedRequirements.optionalContextKeys.length > 0 ? <p>Optional context: {displayedRequirements.optionalContextKeys.join(", ")}</p> : null}
             </div>
           )}
+          {displayedRequirements.notes.length > 0 ? (
+            <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-800">
+              {displayedRequirements.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
         <p className="text-xs text-stone-600">
           Tip: resolve errors from top to bottom for the fastest validation pass.
@@ -155,6 +198,76 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
             {readOnlyReasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {readiness ? (
+        <section className="panel space-y-2 p-3 text-sm">
+          <h3 className="font-semibold">Activation readiness</h3>
+          <p className="text-xs text-stone-700">
+            Status: <strong>{readiness.readiness.status.replace(/_/g, " ")}</strong> · Risk:{" "}
+            <strong>{readiness.readiness.riskLevel}</strong>
+          </p>
+          {readiness.diagnostics.length === 0 ? <p className="text-xs text-emerald-700">No readiness issues.</p> : null}
+          <ul className="space-y-1 text-xs">
+            {readiness.diagnostics.slice(0, 8).map((diagnostic, index) => (
+              <li
+                key={`${diagnostic.code}-${diagnostic.path ?? index}`}
+                className={diagnostic.severity === "blocking" ? "text-red-700" : diagnostic.severity === "warning" ? "text-amber-800" : "text-stone-600"}
+              >
+                <strong>{diagnostic.severity}</strong>: {diagnostic.message}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {dependencies ? (
+        <section className="panel space-y-2 p-3 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-semibold">Dependency cockpit</h3>
+            <span className="rounded-md border border-stone-200 px-2 py-0.5 text-xs">
+              {dependencies.summary.total} refs
+            </span>
+          </div>
+          {dependencies.summary.missing || dependencies.summary.inactive ? (
+            <p className="text-xs text-amber-800">
+              {dependencies.summary.missing} missing · {dependencies.summary.inactive} inactive
+            </p>
+          ) : dependencies.items.length > 0 ? (
+            <p className="text-xs text-emerald-700">All referenced assets resolve.</p>
+          ) : (
+            <p className="text-xs text-stone-600">No catalog or experiment dependencies detected.</p>
+          )}
+          <ul className="space-y-1 text-xs">
+            {dependencies.items.slice(0, 10).map((item, index) => {
+              const href = dependencyHref(item.ref.type, item.ref.key);
+              const tone =
+                item.status === "missing"
+                  ? "border-red-200 bg-red-50 text-red-800"
+                  : item.status === "resolved_inactive"
+                    ? "border-amber-200 bg-amber-50 text-amber-900"
+                    : "border-stone-200 text-stone-700";
+              return (
+                <li key={`${item.ref.type}:${item.ref.key}:${item.sourcePath ?? index}`} className={`rounded-md border px-2 py-1 ${tone}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      <strong>{item.label}</strong>: {item.ref.type}:{item.ref.key}
+                      {item.ref.version ? ` v${item.ref.version}` : ""}
+                    </span>
+                    <span>{item.status.replace(/_/g, " ")}</span>
+                  </div>
+                  {item.detail ? <p className="mt-1">{item.detail}</p> : null}
+                  {item.sourcePath ? <p className="mt-1 font-mono text-[11px] opacity-80">{item.sourcePath}</p> : null}
+                  {href ? (
+                    <Link href={href} className="mt-1 inline-flex underline">
+                      Open
+                    </Link>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
       ) : null}

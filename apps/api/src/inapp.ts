@@ -19,12 +19,15 @@ import { createCatalogResolver } from "./services/catalogResolver";
 import { buildActionDescriptor } from "./services/actionDescriptor";
 import {
   buildCampaignCalendar,
+  buildCampaignCalendarIcs,
+  buildCampaignCalendarReviewPackSnapshot,
   buildCampaignCalendarContentAsset,
   buildCampaignCalendarOfferAsset,
+  buildCampaignSchedulePreview,
   latestByKey,
   type CampaignCalendarLinkedAsset
 } from "./services/campaignCalendar";
-import type { ActivationAssetType } from "./services/activationAssetLibrary";
+import type { ActivationAssetChannel, ActivationAssetType } from "./services/activationAssetLibrary";
 import { getInAppGovernanceAllowedStatuses, getInAppGovernanceTransitionError } from "./lib/inappGovernance";
 
 interface WbsInstanceRecord {
@@ -230,6 +233,17 @@ const activationAssetTypeSchema = z.enum([
   "bundle"
 ]);
 
+const activationAssetChannelSchema = z.enum([
+  "website_personalization",
+  "popup_banner",
+  "email",
+  "mobile_push",
+  "whatsapp",
+  "journey_canvas"
+]);
+
+const campaignCalendarRiskLevelSchema = z.enum(["none", "low", "medium", "high", "critical"]);
+const campaignCalendarPressureSignalSchema = z.enum(["same_audience", "same_placement", "asset_reuse", "cap_pressure", "channel_density"]);
 const campaignCalendarQuerySchema = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
@@ -238,7 +252,92 @@ const campaignCalendarQuerySchema = z.object({
   status: z.string().optional(),
   assetKey: z.string().optional(),
   assetType: activationAssetTypeSchema.optional(),
+  channel: activationAssetChannelSchema.optional(),
+  readiness: z.enum(["ready", "at_risk", "blocked"]).optional(),
+  sourceType: z.enum(["in_app_campaign"]).optional(),
+  audienceKey: z.string().optional(),
+  overlapRisk: campaignCalendarRiskLevelSchema.optional(),
+  pressureRisk: campaignCalendarRiskLevelSchema.optional(),
+  pressureSignal: campaignCalendarPressureSignalSchema.optional(),
+  needsAttentionOnly: z.enum(["true", "false"]).optional(),
   includeArchived: z.enum(["true", "false"]).optional()
+});
+
+const campaignCalendarViewSchema = z.enum(["month", "week", "list"]);
+const campaignCalendarSwimlaneSchema = z.enum([
+  "none",
+  "planning_state",
+  "readiness",
+  "app",
+  "placement",
+  "status",
+  "asset",
+  "channel",
+  "source_type",
+  "audience",
+  "overlap_risk",
+  "pressure_risk"
+]);
+const campaignCalendarFiltersSchema = z.object({
+  status: z.string().optional().default(""),
+  appKey: z.string().optional().default(""),
+  placementKey: z.string().optional().default(""),
+  assetKey: z.string().optional().default(""),
+  assetType: z.union([activationAssetTypeSchema, z.literal("")]).optional().default(""),
+  channel: z.union([activationAssetChannelSchema, z.literal("")]).optional().default(""),
+  readiness: z.union([z.enum(["ready", "at_risk", "blocked"]), z.literal("")]).optional().default(""),
+  sourceType: z.union([z.enum(["in_app_campaign"]), z.literal("")]).optional().default(""),
+  audienceKey: z.string().optional().default(""),
+  overlapRisk: z.union([campaignCalendarRiskLevelSchema, z.literal("")]).optional().default(""),
+  pressureRisk: z.union([campaignCalendarRiskLevelSchema, z.literal("")]).optional().default(""),
+  pressureSignal: z.union([campaignCalendarPressureSignalSchema, z.literal("")]).optional().default(""),
+  needsAttentionOnly: z.boolean().optional().default(false),
+  includeArchived: z.boolean().optional().default(false)
+});
+const campaignCalendarSavedViewBodySchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  view: campaignCalendarViewSchema,
+  swimlane: campaignCalendarSwimlaneSchema,
+  filters: campaignCalendarFiltersSchema
+});
+const campaignCalendarSavedViewParamsSchema = z.object({
+  id: z.string().min(1)
+});
+const campaignCalendarExportAuditBodySchema = z.object({
+  kind: z.enum(["csv", "brief", "ics"]),
+  from: z.string().datetime(),
+  to: z.string().datetime(),
+  view: campaignCalendarViewSchema,
+  swimlane: campaignCalendarSwimlaneSchema,
+  filters: campaignCalendarFiltersSchema,
+  itemCount: z.number().int().nonnegative(),
+  summary: z
+    .object({
+      total: z.number().int().nonnegative(),
+      scheduled: z.number().int().nonnegative(),
+      unscheduled: z.number().int().nonnegative(),
+      atRisk: z.number().int().nonnegative(),
+      blockingIssues: z.number().int().nonnegative(),
+      conflicts: z.number().int().nonnegative()
+    })
+    .optional()
+});
+const campaignCalendarExportAuditQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional()
+});
+const campaignCalendarReviewPackCreateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  from: z.string().datetime(),
+  to: z.string().datetime(),
+  view: campaignCalendarViewSchema,
+  swimlane: campaignCalendarSwimlaneSchema,
+  filters: campaignCalendarFiltersSchema
+});
+const campaignCalendarReviewPackQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional()
+});
+const campaignCalendarReviewPackParamsSchema = z.object({
+  id: z.string().min(1)
 });
 
 const templateValidateSchema = z.object({
@@ -1170,6 +1269,193 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     });
   };
 
+  const serializeCampaignCalendarSavedView = (view: {
+    id: string;
+    name: string;
+    view: string;
+    swimlane: string;
+    filtersJson: unknown;
+    createdAt: Date;
+    updatedAt: Date;
+  }) => ({
+    id: view.id,
+    name: view.name,
+    view: view.view,
+    swimlane: view.swimlane,
+    filters: campaignCalendarFiltersSchema.parse(view.filtersJson),
+    createdAt: view.createdAt.toISOString(),
+    updatedAt: view.updatedAt.toISOString()
+  });
+
+  const serializeCampaignCalendarExportAudit = (entry: {
+    id: string;
+    userId: string;
+    userRole: InAppUserRole;
+    action: string;
+    metaJson: unknown;
+    createdAt: Date;
+  }) => ({
+    id: entry.id,
+    userId: entry.userId,
+    userRole: entry.userRole,
+    action: entry.action,
+    meta: isObject(entry.metaJson) ? entry.metaJson : null,
+    createdAt: entry.createdAt.toISOString()
+  });
+
+  const serializeCampaignCalendarReviewPack = (pack: {
+    id: string;
+    name: string;
+    createdByUserId: string;
+    view: string;
+    swimlane: string;
+    from: Date;
+    to: Date;
+    filtersJson: unknown;
+    summaryJson: unknown;
+    snapshotJson: unknown;
+    campaignIdsJson: unknown;
+    createdAt: Date;
+  }) => ({
+    id: pack.id,
+    name: pack.name,
+    createdByUserId: pack.createdByUserId,
+    view: pack.view,
+    swimlane: pack.swimlane,
+    from: pack.from.toISOString(),
+    to: pack.to.toISOString(),
+    filters: campaignCalendarFiltersSchema.parse(pack.filtersJson),
+    summary: pack.summaryJson,
+    snapshot: pack.snapshotJson,
+    campaignIds: isStringArray(pack.campaignIdsJson) ? pack.campaignIdsJson : [],
+    createdAt: pack.createdAt.toISOString()
+  });
+
+  const loadCampaignCalendarForQuery = async (input: {
+    environment: Environment;
+    query: z.infer<typeof campaignCalendarQuerySchema>;
+  }) => {
+    const nowDate = now();
+    const from = input.query.from ? new Date(input.query.from) : new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1));
+    const to = input.query.to ? new Date(input.query.to) : new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth() + 1, 1) - 1);
+    if (from.getTime() > to.getTime()) {
+      return { error: "from must be before to" as const };
+    }
+
+    const statusValues = input.query.status
+      ? input.query.status.split(",").map((entry) => entry.trim()).filter(Boolean)
+      : [];
+    const allowedStatuses = new Set(Object.values(InAppCampaignStatus));
+    const invalidStatuses = statusValues.filter((status) => !allowedStatuses.has(status as InAppCampaignStatus));
+    if (invalidStatuses.length > 0) {
+      return { error: "Invalid campaign status filter" as const, details: { invalidStatuses } };
+    }
+    const statuses = statusValues as InAppCampaignStatus[];
+    const includeArchived = input.query.includeArchived === "true";
+
+    const campaigns = await prisma.inAppCampaign.findMany({
+      where: {
+        environment: input.environment,
+        ...(input.query.appKey ? { appKey: input.query.appKey } : {}),
+        ...(input.query.placementKey ? { placementKey: input.query.placementKey } : {}),
+        ...(statuses.length > 0 ? { status: { in: statuses } } : includeArchived ? {} : { status: { not: InAppCampaignStatus.ARCHIVED } }),
+        AND: [
+          {
+            OR: [
+              { startAt: null },
+              { startAt: { lte: to } }
+            ]
+          },
+          {
+            OR: [
+              { endAt: null },
+              { endAt: { gte: from } }
+            ]
+          },
+          ...(input.query.assetKey
+            ? [
+                {
+                  OR: [
+                    { contentKey: input.query.assetKey },
+                    { offerKey: input.query.assetKey }
+                  ]
+                }
+              ]
+            : [])
+        ]
+      },
+      orderBy: [{ startAt: "asc" }, { updatedAt: "desc" }],
+      take: 500
+    });
+
+    const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((key): key is string => Boolean(key)))];
+    const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((key): key is string => Boolean(key)))];
+    const [contentRows, offerRows] = await Promise.all([
+      contentKeys.length > 0
+        ? prisma.contentBlock.findMany({
+            where: { environment: input.environment, key: { in: contentKeys } },
+            include: {
+              variants: {
+                select: {
+                  locale: true,
+                  channel: true,
+                  placementKey: true,
+                  payloadJson: true
+                }
+              }
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([]),
+      offerKeys.length > 0
+        ? prisma.offer.findMany({
+            where: { environment: input.environment, key: { in: offerKeys } },
+            include: {
+              variants: {
+                select: {
+                  locale: true,
+                  channel: true,
+                  placementKey: true,
+                  payloadJson: true
+                }
+              }
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([])
+    ]);
+
+    const contentAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
+    for (const item of latestByKey(contentRows).values()) {
+      contentAssetsByKey.set(item.key, buildCampaignCalendarContentAsset(item));
+    }
+    const offerAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
+    for (const item of latestByKey(offerRows).values()) {
+      offerAssetsByKey.set(item.key, buildCampaignCalendarOfferAsset(item));
+    }
+
+    return {
+      calendar: buildCampaignCalendar({
+        campaigns,
+        contentAssetsByKey,
+        offerAssetsByKey,
+        from,
+        to,
+        now: nowDate,
+        assetKey: input.query.assetKey ?? null,
+        assetType: input.query.assetType as ActivationAssetType | undefined,
+        channel: input.query.channel as ActivationAssetChannel | undefined,
+        readiness: input.query.readiness ?? null,
+        sourceType: input.query.sourceType ?? null,
+        audienceKey: input.query.audienceKey ?? null,
+        overlapRisk: input.query.overlapRisk ?? null,
+        pressureRisk: input.query.pressureRisk ?? null,
+        pressureSignal: input.query.pressureSignal ?? null,
+        needsAttentionOnly: input.query.needsAttentionOnly === "true"
+      })
+    };
+  };
+
   const createCampaignVersionSnapshot = async (input: {
     campaignId: string;
     environment: Environment;
@@ -1408,6 +1694,410 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
   });
 
+  app.get("/v1/inapp/campaign-calendar/views", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const views = await prisma.campaignCalendarSavedView.findMany({
+      where: {
+        environment,
+        userId: actor.userId
+      },
+      orderBy: [{ updatedAt: "desc" }]
+    });
+
+    return {
+      items: views.map(serializeCampaignCalendarSavedView)
+    };
+  });
+
+  app.post("/v1/inapp/campaign-calendar/views", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const parsed = campaignCalendarSavedViewBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar saved view", parsed.error.flatten());
+    }
+
+    try {
+      const created = await prisma.campaignCalendarSavedView.create({
+        data: {
+          environment,
+          userId: actor.userId,
+          name: parsed.data.name,
+          view: parsed.data.view,
+          swimlane: parsed.data.swimlane,
+          filtersJson: toInputJson(parsed.data.filters)
+        }
+      });
+
+      await recordAudit({
+        environment,
+        userId: actor.userId,
+        role: actor.role,
+        action: "campaign_calendar_saved_view_create",
+        entityType: "campaign_calendar_saved_view",
+        entityId: created.id,
+        afterValue: created,
+        meta: { name: created.name, view: created.view, swimlane: created.swimlane }
+      });
+
+      return reply.code(201).send({ item: serializeCampaignCalendarSavedView(created) });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        return buildResponseError(reply, 409, "A campaign calendar view with this name already exists");
+      }
+      throw error;
+    }
+  });
+
+  app.put("/v1/inapp/campaign-calendar/views/:id", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const params = campaignCalendarSavedViewParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid saved view id", params.error.flatten());
+    }
+    const parsed = campaignCalendarSavedViewBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar saved view", parsed.error.flatten());
+    }
+
+    const existing = await prisma.campaignCalendarSavedView.findFirst({
+      where: {
+        id: params.data.id,
+        environment,
+        userId: actor.userId
+      }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign calendar saved view not found");
+    }
+
+    try {
+      const updated = await prisma.campaignCalendarSavedView.update({
+        where: { id: existing.id },
+        data: {
+          name: parsed.data.name,
+          view: parsed.data.view,
+          swimlane: parsed.data.swimlane,
+          filtersJson: toInputJson(parsed.data.filters)
+        }
+      });
+
+      await recordAudit({
+        environment,
+        userId: actor.userId,
+        role: actor.role,
+        action: "campaign_calendar_saved_view_update",
+        entityType: "campaign_calendar_saved_view",
+        entityId: updated.id,
+        beforeValue: existing,
+        afterValue: updated,
+        meta: { name: updated.name, view: updated.view, swimlane: updated.swimlane }
+      });
+
+      return { item: serializeCampaignCalendarSavedView(updated) };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        return buildResponseError(reply, 409, "A campaign calendar view with this name already exists");
+      }
+      throw error;
+    }
+  });
+
+  app.delete("/v1/inapp/campaign-calendar/views/:id", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const params = campaignCalendarSavedViewParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid saved view id", params.error.flatten());
+    }
+
+    const existing = await prisma.campaignCalendarSavedView.findFirst({
+      where: {
+        id: params.data.id,
+        environment,
+        userId: actor.userId
+      }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign calendar saved view not found");
+    }
+
+    await prisma.campaignCalendarSavedView.delete({ where: { id: existing.id } });
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "campaign_calendar_saved_view_delete",
+      entityType: "campaign_calendar_saved_view",
+      entityId: existing.id,
+      beforeValue: existing,
+      meta: { name: existing.name, view: existing.view, swimlane: existing.swimlane }
+    });
+
+    return reply.code(204).send();
+  });
+
+  app.post("/v1/inapp/campaign-calendar/export-audit", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const parsed = campaignCalendarExportAuditBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar export audit payload", parsed.error.flatten());
+    }
+    if (new Date(parsed.data.from).getTime() > new Date(parsed.data.to).getTime()) {
+      return buildResponseError(reply, 400, "from must be before to");
+    }
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "campaign_calendar_export",
+      entityType: "campaign_calendar",
+      entityId: `${parsed.data.kind}:${parsed.data.from}:${parsed.data.to}`,
+      meta: {
+        kind: parsed.data.kind,
+        from: parsed.data.from,
+        to: parsed.data.to,
+        view: parsed.data.view,
+        swimlane: parsed.data.swimlane,
+        filters: parsed.data.filters,
+        itemCount: parsed.data.itemCount,
+        summary: parsed.data.summary ?? null
+      }
+    });
+
+    return reply.code(202).send({ ok: true });
+  });
+
+  app.get("/v1/inapp/campaign-calendar/export-audit", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const parsed = campaignCalendarExportAuditQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar export audit query", parsed.error.flatten());
+    }
+
+    const logs = await prisma.inAppAuditLog.findMany({
+      where: {
+        environment,
+        action: "campaign_calendar_export",
+        entityType: "campaign_calendar"
+      },
+      orderBy: [{ createdAt: "desc" }],
+      take: parsed.data.limit ?? 10
+    });
+
+    return {
+      items: logs.map(serializeCampaignCalendarExportAudit)
+    };
+  });
+
+  app.get("/v1/inapp/campaign-calendar/review-packs", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const parsed = campaignCalendarReviewPackQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar review pack query", parsed.error.flatten());
+    }
+
+    const packs = await prisma.campaignCalendarReviewPack.findMany({
+      where: { environment },
+      orderBy: [{ createdAt: "desc" }],
+      take: parsed.data.limit ?? 10
+    });
+
+    return {
+      items: packs.map(serializeCampaignCalendarReviewPack)
+    };
+  });
+
+  app.get("/v1/inapp/campaign-calendar/review-packs/:id", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.VIEWER]);
+    if (!actor) {
+      return;
+    }
+
+    const params = campaignCalendarReviewPackParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid review pack id", params.error.flatten());
+    }
+
+    const pack = await prisma.campaignCalendarReviewPack.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!pack) {
+      return buildResponseError(reply, 404, "Campaign calendar review pack not found");
+    }
+
+    return { item: serializeCampaignCalendarReviewPack(pack) };
+  });
+
+  app.post("/v1/inapp/campaign-calendar/review-packs", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
+
+    const parsed = campaignCalendarReviewPackCreateBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar review pack", parsed.error.flatten());
+    }
+    const from = new Date(parsed.data.from);
+    const to = new Date(parsed.data.to);
+    if (from.getTime() > to.getTime()) {
+      return buildResponseError(reply, 400, "from must be before to");
+    }
+
+    const loaded = await loadCampaignCalendarForQuery({
+      environment,
+      query: {
+        from: parsed.data.from,
+        to: parsed.data.to,
+        status: parsed.data.filters.status || undefined,
+        appKey: parsed.data.filters.appKey || undefined,
+        placementKey: parsed.data.filters.placementKey || undefined,
+        assetKey: parsed.data.filters.assetKey || undefined,
+        assetType: parsed.data.filters.assetType || undefined,
+        channel: parsed.data.filters.channel || undefined,
+        readiness: parsed.data.filters.readiness || undefined,
+        sourceType: parsed.data.filters.sourceType || undefined,
+        audienceKey: parsed.data.filters.audienceKey || undefined,
+        overlapRisk: parsed.data.filters.overlapRisk || undefined,
+        pressureRisk: parsed.data.filters.pressureRisk || undefined,
+        pressureSignal: parsed.data.filters.pressureSignal || undefined,
+        needsAttentionOnly: parsed.data.filters.needsAttentionOnly ? "true" : "false",
+        includeArchived: parsed.data.filters.includeArchived ? "true" : "false"
+      }
+    });
+    if ("error" in loaded) {
+      return buildResponseError(reply, 400, loaded.error ?? "Invalid campaign calendar review pack", loaded.details);
+    }
+
+    const snapshot = buildCampaignCalendarReviewPackSnapshot(loaded.calendar);
+    const created = await prisma.campaignCalendarReviewPack.create({
+      data: {
+        environment,
+        name: parsed.data.name,
+        createdByUserId: actor.userId,
+        view: parsed.data.view,
+        swimlane: parsed.data.swimlane,
+        from,
+        to,
+        filtersJson: toInputJson(parsed.data.filters),
+        summaryJson: toInputJson(snapshot.summary),
+        snapshotJson: toInputJson(snapshot),
+        campaignIdsJson: toInputJson(snapshot.campaignIds)
+      }
+    });
+
+    await recordAudit({
+      environment,
+      userId: actor.userId,
+      role: actor.role,
+      action: "campaign_calendar_review_pack_create",
+      entityType: "campaign_calendar_review_pack",
+      entityId: created.id,
+      afterValue: created,
+      meta: {
+        name: created.name,
+        from: created.from.toISOString(),
+        to: created.to.toISOString(),
+        campaignCount: snapshot.campaignIds.length,
+        atRisk: snapshot.risks.atRisk,
+        blockingIssues: snapshot.risks.blockingIssues,
+        conflicts: snapshot.risks.conflicts
+      }
+    });
+
+    return reply.code(201).send({ item: serializeCampaignCalendarReviewPack(created) });
+  });
+
+  app.get("/v1/inapp/campaign-calendar/export.ics", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = campaignCalendarQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid campaign calendar query", parsed.error.flatten());
+    }
+
+    const loaded = await loadCampaignCalendarForQuery({ environment, query: parsed.data });
+    if ("error" in loaded) {
+      return buildResponseError(reply, 400, loaded.error ?? "Invalid campaign calendar query", loaded.details);
+    }
+
+    const filename = `campaign-plan-${loaded.calendar.window.from.slice(0, 10)}-${loaded.calendar.window.to.slice(0, 10)}.ics`;
+    return reply
+      .header("Content-Type", "text/calendar; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .send(buildCampaignCalendarIcs({ calendar: loaded.calendar, calendarName: "Campaign Calendar" }));
+  });
+
   app.get("/v1/inapp/campaign-calendar", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -1419,115 +2109,12 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       return buildResponseError(reply, 400, "Invalid campaign calendar query", parsed.error.flatten());
     }
 
-    const nowDate = now();
-    const from = parsed.data.from ? new Date(parsed.data.from) : new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1));
-    const to = parsed.data.to ? new Date(parsed.data.to) : new Date(Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth() + 1, 1) - 1);
-    if (from.getTime() > to.getTime()) {
-      return buildResponseError(reply, 400, "from must be before to");
+    const loaded = await loadCampaignCalendarForQuery({ environment, query: parsed.data });
+    if ("error" in loaded) {
+      return buildResponseError(reply, 400, loaded.error ?? "Invalid campaign calendar query", loaded.details);
     }
 
-    const statusValues = parsed.data.status
-      ? parsed.data.status.split(",").map((entry) => entry.trim()).filter(Boolean)
-      : [];
-    const allowedStatuses = new Set(Object.values(InAppCampaignStatus));
-    const invalidStatuses = statusValues.filter((status) => !allowedStatuses.has(status as InAppCampaignStatus));
-    if (invalidStatuses.length > 0) {
-      return buildResponseError(reply, 400, "Invalid campaign status filter", { invalidStatuses });
-    }
-    const statuses = statusValues as InAppCampaignStatus[];
-    const includeArchived = parsed.data.includeArchived === "true";
-
-    const campaigns = await prisma.inAppCampaign.findMany({
-      where: {
-        environment,
-        ...(parsed.data.appKey ? { appKey: parsed.data.appKey } : {}),
-        ...(parsed.data.placementKey ? { placementKey: parsed.data.placementKey } : {}),
-        ...(statuses.length > 0 ? { status: { in: statuses } } : includeArchived ? {} : { status: { not: InAppCampaignStatus.ARCHIVED } }),
-        AND: [
-          {
-            OR: [
-              { startAt: null },
-              { startAt: { lte: to } }
-            ]
-          },
-          {
-            OR: [
-              { endAt: null },
-              { endAt: { gte: from } }
-            ]
-          },
-          ...(parsed.data.assetKey
-            ? [
-                {
-                  OR: [
-                    { contentKey: parsed.data.assetKey },
-                    { offerKey: parsed.data.assetKey }
-                  ]
-                }
-              ]
-            : [])
-        ]
-      },
-      orderBy: [{ startAt: "asc" }, { updatedAt: "desc" }],
-      take: 500
-    });
-
-    const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((key): key is string => Boolean(key)))];
-    const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((key): key is string => Boolean(key)))];
-    const [contentRows, offerRows] = await Promise.all([
-      contentKeys.length > 0
-        ? prisma.contentBlock.findMany({
-            where: { environment, key: { in: contentKeys } },
-            include: {
-              variants: {
-                select: {
-                  locale: true,
-                  channel: true,
-                  placementKey: true,
-                  payloadJson: true
-                }
-              }
-            },
-            orderBy: [{ key: "asc" }, { version: "desc" }]
-          })
-        : Promise.resolve([]),
-      offerKeys.length > 0
-        ? prisma.offer.findMany({
-            where: { environment, key: { in: offerKeys } },
-            include: {
-              variants: {
-                select: {
-                  locale: true,
-                  channel: true,
-                  placementKey: true,
-                  payloadJson: true
-                }
-              }
-            },
-            orderBy: [{ key: "asc" }, { version: "desc" }]
-          })
-        : Promise.resolve([])
-    ]);
-
-    const contentAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
-    for (const item of latestByKey(contentRows).values()) {
-      contentAssetsByKey.set(item.key, buildCampaignCalendarContentAsset(item));
-    }
-    const offerAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
-    for (const item of latestByKey(offerRows).values()) {
-      offerAssetsByKey.set(item.key, buildCampaignCalendarOfferAsset(item));
-    }
-
-    return buildCampaignCalendar({
-      campaigns,
-      contentAssetsByKey,
-      offerAssetsByKey,
-      from,
-      to,
-      now: nowDate,
-      assetKey: parsed.data.assetKey ?? null,
-      assetType: parsed.data.assetType as ActivationAssetType | undefined
-    });
+    return loaded.calendar;
   });
 
   app.get("/v1/inapp/campaigns", async (request, reply) => {
@@ -1595,6 +2182,124 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       items: pageItems.map((item) => serializeCampaign(item)),
       nextCursor
     };
+  });
+
+  app.post("/v1/inapp/campaigns/:id/schedule-preview", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+    const actor = await ensureRole(request, reply, [InAppUserRole.EDITOR]);
+    if (!actor) {
+      return;
+    }
+
+    const params = inAppCampaignIdParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    }
+
+    const parsed = inAppCampaignScheduleUpdateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const existing = await prisma.inAppCampaign.findFirst({
+      where: {
+        id: params.data.id,
+        environment
+      }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Campaign not found");
+    }
+
+    const nextStartAt = parsed.data.startAt === undefined ? existing.startAt : parsed.data.startAt ? new Date(parsed.data.startAt) : null;
+    const nextEndAt = parsed.data.endAt === undefined ? existing.endAt : parsed.data.endAt ? new Date(parsed.data.endAt) : null;
+    if (nextStartAt && nextEndAt && nextEndAt.getTime() < nextStartAt.getTime()) {
+      return buildResponseError(reply, 400, "endAt must be after startAt");
+    }
+
+    const overlapWindow =
+      nextStartAt && nextEndAt
+        ? {
+            OR: [
+              { id: existing.id },
+              {
+                AND: [
+                  { status: { not: InAppCampaignStatus.ARCHIVED } },
+                  { startAt: { lte: nextEndAt } },
+                  { endAt: { gte: nextStartAt } }
+                ]
+              }
+            ]
+          }
+        : { id: existing.id };
+
+    const campaigns = await prisma.inAppCampaign.findMany({
+      where: {
+        environment,
+        ...overlapWindow
+      },
+      orderBy: [{ startAt: "asc" }, { updatedAt: "desc" }],
+      take: 1000
+    });
+
+    const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((key): key is string => Boolean(key)))];
+    const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((key): key is string => Boolean(key)))];
+    const [contentRows, offerRows] = await Promise.all([
+      contentKeys.length > 0
+        ? prisma.contentBlock.findMany({
+            where: { environment, key: { in: contentKeys } },
+            include: {
+              variants: {
+                select: {
+                  locale: true,
+                  channel: true,
+                  placementKey: true,
+                  payloadJson: true
+                }
+              }
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([]),
+      offerKeys.length > 0
+        ? prisma.offer.findMany({
+            where: { environment, key: { in: offerKeys } },
+            include: {
+              variants: {
+                select: {
+                  locale: true,
+                  channel: true,
+                  placementKey: true,
+                  payloadJson: true
+                }
+              }
+            },
+            orderBy: [{ key: "asc" }, { version: "desc" }]
+          })
+        : Promise.resolve([])
+    ]);
+
+    const contentAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
+    for (const item of latestByKey(contentRows).values()) {
+      contentAssetsByKey.set(item.key, buildCampaignCalendarContentAsset(item));
+    }
+    const offerAssetsByKey = new Map<string, CampaignCalendarLinkedAsset>();
+    for (const item of latestByKey(offerRows).values()) {
+      offerAssetsByKey.set(item.key, buildCampaignCalendarOfferAsset(item));
+    }
+
+    return buildCampaignSchedulePreview({
+      campaigns,
+      targetCampaignId: existing.id,
+      startAt: nextStartAt,
+      endAt: nextEndAt,
+      contentAssetsByKey,
+      offerAssetsByKey,
+      now: now()
+    });
   });
 
   app.get("/v1/inapp/campaigns/:id", async (request, reply) => {

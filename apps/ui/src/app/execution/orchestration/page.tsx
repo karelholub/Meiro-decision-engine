@@ -8,6 +8,16 @@ import {
   type OrchestrationPolicyRule
 } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 
 const DEFAULT_POLICY: OrchestrationPolicyJson = {
   schemaVersion: "orchestration_policy.v1",
@@ -78,7 +88,7 @@ function TagMultiSelect({
         ))}
       </div>
       <input
-        className="w-full rounded border border-stone-300 px-2 py-1 text-sm"
+        className={inputClassName}
         list={`${id}-catalog-tags`}
         value={draft}
         placeholder={placeholder}
@@ -339,111 +349,105 @@ export default function OrchestrationPoliciesPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Execution · Orchestration Policies</h2>
-        <p className="text-sm text-stone-700">Cross-channel frequency caps, mutex, and cooldowns. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Execution · Orchestration Policies"
+        description="Cross-channel frequency caps, mutex, and cooldowns."
+        meta={`Environment: ${environment}`}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-5">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-5">
+        <FieldLabel>
           Status
-          <select className="rounded-md border border-stone-300 px-2 py-1" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+          <select className={inputClassName} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
             <option value="">All</option>
             <option value="DRAFT">DRAFT</option>
             <option value="ACTIVE">ACTIVE</option>
             <option value="ARCHIVED">ARCHIVED</option>
           </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm md:col-span-2">
+        </FieldLabel>
+        <FieldLabel className="md:col-span-2">
           App Key filter
-          <input className="rounded-md border border-stone-300 px-2 py-1" value={appKeyFilter} onChange={(event) => setAppKeyFilter(event.target.value)} placeholder="global when empty" />
-        </label>
+          <input className={inputClassName} value={appKeyFilter} onChange={(event) => setAppKeyFilter(event.target.value)} placeholder="global when empty" />
+        </FieldLabel>
         <div className="flex items-end gap-2 md:col-span-2">
-          <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" onClick={() => void load()} disabled={loading}>
             {loading ? "Loading..." : "Reload"}
-          </button>
-          <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={resetDraft}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={resetDraft}>
             New Draft
-          </button>
+          </Button>
         </div>
-      </div>
+      </FilterPanel>
 
-      <div className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
+      {error ? <InlineError title="Orchestration policies unavailable" description={error} /> : null}
+
+      <OperationalTableShell>
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
             <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Key</th>
-              <th className="border-b border-stone-200 px-3 py-2">Version</th>
-              <th className="border-b border-stone-200 px-3 py-2">Status</th>
-              <th className="border-b border-stone-200 px-3 py-2">App Key</th>
-              <th className="border-b border-stone-200 px-3 py-2">Updated</th>
+              <th className={operationalTableHeaderCellClassName}>Key</th>
+              <th className={operationalTableHeaderCellClassName}>Version</th>
+              <th className={operationalTableHeaderCellClassName}>Status</th>
+              <th className={operationalTableHeaderCellClassName}>App Key</th>
+              <th className={operationalTableHeaderCellClassName}>Updated</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.id} className={selectedId === item.id ? "bg-stone-100" : ""} onClick={() => selectPolicy(item)}>
-                <td className="border-b border-stone-100 px-3 py-2">{item.key}</td>
-                <td className="border-b border-stone-100 px-3 py-2">v{item.version}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.status}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.appKey ?? "GLOBAL"}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{new Date(item.updatedAt).toLocaleString()}</td>
+              <tr key={item.id} className={selectedId === item.id ? "cursor-pointer bg-stone-100" : "cursor-pointer hover:bg-stone-50"} onClick={() => selectPolicy(item)}>
+                <td className={operationalTableCellClassName}>{item.key}</td>
+                <td className={operationalTableCellClassName}>v{item.version}</td>
+                <td className={operationalTableCellClassName}>{item.status}</td>
+                <td className={operationalTableCellClassName}>{item.appKey ?? "GLOBAL"}</td>
+                <td className={operationalTableCellClassName}>{new Date(item.updatedAt).toLocaleString()}</td>
               </tr>
             ))}
-            {items.length === 0 ? (
-              <tr>
-                <td className="px-3 py-4 text-sm text-stone-600" colSpan={5}>
-                  No policies found.
-                </td>
-              </tr>
-            ) : null}
           </tbody>
         </table>
-      </div>
+        {items.length === 0 ? <EmptyState title="No policies found" className="p-4" /> : null}
+      </OperationalTableShell>
 
-      <div className="panel space-y-3 p-4">
+      <PagePanel density="compact" className="space-y-3">
         <div className="flex flex-wrap gap-2">
           {(["basics", "caps", "mutex", "cooldowns", "preview"] as const).map((value) => (
-            <button
-              key={value}
-              className={`rounded-md px-3 py-1 text-sm ${tab === value ? "bg-ink text-white" : "border border-stone-300"}`}
-              onClick={() => setTab(value)}
-            >
+            <Button key={value} size="xs" variant={tab === value ? "default" : "outline"} onClick={() => setTab(value)}>
               {value === "caps" ? "Global Caps" : value === "cooldowns" ? "Cooldowns" : value === "mutex" ? "Mutex Groups" : value[0]?.toUpperCase() + value.slice(1)}
-            </button>
+            </Button>
           ))}
         </div>
         <p className="text-xs text-stone-600">Tag sources: Offer tags, Content tags, Campaign tags.</p>
 
         {tab === "basics" ? (
           <div className="grid gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel>
               Key
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={draftKey} onChange={(event) => setDraftKey(event.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+              <input className={inputClassName} value={draftKey} onChange={(event) => setDraftKey(event.target.value)} />
+            </FieldLabel>
+            <FieldLabel>
               Name
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={draftName} onChange={(event) => setDraftName(event.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+              <input className={inputClassName} value={draftName} onChange={(event) => setDraftName(event.target.value)} />
+            </FieldLabel>
+            <FieldLabel>
               App Key
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={draftAppKey} onChange={(event) => setDraftAppKey(event.target.value)} placeholder="global when empty" />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+              <input className={inputClassName} value={draftAppKey} onChange={(event) => setDraftAppKey(event.target.value)} placeholder="global when empty" />
+            </FieldLabel>
+            <FieldLabel>
               Status
-              <select className="rounded-md border border-stone-300 px-2 py-1" value={draftStatus} onChange={(event) => setDraftStatus(event.target.value as typeof draftStatus)}>
+              <select className={inputClassName} value={draftStatus} onChange={(event) => setDraftStatus(event.target.value as typeof draftStatus)}>
                 <option value="DRAFT">DRAFT</option>
                 <option value="ACTIVE">ACTIVE</option>
                 <option value="ARCHIVED">ARCHIVED</option>
               </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm md:col-span-2">
+            </FieldLabel>
+            <FieldLabel className="md:col-span-2">
               Description
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+              <input className={inputClassName} value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} />
+            </FieldLabel>
+            <FieldLabel>
               Default mode
               <select
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={draftPolicyJson.defaults?.mode ?? "fail_open"}
                 onChange={(event) =>
                   setDraftPolicyJson((current) => ({
@@ -458,11 +462,11 @@ export default function OrchestrationPoliciesPage() {
                 <option value="fail_open">fail_open</option>
                 <option value="fail_closed">fail_closed</option>
               </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+            </FieldLabel>
+            <FieldLabel>
               Fallback actionType
               <input
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={draftPolicyJson.defaults?.fallbackAction?.actionType ?? "noop"}
                 onChange={(event) =>
                   setDraftPolicyJson((current) => ({
@@ -477,11 +481,11 @@ export default function OrchestrationPoliciesPage() {
                   }))
                 }
               />
-            </label>
-            <label className="flex flex-col gap-1 text-sm md:col-span-2">
+            </FieldLabel>
+            <FieldLabel className="md:col-span-2">
               Fallback payload JSON
-              <textarea className="min-h-24 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs" value={fallbackPayloadText} onChange={(event) => setFallbackPayloadText(event.target.value)} />
-            </label>
+              <textarea className={`${inputClassName} min-h-24 font-mono text-xs`} value={fallbackPayloadText} onChange={(event) => setFallbackPayloadText(event.target.value)} />
+            </FieldLabel>
           </div>
         ) : null}
 
@@ -656,27 +660,26 @@ export default function OrchestrationPoliciesPage() {
         ) : null}
 
         <div className="flex flex-wrap gap-2 pt-2">
-          <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void saveDraft()} disabled={saving}>
+          <Button size="sm" onClick={() => void saveDraft()} disabled={saving}>
             {saving ? "Saving..." : selectedItem ? "Update Draft" : "Create Policy"}
-          </button>
-          <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={() => void validate()} disabled={saving}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void validate()} disabled={saving}>
             Validate
-          </button>
+          </Button>
           {selectedItem ? (
             <>
-              <button className="rounded-md border border-emerald-400 px-4 py-2 text-sm text-emerald-700" onClick={() => void activate()} disabled={saving}>
+              <Button size="sm" variant="outline" onClick={() => void activate()} disabled={saving}>
                 Activate
-              </button>
-              <button className="rounded-md border border-red-300 px-4 py-2 text-sm text-red-700" onClick={() => void archive()} disabled={saving}>
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void archive()} disabled={saving}>
                 Archive
-              </button>
+              </Button>
             </>
           ) : null}
         </div>
-      </div>
+      </PagePanel>
 
       {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
     </section>
   );
 }

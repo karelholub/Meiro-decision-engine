@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { ButtonLink } from "../../../components/ui/button";
+import { PageHeader, PagePanel } from "../../../components/ui/page";
 
 const stepGuide = [
   {
@@ -43,34 +44,31 @@ const troubleshooting = [
 export default function DecisionBuilderDocsPage() {
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Decision Builder Wizard Guide</h2>
-        <p className="text-sm text-stone-700">
-          This guide explains how to build valid decisions without editing raw JSON while keeping Advanced JSON available for power use.
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2 text-sm">
-          <Link className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100" href="/decisions">
-            Open Decisions
-          </Link>
-          <Link className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100" href="/docs">
-            Back to Docs
-          </Link>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Decision Builder Wizard Guide"
+        description="This guide explains how to build valid decisions without editing raw JSON while keeping Advanced JSON available for power use."
+        actions={
+          <>
+            <ButtonLink href="/decisions" size="sm" variant="outline">Open Decisions</ButtonLink>
+            <ButtonLink href="/docs" size="sm" variant="outline">Back to Docs</ButtonLink>
+          </>
+        }
+      />
 
-      <article className="panel p-4">
+      <PagePanel density="compact">
         <h3 className="font-semibold">Workflow</h3>
         <div className="mt-3 space-y-2 text-sm">
           {stepGuide.map((item) => (
-            <div key={item.title} className="rounded-md border border-stone-200 p-3">
+            <div key={item.title} className="rounded-md border border-stone-200 p-2">
               <p className="font-semibold">{item.title}</p>
               <p className="text-stone-700">{item.detail}</p>
             </div>
           ))}
         </div>
-      </article>
+      </PagePanel>
 
-      <article className="panel p-4 text-sm text-stone-700">
+      <PagePanel density="compact" className="text-sm text-stone-700">
         <h3 className="font-semibold">Recommended Reliability Defaults</h3>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>Overall timeout: `120ms`</li>
@@ -80,34 +78,34 @@ export default function DecisionBuilderDocsPage() {
           <li>Stale TTL: `1800s` (30 minutes)</li>
           <li>Enable `preferStaleCache` when low-latency continuity is preferred over strict recency.</li>
         </ul>
-      </article>
+      </PagePanel>
 
-      <article className="panel p-4">
+      <PagePanel density="compact">
         <h3 className="font-semibold">Action Templates</h3>
         <div className="mt-2 grid gap-2 md:grid-cols-2 text-sm">
-          <div className="rounded-md border border-stone-200 p-3">
+          <div className="rounded-md border border-stone-200 p-2">
             <p className="font-semibold">noop</p>
             <p className="text-stone-700">No operation. Useful as fallback or safe default.</p>
           </div>
-          <div className="rounded-md border border-stone-200 p-3">
+          <div className="rounded-md border border-stone-200 p-2">
             <p className="font-semibold">suppress</p>
             <p className="text-stone-700">Blocks treatment and records a reason.</p>
           </div>
-          <div className="rounded-md border border-stone-200 p-3">
+          <div className="rounded-md border border-stone-200 p-2">
             <p className="font-semibold">inapp_message</p>
             <p className="text-stone-700">
-              Message payload with placement/template/ttl/tracking/payload fields. Content Block and Offer selectors list ACTIVE
-              catalog items by default, and selecting a content block auto-fills templateId.
+              Message payload with placement/template/ttl/tracking/payload fields. Reusable asset and offer selectors list ACTIVE
+              catalog items by default, and selecting a reusable asset auto-fills templateId.
             </p>
           </div>
-          <div className="rounded-md border border-stone-200 p-3">
+          <div className="rounded-md border border-stone-200 p-2">
             <p className="font-semibold">personalize</p>
             <p className="text-stone-700">Selects variant + reason for personalized outcomes.</p>
           </div>
         </div>
-      </article>
+      </PagePanel>
 
-      <article className="panel p-4 text-sm">
+      <PagePanel density="compact" className="text-sm">
         <h3 className="font-semibold">Troubleshooting</h3>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-stone-700">
           {troubleshooting.map((item) => (
@@ -117,7 +115,7 @@ export default function DecisionBuilderDocsPage() {
         <p className="mt-3 text-xs text-stone-600">
           Feature toggle: use App Settings (`/settings/app`) to force-enable or disable Wizard availability.
         </p>
-      </article>
+      </PagePanel>
     </section>
   );
 }

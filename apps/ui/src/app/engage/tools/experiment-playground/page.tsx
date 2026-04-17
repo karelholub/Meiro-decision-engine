@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ExperimentVersionSummary, InAppApplication, InAppPlacement } from "@decisioning/shared";
+import { InlineError } from "../../../../components/ui/app-state";
+import { Button } from "../../../../components/ui/button";
+import { PageHeader, PagePanel, inputClassName } from "../../../../components/ui/page";
 import { apiClient, type InAppV2DecideResponse } from "../../../../lib/api";
 import { useAppEnumSettings } from "../../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
@@ -326,22 +329,23 @@ export default function ExperimentPlaygroundPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Experiment Playground</h2>
-        <p className="text-sm text-stone-700">Run live assignments and preview what variant content looks like on a website-like surface.</p>
-        <p className="text-xs text-stone-500">Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Experiment Playground"
+        description="Run live assignments and preview what variant content looks like on a website-like surface."
+        meta={`Environment: ${environment}`}
+      />
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Experiment playground failed" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
 
       <div className="grid gap-4 xl:grid-cols-[380px_1fr]">
-        <article className="panel space-y-3 p-4">
+        <PagePanel density="compact" className="space-y-3">
           <h3 className="text-sm font-semibold">Playground Controls</h3>
 
           <label className="flex flex-col gap-1 text-sm">
             Mode
-            <select className="rounded-md border border-stone-300 px-2 py-1" value={mode} onChange={(event) => setMode(event.target.value as PlaygroundMode)}>
+            <select className={inputClassName} value={mode} onChange={(event) => setMode(event.target.value as PlaygroundMode)}>
               <option value="runtime">Runtime decide (/v2/inapp/decide)</option>
               <option value="experiment">Experiment preview (/v1/experiments/:key/preview)</option>
             </select>
@@ -349,7 +353,7 @@ export default function ExperimentPlaygroundPage() {
 
           <label className="flex flex-col gap-1 text-sm">
             App key
-            <select className="rounded-md border border-stone-300 px-2 py-1" value={appKey} onChange={(event) => setAppKey(event.target.value)}>
+            <select className={inputClassName} value={appKey} onChange={(event) => setAppKey(event.target.value)}>
               <option value="">Select app</option>
               {apps.map((item) => (
                 <option key={item.id} value={item.key}>
@@ -361,7 +365,7 @@ export default function ExperimentPlaygroundPage() {
 
           <label className="flex flex-col gap-1 text-sm">
             Placement
-            <select className="rounded-md border border-stone-300 px-2 py-1" value={placement} onChange={(event) => setPlacement(event.target.value)}>
+            <select className={inputClassName} value={placement} onChange={(event) => setPlacement(event.target.value)}>
               <option value="">Select placement</option>
               {placements.map((item) => (
                 <option key={item.id} value={item.key}>
@@ -374,7 +378,7 @@ export default function ExperimentPlaygroundPage() {
           {mode === "experiment" ? (
             <label className="flex flex-col gap-1 text-sm">
               Experiment key
-              <select className="rounded-md border border-stone-300 px-2 py-1" value={experimentKey} onChange={(event) => setExperimentKey(event.target.value)}>
+              <select className={inputClassName} value={experimentKey} onChange={(event) => setExperimentKey(event.target.value)}>
                 <option value="">Select experiment</option>
                 {experiments.map((item) => (
                   <option key={`${item.key}:${item.version}`} value={item.key}>
@@ -387,7 +391,7 @@ export default function ExperimentPlaygroundPage() {
 
           <label className="flex flex-col gap-1 text-sm">
             Identity
-            <select className="rounded-md border border-stone-300 px-2 py-1" value={identityMode} onChange={(event) => setIdentityMode(event.target.value as IdentityMode)}>
+            <select className={inputClassName} value={identityMode} onChange={(event) => setIdentityMode(event.target.value as IdentityMode)}>
               <option value="profile">profileId</option>
               <option value="anonymous">anonymousId</option>
               <option value="lookup">lookup</option>
@@ -397,14 +401,14 @@ export default function ExperimentPlaygroundPage() {
           {identityMode === "profile" ? (
             <label className="flex flex-col gap-1 text-sm">
               Profile ID
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={profileId} onChange={(event) => setProfileId(event.target.value)} />
+              <input className={inputClassName} value={profileId} onChange={(event) => setProfileId(event.target.value)} />
             </label>
           ) : null}
 
           {identityMode === "anonymous" ? (
             <label className="flex flex-col gap-1 text-sm">
               Anonymous ID
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={anonymousId} onChange={(event) => setAnonymousId(event.target.value)} />
+              <input className={inputClassName} value={anonymousId} onChange={(event) => setAnonymousId(event.target.value)} />
             </label>
           ) : null}
 
@@ -413,7 +417,7 @@ export default function ExperimentPlaygroundPage() {
               <label className="flex flex-col gap-1 text-sm">
                 Lookup attribute
                 <select
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                   value={lookupAttributeSelectValue}
                   onChange={(event) => {
                     const next = event.target.value;
@@ -435,7 +439,7 @@ export default function ExperimentPlaygroundPage() {
                 </select>
                 {lookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
                   <input
-                    className="rounded-md border border-stone-300 px-2 py-1"
+                    className={inputClassName}
                     value={lookupAttribute}
                     onChange={(event) => setLookupAttribute(event.target.value)}
                     placeholder="custom attribute key"
@@ -444,7 +448,7 @@ export default function ExperimentPlaygroundPage() {
               </label>
               <label className="flex flex-col gap-1 text-sm">
                 Lookup value
-                <input className="rounded-md border border-stone-300 px-2 py-1" value={lookupValue} onChange={(event) => setLookupValue(event.target.value)} />
+                <input className={inputClassName} value={lookupValue} onChange={(event) => setLookupValue(event.target.value)} />
               </label>
             </>
           ) : null}
@@ -453,49 +457,37 @@ export default function ExperimentPlaygroundPage() {
             Context JSON
             <textarea
               rows={8}
-              className="rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+              className={`${inputClassName} font-mono text-xs`}
               value={contextText}
               onChange={(event) => setContextText(event.target.value)}
             />
           </label>
 
-          <button className="rounded-md bg-ink px-3 py-2 text-sm text-white disabled:opacity-50" onClick={() => void runPlayground()} disabled={loading}>
+          <Button size="sm" onClick={() => void runPlayground()} disabled={loading}>
             {loading ? "Running..." : "Run Playground"}
-          </button>
+          </Button>
 
           <div className="space-y-2 border-t border-stone-200 pt-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Event simulation</p>
             <div className="flex gap-2">
-              <button
-                className="rounded-md border border-stone-300 px-2 py-1 text-xs disabled:opacity-50"
-                onClick={() => void sendEvent("IMPRESSION")}
-                disabled={sendingEvent || mode !== "runtime"}
-              >
+              <Button size="xs" variant="outline" onClick={() => void sendEvent("IMPRESSION")} disabled={sendingEvent || mode !== "runtime"}>
                 Send IMPRESSION
-              </button>
-              <button
-                className="rounded-md border border-stone-300 px-2 py-1 text-xs disabled:opacity-50"
-                onClick={() => void sendEvent("CLICK")}
-                disabled={sendingEvent || mode !== "runtime"}
-              >
+              </Button>
+              <Button size="xs" variant="outline" onClick={() => void sendEvent("CLICK")} disabled={sendingEvent || mode !== "runtime"}>
                 Send CLICK
-              </button>
-              <button
-                className="rounded-md border border-stone-300 px-2 py-1 text-xs disabled:opacity-50"
-                onClick={() => void sendEvent("DISMISS")}
-                disabled={sendingEvent || mode !== "runtime"}
-              >
+              </Button>
+              <Button size="xs" variant="outline" onClick={() => void sendEvent("DISMISS")} disabled={sendingEvent || mode !== "runtime"}>
                 Send DISMISS
-              </button>
+              </Button>
             </div>
           </div>
-        </article>
+        </PagePanel>
 
         <div className="space-y-4">
           <article className="panel overflow-hidden">
             <div className="border-b border-stone-200 bg-stone-50 px-4 py-2 text-xs font-medium text-stone-600">Website preview</div>
             <div className="bg-[radial-gradient(circle_at_top_left,#fff2d6,#f7f4ed_45%,#ece6d8)] p-4">
-              <div className="mx-auto max-w-5xl space-y-4 rounded-xl border border-stone-200 bg-white p-4 shadow-sm">
+              <div className="mx-auto max-w-5xl space-y-3 rounded-md border border-stone-200 bg-white p-3 shadow-sm">
                 <header className="flex items-center justify-between border-b border-stone-100 pb-3">
                   <div className="text-lg font-semibold">Meiro Store</div>
                   <nav className="flex gap-4 text-xs text-stone-500">
@@ -512,12 +504,12 @@ export default function ExperimentPlaygroundPage() {
                 ) : null}
 
                 {(mode !== "runtime" || runtimeResult?.show) && (bannerPayload || mode === "experiment") ? (
-                  <div className={`rounded-xl bg-gradient-to-r ${banner.background} p-5 text-white`}>
+                  <div className={`rounded-md bg-gradient-to-r ${banner.background} p-4 text-white`}>
                     <p className="text-[11px] uppercase tracking-[0.16em] opacity-80">{banner.badge}</p>
-                    <h3 className="mt-2 text-2xl font-semibold">{banner.title}</h3>
-                    <p className="mt-2 max-w-2xl text-sm text-white/90">{banner.body}</p>
+                    <h3 className="mt-1.5 text-xl font-semibold">{banner.title}</h3>
+                    <p className="mt-1.5 max-w-2xl text-sm text-white/90">{banner.body}</p>
                     <a
-                      className="mt-4 inline-flex rounded-md border border-white/30 bg-white/15 px-3 py-2 text-sm font-medium hover:bg-white/20"
+                      className="mt-3 inline-flex rounded-md border border-white/30 bg-white/15 px-3 py-1.5 text-sm font-medium hover:bg-white/20"
                       href={banner.ctaUrl}
                     >
                       {banner.ctaLabel}
@@ -542,10 +534,10 @@ export default function ExperimentPlaygroundPage() {
             </div>
           </article>
 
-          <article className="panel p-4">
+          <PagePanel density="compact">
             <h3 className="mb-2 text-sm font-semibold">Assignment + payload debug</h3>
             <pre className="max-h-72 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-3 text-xs">{debugJson}</pre>
-          </article>
+          </PagePanel>
         </div>
       </div>
     </section>

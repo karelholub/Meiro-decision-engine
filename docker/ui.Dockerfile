@@ -25,7 +25,12 @@ ENV NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_OPTIONS=--max-old-space-size=2048
 COPY --from=deps /app /app
-COPY . .
+COPY apps/ui/next.config.ts apps/ui/postcss.config.mjs apps/ui/tailwind.config.ts apps/ui/tsconfig.json apps/ui/next-env.d.ts apps/ui/
+COPY apps/ui/src apps/ui/src
+COPY packages/dsl packages/dsl
+COPY packages/shared packages/shared
+COPY packages/engine packages/engine
+COPY packages/meiro packages/meiro
 RUN pnpm --filter @decisioning/ui build
 
 FROM node:20-bookworm-slim AS runtime

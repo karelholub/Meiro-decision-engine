@@ -16,7 +16,7 @@ export function CollapsibleSection({
   children: ReactNode;
 }) {
   return (
-    <details className="panel p-4" open={defaultOpen}>
+    <details className="panel p-3" open={defaultOpen}>
       <summary className="cursor-pointer list-none">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>

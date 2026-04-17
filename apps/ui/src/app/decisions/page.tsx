@@ -1,11 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DecisionVersionSummary } from "@decisioning/shared";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 import { usePermissions } from "../../lib/permissions";
+import { Button } from "../../components/ui/button";
+import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 import {
   DecisionViewToggle,
   DecisionsCompactTable,
@@ -178,13 +181,21 @@ export default function DecisionsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Decisions</h2>
-        <p className="text-sm text-stone-700">Search, filter, and manage decision versions in {environment}.</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Decisions"
+        description={`Search, filter, and manage decision versions in ${environment}.`}
+        actions={
+          hasPermission("decision.activate") ? (
+            <Link href="/decisions/approvals" className="rounded-md border border-stone-300 px-3 py-1 text-sm">
+              Approval queue
+            </Link>
+          ) : null
+        }
+      />
 
-      <div className="panel flex flex-wrap items-end gap-3 p-4">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="!space-y-0 flex flex-wrap items-end gap-2">
+        <FieldLabel className="flex flex-col gap-1">
           Status
           <select
             value={statusFilter}
@@ -192,51 +203,52 @@ export default function DecisionsPage() {
               setPage(1);
               setStatusFilter(event.target.value);
             }}
-            className="rounded-md border border-stone-300 bg-white px-2 py-1"
+            className={inputClassName}
           >
             <option value="">All</option>
             <option value="DRAFT">DRAFT</option>
             <option value="ACTIVE">ACTIVE</option>
             <option value="ARCHIVED">ARCHIVED</option>
           </select>
-        </label>
+        </FieldLabel>
 
-        <label className="flex min-w-72 flex-1 flex-col gap-1 text-sm">
+        <FieldLabel className="flex min-w-72 flex-1 flex-col gap-1">
           Search
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="name or key"
-            className="rounded-md border border-stone-300 bg-white px-2 py-1"
+            className={inputClassName}
           />
-        </label>
+        </FieldLabel>
 
         <label className="inline-flex items-center gap-2 text-sm">
           <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
           Show archived
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <FieldLabel className="flex flex-col gap-1">
           Sort by
           <select
             value={sortBy}
             onChange={(event) => setSortBy(event.target.value as DecisionSortField)}
-            className="rounded-md border border-stone-300 bg-white px-2 py-1"
+            className={inputClassName}
           >
             <option value="updated">Updated</option>
             <option value="name">Name</option>
             <option value="activated">Activated</option>
             <option value="status">Status</option>
           </select>
-        </label>
+        </FieldLabel>
 
-        <button
+        <Button
           type="button"
-          className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+          size="sm"
+          variant="outline"
           onClick={() => setSortDirection((current) => (current === "desc" ? "asc" : "desc"))}
         >
           {sortDirection === "desc" ? "Desc" : "Asc"}
-        </button>
+        </Button>
 
         <DecisionViewToggle
           value={view}
@@ -246,12 +258,12 @@ export default function DecisionsPage() {
           }}
         />
 
-        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
+        <Button size="sm" variant="outline" onClick={() => void load()}>
           Apply
-        </button>
+        </Button>
 
-        <button
-          className="rounded-md bg-ink px-3 py-2 text-sm text-white disabled:opacity-50"
+        <Button
+          size="sm"
           disabled={!canWrite}
           onClick={() => {
             setCreateMode("wizard");
@@ -259,9 +271,10 @@ export default function DecisionsPage() {
           }}
         >
           Create Draft (Wizard)
-        </button>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-2 text-sm disabled:opacity-50"
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
           disabled={!canWrite}
           onClick={() => {
             setCreateMode("json");
@@ -269,11 +282,11 @@ export default function DecisionsPage() {
           }}
         >
           Create Draft (JSON)
-        </button>
-      </div>
+        </Button>
+      </FilterPanel>
 
       {showCreate ? (
-        <article className="panel grid gap-3 p-4 md:grid-cols-2">
+        <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
           <p className="text-sm md:col-span-2">
             New draft mode: <strong>{createMode === "wizard" ? "Wizard" : "JSON editor"}</strong>
           </p>
@@ -282,37 +295,38 @@ export default function DecisionsPage() {
             <input
               value={createKey}
               onChange={(event) => setCreateKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
               placeholder="cart_recovery"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Name
-            <input value={createName} onChange={(event) => setCreateName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+            <input value={createName} onChange={(event) => setCreateName(event.target.value)} className={inputClassName} />
           </label>
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             Description
             <input
               value={createDescription}
               onChange={(event) => setCreateDescription(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             />
           </label>
           <div className="md:col-span-2 flex items-center gap-2">
-            <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void createDraft()}>
+            <Button size="sm" onClick={() => void createDraft()}>
               Create
-            </button>
-            <button
-              className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               onClick={() => {
                 setShowCreate(false);
                 resetCreateForm();
               }}
             >
               Cancel
-            </button>
+            </Button>
           </div>
-        </article>
+        </PagePanel>
       ) : null}
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
@@ -343,29 +357,21 @@ export default function DecisionsPage() {
       )}
 
       {displayedSummaries.length === 0 && !loading ? (
-        <article className="panel p-4">
+        <PagePanel density="compact">
           <p className="text-sm text-stone-700">No decisions found for the selected filters.</p>
-        </article>
+        </PagePanel>
       ) : null}
 
       <div className="flex items-center justify-between text-sm">
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
-          onClick={() => setPage((value) => Math.max(1, value - 1))}
-          disabled={page <= 1}
-        >
+        <Button size="sm" variant="outline" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page <= 1}>
           Previous
-        </button>
+        </Button>
         <p>
           Page {page} / {Math.max(1, totalPages)}
         </p>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
-          onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
-          disabled={page >= totalPages}
-        >
+        <Button size="sm" variant="outline" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page >= totalPages}>
           Next
-        </button>
+        </Button>
       </div>
     </section>
   );

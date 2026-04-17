@@ -1,6 +1,7 @@
 export type RefType =
   | "offer"
   | "content"
+  | "bundle"
   | "template"
   | "placement"
   | "app"

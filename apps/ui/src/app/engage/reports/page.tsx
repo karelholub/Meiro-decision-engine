@@ -3,6 +3,17 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppApplication, InAppOverviewReport, InAppPlacement } from "@decisioning/shared";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import { MetricCard } from "../../../components/ui/card";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 
@@ -113,23 +124,20 @@ export default function InAppReportsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Engage Reports</h2>
-        <p className="text-sm text-stone-700">Overview metrics and variant performance in {environment}.</p>
-      </header>
+      <PageHeader density="compact" title="Engage Reports" description={`Overview metrics and variant performance in ${environment}.`} />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-5">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="grid gap-x-2 gap-y-2 md:grid-cols-5">
+        <FieldLabel className="flex flex-col gap-1">
           From
-          <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+          <input type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} className={inputClassName} />
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           To
-          <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+          <input type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} className={inputClassName} />
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           App Key
-          <select value={appKey} onChange={(event) => setAppKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+          <select value={appKey} onChange={(event) => setAppKey(event.target.value)} className={inputClassName}>
             <option value="">All apps</option>
             {apps.map((item) => (
               <option key={item.id} value={item.key}>
@@ -137,10 +145,10 @@ export default function InAppReportsPage() {
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           Placement
-          <select value={placement} onChange={(event) => setPlacement(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+          <select value={placement} onChange={(event) => setPlacement(event.target.value)} className={inputClassName}>
             <option value="">All placements</option>
             {placements.map((item) => (
               <option key={item.id} value={item.key}>
@@ -148,67 +156,55 @@ export default function InAppReportsPage() {
               </option>
             ))}
           </select>
-        </label>
+        </FieldLabel>
         <div className="flex items-end gap-2">
-          <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" onClick={() => void load()} disabled={loading}>
             {loading ? "Loading..." : "Apply"}
-          </button>
-          <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void exportCsv()}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void exportCsv()}>
             Export CSV
-          </button>
+          </Button>
         </div>
-      </div>
+      </FilterPanel>
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Engage reports unavailable" description={error} /> : null}
 
       {summary ? (
         <div className="grid gap-3 md:grid-cols-4">
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">Impressions</p>
-            <p className="text-2xl font-semibold">{summary.impressions}</p>
-          </article>
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">Clicks</p>
-            <p className="text-2xl font-semibold">{summary.clicks}</p>
-          </article>
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">CTR</p>
-            <p className="text-2xl font-semibold">{summary.ctr}</p>
-          </article>
-          <article className="panel p-3">
-            <p className="text-xs text-stone-600">Unique Reach</p>
-            <p className="text-2xl font-semibold">{summary.uniqueProfilesReached}</p>
-          </article>
+          <MetricCard label="Impressions" value={summary.impressions} />
+          <MetricCard label="Clicks" value={summary.clicks} />
+          <MetricCard label="CTR" value={summary.ctr} />
+          <MetricCard label="Unique Reach" value={summary.uniqueProfilesReached} />
         </div>
       ) : null}
 
-      <article className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Campaign</th>
-              <th className="border-b border-stone-200 px-3 py-2">Variant</th>
-              <th className="border-b border-stone-200 px-3 py-2">Placement</th>
-              <th className="border-b border-stone-200 px-3 py-2">Impressions</th>
-              <th className="border-b border-stone-200 px-3 py-2">Clicks</th>
-              <th className="border-b border-stone-200 px-3 py-2">CTR</th>
-              <th className="border-b border-stone-200 px-3 py-2">CI 95%</th>
+      <OperationalTableShell tableMinWidth="980px">
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
+            <tr>
+              <th className={operationalTableHeaderCellClassName}>Campaign</th>
+              <th className={operationalTableHeaderCellClassName}>Variant</th>
+              <th className={operationalTableHeaderCellClassName}>Placement</th>
+              <th className={operationalTableHeaderCellClassName}>Impressions</th>
+              <th className={operationalTableHeaderCellClassName}>Clicks</th>
+              <th className={operationalTableHeaderCellClassName}>CTR</th>
+              <th className={operationalTableHeaderCellClassName}>CI 95%</th>
             </tr>
           </thead>
           <tbody>
             {report?.groups.map((group) => (
               <tr key={`${group.campaignKey}:${group.variantKey}:${group.placement}`}>
-                <td className="border-b border-stone-100 px-3 py-2">
+                <td className={operationalTableCellClassName}>
                   <Link className="underline decoration-dotted" href={`/engage/reports/${group.campaignKey}`}>
                     {group.campaignKey}
                   </Link>
                 </td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.variantKey}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.placement}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.impressions}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{group.clicks}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{(group.ctr * 100).toFixed(2)}%</td>
-                <td className="border-b border-stone-100 px-3 py-2">
+                <td className={operationalTableCellClassName}>{group.variantKey}</td>
+                <td className={operationalTableCellClassName}>{group.placement}</td>
+                <td className={operationalTableCellClassName}>{group.impressions}</td>
+                <td className={operationalTableCellClassName}>{group.clicks}</td>
+                <td className={operationalTableCellClassName}>{(group.ctr * 100).toFixed(2)}%</td>
+                <td className={operationalTableCellClassName}>
                   {group.ctr_ci_low === null || group.ctr_ci_high === null
                     ? "-"
                     : `${(group.ctr_ci_low * 100).toFixed(2)}% - ${(group.ctr_ci_high * 100).toFixed(2)}%`}
@@ -217,8 +213,8 @@ export default function InAppReportsPage() {
             ))}
           </tbody>
         </table>
-        {!loading && !report?.groups.length ? <p className="p-3 text-sm text-stone-600">No data in selected window.</p> : null}
-      </article>
+        {!loading && !report?.groups.length ? <EmptyState title="No data in selected window" className="border-0 p-4" /> : null}
+      </OperationalTableShell>
     </section>
   );
 }

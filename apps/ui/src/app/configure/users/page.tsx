@@ -4,6 +4,15 @@ import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api";
 import PermissionDenied from "../../../components/permission-denied";
 import { usePermissions } from "../../../lib/permissions";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { PageHeader, inputClassName } from "../../../components/ui/page";
 
 type UserRow = {
   id: string;
@@ -56,31 +65,28 @@ export default function ConfigureUsersPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Users</h2>
-        <p className="text-sm text-stone-600">Assign roles by environment.</p>
-      </header>
+      <PageHeader density="compact" title="Users" description="Assign roles by environment." />
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Users unavailable" description={error} /> : null}
 
-      <article className="panel overflow-auto p-4">
-        <table className="w-full border-collapse text-sm">
-          <thead>
+      <OperationalTableShell>
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
             <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 py-2">Email</th>
-              <th className="border-b border-stone-200 py-2">DEV</th>
-              <th className="border-b border-stone-200 py-2">STAGE</th>
-              <th className="border-b border-stone-200 py-2">PROD</th>
+              <th className={operationalTableHeaderCellClassName}>Email</th>
+              <th className={operationalTableHeaderCellClassName}>DEV</th>
+              <th className={operationalTableHeaderCellClassName}>STAGE</th>
+              <th className={operationalTableHeaderCellClassName}>PROD</th>
             </tr>
           </thead>
           <tbody>
             {items.map((user) => (
               <tr key={user.id}>
-                <td className="border-b border-stone-100 py-2">{user.email}</td>
+                <td className={operationalTableCellClassName}>{user.email}</td>
                 {(["DEV", "STAGE", "PROD"] as const).map((env) => (
-                  <td key={env} className="border-b border-stone-100 py-2">
+                  <td key={env} className={operationalTableCellClassName}>
                     <select
-                      className="rounded border border-stone-300 px-2 py-1"
+                      className={`${inputClassName} mt-0 w-auto min-w-28`}
                       value={user.roles.find((role) => role.env === env)?.roleKey ?? "viewer"}
                       onChange={(event) => void updateRole(user, env, event.target.value)}
                     >
@@ -96,7 +102,8 @@ export default function ConfigureUsersPage() {
             ))}
           </tbody>
         </table>
-      </article>
+        {items.length === 0 ? <EmptyState title="No users found" className="p-4" /> : null}
+      </OperationalTableShell>
     </section>
   );
 }

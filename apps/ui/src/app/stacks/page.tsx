@@ -1,11 +1,21 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { DecisionStackVersionSummary } from "@decisioning/shared";
 import { apiClient } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { EmptyState, InlineError } from "../../components/ui/app-state";
+import { SignalChip } from "../../components/ui/badge";
+import { Button, ButtonLink } from "../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 
 export default function StacksPage() {
   const router = useRouter();
@@ -126,13 +136,10 @@ export default function StacksPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Decision Stacks</h2>
-        <p className="text-sm text-stone-700">Chain multiple decisions in {environment} with deterministic evaluation.</p>
-      </header>
+      <PageHeader density="compact" title="Decision Stacks" description={`Chain multiple decisions in ${environment} with deterministic evaluation.`} />
 
-      <div className="panel flex flex-wrap items-end gap-3 p-4">
-        <label className="flex flex-col gap-1 text-sm">
+      <FilterPanel density="compact" className="!space-y-0 flex flex-wrap items-end gap-3">
+        <FieldLabel>
           Status
           <select
             value={statusFilter}
@@ -140,84 +147,82 @@ export default function StacksPage() {
               setPage(1);
               setStatusFilter(event.target.value as DecisionStackVersionSummary["status"] | "");
             }}
-            className="rounded-md border border-stone-300 bg-white px-2 py-1"
+            className={inputClassName}
           >
             <option value="">All</option>
             <option value="DRAFT">DRAFT</option>
             <option value="ACTIVE">ACTIVE</option>
             <option value="ARCHIVED">ARCHIVED</option>
           </select>
-        </label>
-        <label className="flex min-w-72 flex-1 flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="min-w-72 flex-1">
           Search
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="name or key"
-            className="rounded-md border border-stone-300 bg-white px-2 py-1"
+            className={inputClassName}
           />
-        </label>
-        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
+        </FieldLabel>
+        <Button size="sm" variant="outline" onClick={() => void load()}>
           Apply
-        </button>
-        <button
-          className="rounded-md bg-ink px-3 py-2 text-sm text-white"
-          onClick={() => setShowCreate((current) => !current)}
-        >
+        </Button>
+        <Button size="sm" onClick={() => setShowCreate((current) => !current)}>
           Create Stack Draft
-        </button>
-      </div>
+        </Button>
+      </FilterPanel>
 
       {showCreate ? (
-        <article className="panel grid gap-3 p-4 md:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
+        <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
+          <FieldLabel>
             Stack key
             <input
               value={createKey}
               onChange={(event) => setCreateKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
               placeholder="inapp_home_top_default"
             />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Name
             <input
               value={createName}
               onChange={(event) => setCreateName(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             />
-          </label>
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          </FieldLabel>
+          <FieldLabel className="md:col-span-2">
             Description
             <input
               value={createDescription}
               onChange={(event) => setCreateDescription(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             />
-          </label>
+          </FieldLabel>
           <div className="md:col-span-2 flex items-center gap-2">
-            <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void createDraft()}>
+            <Button size="sm" onClick={() => void createDraft()}>
               Create
-            </button>
-            <button
-              className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               onClick={() => {
                 setShowCreate(false);
                 resetCreateForm();
               }}
             >
               Cancel
-            </button>
+            </Button>
           </div>
-        </article>
+        </PagePanel>
       ) : null}
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Decision stacks unavailable" description={error} /> : null}
       {loading ? <p className="text-sm">Loading...</p> : null}
 
       <div className="space-y-3">
         {grouped.map((group) => (
-          <article key={group.key} className="panel p-4">
+          <article key={group.key} className="panel p-3">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold">{group.name}</h3>
@@ -230,72 +235,63 @@ export default function StacksPage() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 text-sm">
-                <Link href={`/stacks/${group.stackId}`} className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100">
+                <ButtonLink href={`/stacks/${group.stackId}`} size="xs" variant="outline">
                   Details
-                </Link>
-                <Link
-                  href={`/stacks/${group.stackId}/edit`}
-                  className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100"
-                >
+                </ButtonLink>
+                <ButtonLink href={`/stacks/${group.stackId}/edit`} size="xs" variant="outline">
                   Edit Draft
-                </Link>
-                <button
-                  onClick={() => void duplicateActive(group.stackId)}
-                  className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100"
-                >
+                </ButtonLink>
+                <Button size="xs" variant="outline" onClick={() => void duplicateActive(group.stackId)}>
                   Duplicate Active
-                </button>
-                <button onClick={() => void archive(group.stackId)} className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100">
+                </Button>
+                <Button size="xs" variant="outline" onClick={() => void archive(group.stackId)}>
                   Archive
-                </button>
+                </Button>
               </div>
             </div>
-            <div className="overflow-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead>
+            <OperationalTableShell>
+              <table className={operationalTableClassName}>
+                <thead className={operationalTableHeadClassName}>
                   <tr className="text-left text-stone-600">
-                    <th className="border-b border-stone-200 py-2">Version</th>
-                    <th className="border-b border-stone-200 py-2">Status</th>
-                    <th className="border-b border-stone-200 py-2">Updated</th>
-                    <th className="border-b border-stone-200 py-2">Activated</th>
+                    <th className={operationalTableHeaderCellClassName}>Version</th>
+                    <th className={operationalTableHeaderCellClassName}>Status</th>
+                    <th className={operationalTableHeaderCellClassName}>Updated</th>
+                    <th className={operationalTableHeaderCellClassName}>Activated</th>
                   </tr>
                 </thead>
                 <tbody>
                   {group.versions.map((version) => (
                     <tr key={version.stackId}>
-                      <td className="border-b border-stone-100 py-2">v{version.version}</td>
-                      <td className="border-b border-stone-100 py-2">{version.status}</td>
-                      <td className="border-b border-stone-100 py-2">{new Date(version.updatedAt).toLocaleString()}</td>
-                      <td className="border-b border-stone-100 py-2">
+                      <td className={operationalTableCellClassName}>v{version.version}</td>
+                      <td className={operationalTableCellClassName}>
+                        <SignalChip tone={version.status === "ACTIVE" ? "success" : version.status === "ARCHIVED" ? "neutral" : "warning"}>
+                          {version.status}
+                        </SignalChip>
+                      </td>
+                      <td className={operationalTableCellClassName}>{new Date(version.updatedAt).toLocaleString()}</td>
+                      <td className={operationalTableCellClassName}>
                         {version.activatedAt ? new Date(version.activatedAt).toLocaleString() : "-"}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </OperationalTableShell>
           </article>
         ))}
+        {grouped.length === 0 && !loading ? <EmptyState title="No decision stacks found" /> : null}
       </div>
 
       <div className="flex items-center justify-between text-sm">
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
-          onClick={() => setPage((value) => Math.max(1, value - 1))}
-          disabled={page <= 1}
-        >
+        <Button size="sm" variant="outline" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page <= 1}>
           Previous
-        </button>
+        </Button>
         <p>
           Page {page} / {Math.max(1, totalPages)}
         </p>
-        <button
-          className="rounded-md border border-stone-300 px-3 py-1 disabled:opacity-40"
-          onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
-          disabled={page >= totalPages}
-        >
+        <Button size="sm" variant="outline" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={page >= totalPages}>
           Next
-        </button>
+        </Button>
       </div>
     </section>
   );

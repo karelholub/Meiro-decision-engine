@@ -16,6 +16,7 @@ import {
 import { DEFAULT_APP_ENUM_SETTINGS, normalizeAppEnumSettings } from "../../../lib/app-enum-settings";
 import { apiClient, type RuntimeSettingsPayload } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { PageHeader } from "../../../components/ui/page";
 
 interface RuntimeSettingsForm {
   decisionTimeoutMs: string;
@@ -250,12 +251,9 @@ export default function AppSettingsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">App Settings</h2>
-        <p className="text-sm text-stone-700">Personal UI preferences + environment-scoped runtime defaults.</p>
-      </header>
+      <PageHeader density="compact" title="App Settings" description="Personal UI preferences + environment-scoped runtime defaults." />
 
-      <article className="panel space-y-3 p-4">
+      <article className="panel space-y-3 p-3">
         <div>
           <h3 className="font-semibold">Personal: Decision Builder Wizard</h3>
           <p className="text-sm text-stone-700">
@@ -338,7 +336,7 @@ export default function AppSettingsPage() {
         </div>
       </article>
 
-      <article className="panel space-y-3 p-4">
+      <article className="panel space-y-3 p-3">
         <div>
           <h3 className="font-semibold">App Enumerations ({environment})</h3>
           <p className="text-sm text-stone-700">Source of truth for channels, lookup attributes, locales, and device types.</p>
@@ -405,7 +403,7 @@ export default function AppSettingsPage() {
         {enumFeedback ? <p className="text-sm text-stone-700">{enumFeedback}</p> : null}
       </article>
 
-      <article className="panel space-y-3 p-4">
+      <article className="panel space-y-3 p-3">
         <div>
           <h3 className="font-semibold">Runtime Defaults ({environment})</h3>
           <p className="text-sm text-stone-700">Applies to API runtime behavior for this environment.</p>

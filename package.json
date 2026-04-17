@@ -16,7 +16,11 @@
     "drill:dependency": "pnpm --filter @decisioning/api drill:dependency",
     "release:gates": "pnpm --filter @decisioning/api prisma:generate && pnpm --filter @decisioning/api build && pnpm --filter @decisioning/api test && pnpm --filter @decisioning/api smoke:inapp",
     "docker:build": "DOCKER_BUILDKIT=1 docker buildx build -f docker/api.Dockerfile -t decisioning-api:local . --load && DOCKER_BUILDKIT=1 docker buildx build -f docker/ui.Dockerfile -t decisioning-ui:local . --load",
-    "docker:dev": "DOCKER_BUILDKIT=1 docker compose up --build"
+    "docker:build:api": "DOCKER_BUILDKIT=1 docker compose build api",
+    "docker:build:ui": "DOCKER_BUILDKIT=1 docker compose build ui",
+    "docker:dev": "DOCKER_BUILDKIT=1 docker compose up --build",
+    "docker:up:api:fast": "DOCKER_BUILDKIT=1 docker compose up -d --no-deps --build api",
+    "docker:up:ui:fast": "DOCKER_BUILDKIT=1 docker compose up -d --no-deps --build ui"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

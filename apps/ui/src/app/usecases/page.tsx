@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { EmptyState } from "../../components/ui/app-state";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
+import { FilterPanel, PageHeader, inputClassName } from "../../components/ui/page";
 import { usePermissions } from "../../lib/permissions";
 
 type UseCaseArea = "Build" | "Engage" | "Operate" | "Configure";
@@ -68,7 +70,7 @@ const USE_CASES: UseCase[] = [
   {
     id: "catalog-management",
     title: "Manage reusable catalog assets",
-    summary: "Keep offers and content blocks aligned across decisions and campaigns.",
+    summary: "Keep offers and reusable assets aligned across decisions and campaigns.",
     area: "Build",
     outcomes: ["Content reuse", "Offer governance"],
     routes: [
@@ -163,23 +165,24 @@ export default function UseCasesPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel space-y-3 p-4">
-        <div>
-          <h2 className="text-xl font-semibold">Use Cases</h2>
-          <p className="text-sm text-stone-700">Navigate by outcome instead of product area. Each card consolidates the screens needed for that workflow.</p>
-        </div>
+      <PageHeader
+        density="compact"
+        title="Use Cases"
+        description="Navigate by outcome instead of product area. Each card consolidates the screens needed for that workflow."
+      />
 
+      <FilterPanel density="compact" className="!space-y-0">
         <div className="grid gap-2 md:grid-cols-[1fr_auto]">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search use cases, outcomes, or destination pages"
-            className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            className={inputClassName}
           />
           <select
             value={area}
             onChange={(event) => setArea(event.target.value as (typeof AREA_OPTIONS)[number])}
-            className="rounded-md border border-stone-300 px-3 py-2 text-sm"
+            className={inputClassName}
           >
             {AREA_OPTIONS.map((option) => (
               <option key={option} value={option}>
@@ -188,14 +191,14 @@ export default function UseCasesPage() {
             ))}
           </select>
         </div>
-      </header>
+      </FilterPanel>
 
       {visibleUseCases.length === 0 ? (
-        <Card className="p-4 text-sm text-stone-700">No matching use cases for the current filters and permissions.</Card>
+        <EmptyState title="No matching use cases" description="No workflows match the current filters and permissions." />
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
           {visibleUseCases.map((useCase) => (
-            <Card key={useCase.id} className="space-y-3 p-4">
+            <Card key={useCase.id} className="space-y-3 p-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="font-semibold">{useCase.title}</h3>
@@ -210,7 +213,7 @@ export default function UseCasesPage() {
                   <Link
                     key={`${useCase.id}-${route.href}`}
                     href={route.href}
-                    className="rounded-md border border-stone-300 px-3 py-1.5 text-sm hover:bg-stone-100"
+                    className="rounded-md border border-stone-300 px-2 py-1 text-sm hover:bg-stone-100"
                   >
                     {route.label}
                   </Link>

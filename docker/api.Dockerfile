@@ -3,7 +3,7 @@
 FROM node:20-alpine AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@9.12.2 --activate
 WORKDIR /app
 
 FROM base AS deps
@@ -21,7 +21,15 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 FROM base AS build
 COPY --from=deps /app /app
-COPY . .
+COPY apps/api/tsconfig.json apps/api/package.json apps/api/
+COPY apps/api/src apps/api/src
+COPY apps/api/prisma apps/api/prisma
+COPY packages/dsl packages/dsl
+COPY packages/engine packages/engine
+COPY packages/meiro packages/meiro
+COPY packages/policies packages/policies
+COPY packages/shared packages/shared
+COPY packages/wbs-mapping packages/wbs-mapping
 RUN pnpm --filter @decisioning/api prisma:generate
 RUN pnpm --filter @decisioning/api build
 

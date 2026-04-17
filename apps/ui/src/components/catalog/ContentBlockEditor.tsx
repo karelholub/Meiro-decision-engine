@@ -5,6 +5,8 @@ import { parseLegacyKey } from "@decisioning/shared";
 import type { CatalogContentBlock } from "@decisioning/shared";
 import { apiClient, type ActivationAssetType, type ActivationLibraryItem } from "../../lib/api";
 import { RefSelect } from "../registry/RefSelect";
+import { GuidanceCallout, InlineError } from "../ui/app-state";
+import { PagePanel, inputClassName } from "../ui/page";
 import type { SchemaField } from "./utils";
 import { LocaleTabsEditor } from "./LocaleTabsEditor";
 import { TokenBindingsTable, type TokenBindingRow } from "./TokenBindingsTable";
@@ -75,10 +77,10 @@ const typedAssetUse: Record<TypedContentAssetType, string> = {
   cta: "Reusable action label and URL or deeplink target.",
   website_banner: "Website personalization content with banner placement and template defaults.",
   popup_banner: "Popup or modal content with short copy and action fields.",
-  email_block: "Reusable email content block with headline, body, CTA, image, and footer fields.",
+  email_block: "Reusable email-ready asset with headline, body, CTA, image, and footer fields.",
   push_message: "Mobile push notification content with short title, body, and deeplink.",
   whatsapp_message: "WhatsApp message content with body, variables, and button/action fields.",
-  journey_asset: "Journey-compatible content block for message, decision, and fallback nodes."
+  journey_asset: "Journey-compatible asset for message, decision, and fallback nodes."
 };
 
 const typedFields: Record<TypedContentAssetType, TypedField[]> = {
@@ -165,6 +167,28 @@ const normalizeAssetType = (value: unknown): TypedContentAssetType | null => {
 
 const readObject = (value: unknown): Record<string, unknown> => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {});
 
+const stringField = (value: Record<string, unknown>, keys: string[]) => {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return "";
+};
+
+const browserPreviewableImageUrl = (value: string) => {
+  if (!value.trim()) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+};
+
 const parseSchemaObject = (text: string): Record<string, unknown> => {
   try {
     return readObject(JSON.parse(text));
@@ -190,6 +214,54 @@ const typedAssetTypeFromEditor = (value: ContentBlockEditorModel): TypedContentA
 
   return normalizeAssetType(value.templateId);
 };
+
+function ImageReferencePreview({ value }: { value: string }) {
+  const [failed, setFailed] = useState(false);
+  const previewUrl = browserPreviewableImageUrl(value);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [value]);
+
+  if (!value.trim()) {
+    return (
+      <GuidanceCallout
+        title="Image preview"
+        description="Add a browser-reachable image URL to preview the reference here. External media upload and transformations are intentionally outside this flow."
+      />
+    );
+  }
+
+  if (!previewUrl) {
+    return (
+      <GuidanceCallout
+        title="Image reference saved"
+        description="This value is treated as an external reference key. Use a full http, https, or data URL when a thumbnail preview is needed."
+        tone="warning"
+      />
+    );
+  }
+
+  if (failed) {
+    return (
+      <InlineError
+        title="Image preview unavailable"
+        description="The URL is saved, but the browser could not load it as an image. Check access, CORS, redirects, or file type."
+      />
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-md border border-stone-200 bg-stone-50">
+      <div className="flex items-center justify-between border-b border-stone-200 px-3 py-2 text-xs text-stone-600">
+        <span className="font-medium text-stone-700">Image preview</span>
+        <span>Browser URL</span>
+      </div>
+      <img src={previewUrl} alt="" className="max-h-64 w-full object-contain bg-white" onError={() => setFailed(true)} />
+      <p className="break-all border-t border-stone-200 bg-white px-3 py-2 text-xs text-stone-600">{previewUrl}</p>
+    </div>
+  );
+}
 
 export function ContentBlockEditor({
   value,
@@ -222,6 +294,7 @@ export function ContentBlockEditor({
   const locales = useMemo(() => Object.keys(localeData), [localeData]);
   const effectiveLocale = locales.includes(activeLocale) ? activeLocale : locales[0] ?? localeOptions?.[0] ?? "en";
   const localeValue = readObject(localeData[effectiveLocale]);
+  const imagePreviewValue = typedAssetType ? stringField(localeValue, ["imageUrl", "image", "imageRef"]) : "";
   const isChannelTypedAsset =
     typedAssetType !== null && !["image", "copy_snippet", "cta"].includes(typedAssetType);
 
@@ -307,13 +380,13 @@ export function ContentBlockEditor({
 
   return (
     <article className="space-y-4">
-      <section className="panel grid gap-3 p-4 md:grid-cols-2">
+      <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           Key
           <input
             value={value.key}
             onChange={(event) => onChange({ key: event.target.value })}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             disabled={readOnlyKey || readOnly}
           />
         </label>
@@ -322,7 +395,7 @@ export function ContentBlockEditor({
           <input
             value={value.name}
             onChange={(event) => onChange({ name: event.target.value })}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             disabled={readOnly}
           />
         </label>
@@ -421,18 +494,24 @@ export function ContentBlockEditor({
             </datalist>
           </div>
         </div>
-      </section>
+      </PagePanel>
 
       {typedAssetType ? (
-        <section className="panel space-y-4 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-stone-500">Typed authoring</p>
-              <h3 className="font-semibold">{typedAssetLabels[typedAssetType]}</h3>
-              <p className="max-w-3xl text-sm text-stone-700">{typedAssetUse[typedAssetType]}</p>
-            </div>
+        <section className="panel space-y-3 p-3">
+          <GuidanceCallout
+            title={`Typed authoring: ${typedAssetLabels[typedAssetType]}`}
+            description={`${typedAssetUse[typedAssetType]} Required fields: ${schemaRequired.join(", ") || "none"}.`}
+            tone={typedAssetType === "image" ? "warning" : "neutral"}
+            actions={
+              <span className="rounded-md border border-stone-200 bg-white px-2 py-1 text-xs text-stone-700">
+                Locale {effectiveLocale}
+              </span>
+            }
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-stone-600">Use the guided fields first. Advanced JSON remains available below for schema-level edits.</p>
             <span className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-stone-700">
-              Locale {effectiveLocale}
+              Template {value.templateId || "not set"}
             </span>
           </div>
 
@@ -459,6 +538,10 @@ export function ContentBlockEditor({
               </label>
             ))}
           </div>
+
+          {["image", "website_banner", "popup_banner", "email_block"].includes(typedAssetType) ? (
+            <ImageReferencePreview value={imagePreviewValue} />
+          ) : null}
 
           {isChannelTypedAsset ? (
             <div className="space-y-3 rounded-md border border-stone-200 bg-stone-50 p-3">
@@ -504,7 +587,7 @@ export function ContentBlockEditor({
         </section>
       ) : null}
 
-      <section className="panel space-y-3 p-4">
+      <section className="panel space-y-3 p-3">
         <h3 className="font-semibold">Schema summary</h3>
         {schemaFallbackInUse ? (
           <p className="text-xs text-amber-700">Schema was missing. Using default schema for template `{value.templateId}`.</p>
@@ -544,7 +627,7 @@ export function ContentBlockEditor({
         readOnly={advancedOnly || readOnly}
       />
 
-      <section className="panel p-4">
+      <PagePanel density="compact">
         <button type="button" className="text-sm font-medium underline" onClick={onToggleAdvanced} disabled={readOnly}>
           {showAdvanced ? "Hide Advanced JSON" : "Advanced JSON"}
         </button>
@@ -579,7 +662,7 @@ export function ContentBlockEditor({
             </label>
           </div>
         ) : null}
-      </section>
+      </PagePanel>
     </article>
   );
 }

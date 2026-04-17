@@ -46,7 +46,15 @@ final class DecisioningClientTests: XCTestCase {
                 ts: ISO8601DateFormatter().string(from: Date()),
                 appKey: "meiro_store",
                 placement: "home_top",
-                tracking: Tracking(campaign_id: "c", message_id: "m", variant_id: "A"),
+                tracking: Tracking(
+                    campaign_id: "c",
+                    message_id: "m",
+                    variant_id: "A",
+                    experiment_id: "exp_checkout_banner",
+                    experiment_version: 3,
+                    is_holdout: false,
+                    allocation_id: "alloc_123"
+                ),
                 profileId: "p-1001",
                 lookup: nil,
                 context: nil,
@@ -60,6 +68,11 @@ final class DecisioningClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-ENV"), "PROD")
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Event-Id"), "event-1")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let body = String(data: try XCTUnwrap(request.httpBody), encoding: .utf8)
+        XCTAssertTrue(body?.contains("\"experiment_id\":\"exp_checkout_banner\"") == true)
+        XCTAssertTrue(body?.contains("\"experiment_version\":3") == true)
+        XCTAssertTrue(body?.contains("\"is_holdout\":false") == true)
+        XCTAssertTrue(body?.contains("\"allocation_id\":\"alloc_123\"") == true)
     }
 
     func testUserDefaultsStoresPersist() async {

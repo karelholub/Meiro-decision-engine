@@ -135,11 +135,9 @@ export class DecisioningWebSdk {
       decisionKey: params.decisionKey,
       stackKey: params.stackKey,
       context,
-      ...(this.identity.lookup
-        ? { lookup: this.identity.lookup }
-        : {
-            profileId: this.identity.profileId ?? this.identity.anonymousId
-          })
+      ...(this.identity.profileId ? { profileId: this.identity.profileId } : {}),
+      ...(this.identity.anonymousId ? { anonymousId: this.identity.anonymousId } : {}),
+      ...(this.identity.lookup ? { lookup: this.identity.lookup } : {})
     };
 
     try {

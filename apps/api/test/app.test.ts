@@ -3680,6 +3680,478 @@ describe("API", () => {
     await app.close();
   });
 
+  it("runs saved decision scenario suites and persists assertion results", async () => {
+    const { prisma } = makePrisma();
+    const decisionId = "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f";
+    const definition = definitionsByEnvAndKey["DEV:cart_recovery"]!;
+    const now = new Date("2026-04-16T09:00:00.000Z");
+    const scenarioRows = [
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        decisionId,
+        environment: "DEV",
+        version: 1,
+        name: "Expected eligible",
+        required: true,
+        enabled: true,
+        profileJson: {
+          profileId: "p-eligible",
+          attributes: {},
+          audiences: []
+        },
+        expectedJson: {
+          assertion: "eligible_non_noop"
+        },
+        lastStatus: "pending",
+        lastDetail: null,
+        lastResultJson: null,
+        lastRunAt: null,
+        createdByUserId: null,
+        createdByEmail: null,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        decisionId,
+        environment: "DEV",
+        version: 1,
+        name: "Expected ineligible",
+        required: true,
+        enabled: true,
+        profileJson: {
+          profileId: "p-ineligible",
+          attributes: {},
+          audiences: []
+        },
+        expectedJson: {
+          assertion: "ineligible_noop"
+        },
+        lastStatus: "pending",
+        lastDetail: null,
+        lastResultJson: null,
+        lastRunAt: null,
+        createdByUserId: null,
+        createdByEmail: null,
+        createdAt: now,
+        updatedAt: now
+      }
+    ];
+
+    (prisma.decision.findFirst as any).mockImplementation(async (args?: any) => {
+      if (args?.where?.id !== decisionId || args?.where?.environment !== "DEV") {
+        return null;
+      }
+      return {
+        id: decisionId,
+        key: definition.key,
+        environment: "DEV",
+        name: definition.name,
+        description: definition.description,
+        versions: [
+          {
+            id: `version-${decisionId}`,
+            decisionId,
+            version: 1,
+            status: "ACTIVE",
+            definitionJson: definition,
+            createdAt: now,
+            updatedAt: now,
+            activatedAt: now
+          }
+        ]
+      };
+    });
+    (prisma as any).decisionScenarioTest = {
+      findMany: vi.fn().mockImplementation(async () => scenarioRows),
+      update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+        const row = scenarioRows.find((item) => item.id === where.id);
+        if (!row) {
+          throw new Error("scenario not found");
+        }
+        Object.assign(row, {
+          lastStatus: data.lastStatus,
+          lastDetail: data.lastDetail,
+          lastResultJson: data.lastResultJson,
+          lastRunAt: data.lastRunAt,
+          updatedAt: data.lastRunAt
+        });
+        return row;
+      })
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => now
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/decisions/${decisionId}/scenarios/run`,
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.summary).toMatchObject({ total: 2, passed: 1, failed: 1 });
+    expect(body.results.map((result: any) => result.status)).toEqual(["pass", "fail"]);
+    expect(scenarioRows.map((row) => row.lastStatus)).toEqual(["pass", "fail"]);
+    expect((prisma as any).decisionScenarioTest.update).toHaveBeenCalledTimes(2);
+
+    await app.close();
+  });
+
+  it("reviews pending decision approval requests", async () => {
+    const { prisma } = makePrisma();
+    const decisionId = "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f";
+    const now = new Date("2026-04-16T10:00:00.000Z");
+    const evidenceRows = [
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        decisionId,
+        environment: "DEV",
+        version: 1,
+        evidenceType: "approval_request",
+        status: "pending",
+        summary: "Approval requested for cart_recovery v1",
+        payloadJson: {
+          note: "ready for review"
+        },
+        createdByUserId: null,
+        createdByEmail: null,
+        createdAt: now
+      }
+    ];
+    (prisma as any).decisionAuthoringEvidence = {
+      findFirst: vi.fn().mockImplementation(async ({ where }: any) => {
+        return (
+          evidenceRows.find(
+            (row) =>
+              row.id === where.id &&
+              row.decisionId === where.decisionId &&
+              row.environment === where.environment
+          ) ?? null
+        );
+      }),
+      update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+        const row = evidenceRows.find((item) => item.id === where.id);
+        if (!row) {
+          throw new Error("evidence not found");
+        }
+        Object.assign(row, data);
+        return row;
+      })
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => now
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/decisions/${decisionId}/evidence/33333333-3333-4333-8333-333333333333/review`,
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      },
+      payload: {
+        action: "approve",
+        note: "approved after scenario review"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().evidence).toMatchObject({
+      status: "approved",
+      summary: "Approved cart_recovery v1",
+      payload: {
+        note: "ready for review",
+        review: {
+          status: "approved",
+          note: "approved after scenario review",
+          reviewedAt: now.toISOString()
+        }
+      }
+    });
+    expect((prisma as any).decisionAuthoringEvidence.update).toHaveBeenCalledTimes(1);
+
+    const secondReview = await app.inject({
+      method: "POST",
+      url: `/v1/decisions/${decisionId}/evidence/33333333-3333-4333-8333-333333333333/review`,
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      },
+      payload: {
+        action: "reject"
+      }
+    });
+    expect(secondReview.statusCode).toBe(409);
+
+    await app.close();
+  });
+
+  it("lists decision approval requests for reviewers", async () => {
+    const { prisma } = makePrisma();
+    const decisionId = "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f";
+    const now = new Date("2026-04-16T10:30:00.000Z");
+    (prisma as any).decisionAuthoringEvidence = {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          decisionId,
+          environment: "DEV",
+          version: 2,
+          evidenceType: "approval_request",
+          status: "pending",
+          summary: "Approval requested for cart_recovery v2",
+          payloadJson: { note: "ready" },
+          createdByUserId: "user-1",
+          createdByEmail: "builder@example.com",
+          createdAt: now,
+          decision: {
+            id: decisionId,
+            key: "cart_recovery",
+            name: "Cart Recovery",
+            description: "Recover abandoned carts"
+          }
+        }
+      ])
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/decisions/approvals?status=pending",
+      headers: {
+        "x-env": "DEV"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toEqual([
+      expect.objectContaining({
+        id: "44444444-4444-4444-8444-444444444444",
+        decisionId,
+        decisionKey: "cart_recovery",
+        decisionName: "Cart Recovery",
+        status: "pending"
+      })
+    ]);
+    expect((prisma as any).decisionAuthoringEvidence.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          environment: "DEV",
+          evidenceType: "approval_request",
+          status: "pending"
+        }),
+        include: { decision: true }
+      })
+    );
+
+    await app.close();
+  });
+
+  it("blocks decision activation without an approved request or override", async () => {
+    const { prisma } = makePrisma();
+    const decisionId = "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f";
+    const now = new Date("2026-04-16T11:00:00.000Z");
+    const draftDefinition = createDefaultDecisionDefinition({
+      id: decisionId,
+      key: "cart_recovery",
+      name: "Cart Recovery",
+      version: 2,
+      status: "DRAFT"
+    });
+    (prisma.decisionVersion.findFirst as any).mockResolvedValue({
+      id: "version-draft",
+      decisionId,
+      version: 2,
+      status: "DRAFT",
+      definitionJson: draftDefinition,
+      createdAt: now,
+      updatedAt: now,
+      activatedAt: null
+    });
+    (prisma as any).decisionAuthoringEvidence = {
+      findMany: vi.fn().mockResolvedValue([])
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => now
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/decisions/${decisionId}/activate`,
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      },
+      payload: {
+        expectedDraftVersion: 2
+      }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: "Decision approval is required before activation",
+      details: {
+        approval: {
+          status: "missing"
+        }
+      }
+    });
+    expect(prisma.decisionVersion.update).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("allows emergency activation override and audits the reason", async () => {
+    const { prisma } = makePrisma();
+    const decisionId = "f1d3779b-5108-40ea-b4b1-ff35f5bf7a9f";
+    const now = new Date("2026-04-16T11:15:00.000Z");
+    const activeDefinition = createDefaultDecisionDefinition({
+      id: decisionId,
+      key: "cart_recovery",
+      name: "Cart Recovery",
+      version: 1,
+      status: "ACTIVE"
+    });
+    const draftDefinition = createDefaultDecisionDefinition({
+      id: decisionId,
+      key: "cart_recovery",
+      name: "Cart Recovery",
+      version: 2,
+      status: "DRAFT"
+    });
+
+    (prisma.decisionVersion.findFirst as any).mockResolvedValue({
+      id: "version-draft",
+      decisionId,
+      version: 2,
+      status: "DRAFT",
+      definitionJson: draftDefinition,
+      createdAt: now,
+      updatedAt: now,
+      activatedAt: null
+    });
+    (prisma.decisionVersion.findMany as any).mockResolvedValue([
+      {
+        id: "version-active",
+        decisionId,
+        version: 1,
+        status: "ACTIVE",
+        definitionJson: activeDefinition,
+        createdAt: now,
+        updatedAt: now,
+        activatedAt: now
+      }
+    ]);
+    (prisma.decisionVersion.update as any).mockImplementation(async ({ where, data }: any) => ({
+      id: where.id,
+      decisionId,
+      version: where.id === "version-draft" ? 2 : 1,
+      status: data.status,
+      definitionJson: data.definitionJson,
+      createdAt: now,
+      updatedAt: data.updatedAt,
+      activatedAt: data.activatedAt ?? null
+    }));
+    (prisma as any).decisionAuthoringEvidence = {
+      findMany: vi.fn().mockResolvedValue([])
+    };
+    (prisma as any).auditEvent = {
+      create: vi.fn().mockResolvedValue({})
+    };
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      },
+      now: () => now
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/decisions/${decisionId}/activate`,
+      headers: {
+        "x-env": "DEV",
+        "x-api-key": "write-key"
+      },
+      payload: {
+        expectedDraftVersion: 2,
+        activationNote: "Emergency activation",
+        approvalOverride: {
+          reason: "Urgent production rollback safeguard"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "ACTIVE",
+      approval: {
+        status: "missing"
+      },
+      approvalOverrideStored: true
+    });
+    expect((prisma as any).auditEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "decision.activate.approval_override",
+          metadata: expect.objectContaining({
+            reason: "Urgent production rollback safeguard"
+          })
+        })
+      })
+    );
+
+    await app.close();
+  });
+
   it("RBAC denies decision activation without decision.activate permission", async () => {
     const { prisma } = makePrisma();
     attachRbacAndReleaseModels({

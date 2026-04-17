@@ -79,7 +79,7 @@ describe("detectWizardUnsupported", () => {
     expect(result.reasons).toEqual([]);
   });
 
-  it("flags unsupported operators and OR groups", () => {
+  it("supports OR groups and flags unsupported operators", () => {
     const advanced = {
       ...baseDefinition,
       flow: {
@@ -120,7 +120,7 @@ describe("detectWizardUnsupported", () => {
 
     const result = detectWizardUnsupported(advanced);
     expect(result.supported).toBe(false);
-    expect(result.reasons).toContain("Uses OR groups");
+    expect(result.reasons).not.toContain("Uses OR groups");
     expect(result.reasons.some((reason) => reason.includes("regex"))).toBe(true);
   });
 });

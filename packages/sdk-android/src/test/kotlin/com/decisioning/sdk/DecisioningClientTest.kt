@@ -2,6 +2,7 @@ package com.decisioning.sdk
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
@@ -99,6 +100,65 @@ class DecisioningClientTest {
             assertEquals(1, queueStoreReloaded.list().size)
         } finally {
             file.delete()
+        }
+    }
+
+    @Test
+    fun decideSendsAnonymousIdAndEventsPreserveExperimentTracking() = runTest {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """
+                {
+                  "show": true,
+                  "placement": "home_top",
+                  "templateId": "banner_v2",
+                  "ttl_seconds": 60,
+                  "tracking": {
+                    "campaign_id": "c-exp",
+                    "message_id": "m-exp",
+                    "variant_id": "B",
+                    "experiment_id": "exp_checkout_banner",
+                    "experiment_version": 3,
+                    "is_holdout": false,
+                    "allocation_id": "alloc_123"
+                  },
+                  "payload": {"title":"hello"}
+                }
+                """.trimIndent()
+            )
+        )
+        server.enqueue(MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\"}"))
+        server.start()
+
+        try {
+            val client = DecisioningClient(
+                config = DecisioningConfig(
+                    baseUrl = server.url("/").toString(),
+                    appKey = "meiro_store"
+                )
+            )
+            client.setAnonymousId("anon-42")
+
+            val decision = client.decide(DecideRequest(placement = "home_top"))
+            client.trackImpression(decision)
+
+            val decideRequest = server.takeRequest()
+            val eventRequest = server.takeRequest()
+            val decideBody = decideRequest.body.readUtf8()
+            val eventBody = eventRequest.body.readUtf8()
+
+            assertEquals("/v2/inapp/decide", decideRequest.path)
+            assertTrue(decideBody.contains("\"anonymousId\":\"anon-42\""))
+            assertTrue(!decideBody.contains("\"profileId\":\"anon-42\""))
+
+            assertEquals("/v2/inapp/events", eventRequest.path)
+            assertTrue(eventBody.contains("\"experiment_id\":\"exp_checkout_banner\""))
+            assertTrue(eventBody.contains("\"experiment_version\":3"))
+            assertTrue(eventBody.contains("\"is_holdout\":false"))
+            assertTrue(eventBody.contains("\"allocation_id\":\"alloc_123\""))
+        } finally {
+            server.shutdown()
         }
     }
 }

@@ -245,7 +245,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
           </p>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-xs">
-              Content Block Reference (required)
+              Reusable Asset Reference (required)
               <RefSelect
                 type="content"
                 value={selectedContentRef}
@@ -292,7 +292,7 @@ export function ActionTemplatePicker({ title, value, onChange, readOnly, errorBy
           </div>
           {registry.list("content", { status: "ACTIVE" }).length === 0 || registry.list("offer", { status: "ACTIVE" }).length === 0 ? (
             <p className="text-[11px] text-amber-700">
-              {registry.list("content", { status: "ACTIVE" }).length === 0 ? "No ACTIVE content blocks found." : ""}
+              {registry.list("content", { status: "ACTIVE" }).length === 0 ? "No ACTIVE reusable assets found." : ""}
               {registry.list("content", { status: "ACTIVE" }).length === 0 && registry.list("offer", { status: "ACTIVE" }).length === 0 ? " " : ""}
               {registry.list("offer", { status: "ACTIVE" }).length === 0 ? "No ACTIVE offers found." : ""} Activate catalog items in Catalog pages to use them here.
             </p>

@@ -3,6 +3,16 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ExperimentInventoryItem } from "@decisioning/shared";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import { Button, ButtonLink } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { EndsSoonBadge, HasDraftBadge, NoTrafficBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange } from "../../../lib/environment";
@@ -222,59 +232,59 @@ export default function ExperimentsInventoryPage() {
 
   return (
     <div className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-xl font-semibold">Experiment Inventory</h2>
-            <p className="text-sm text-stone-600">Browse, filter, and manage experiments at enterprise scale.</p>
-          </div>
-          <div className="flex gap-2">
-            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => setQuickOpen(true)}>Cmd+K Search</button>
-            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/experiments/new/edit">Create experiment</Link>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        eyebrow="Engage"
+        title="Experiment Inventory"
+        description="Browse, filter, and manage experiments at enterprise scale."
+        actions={
+          <>
+            <Button size="sm" variant="outline" onClick={() => setQuickOpen(true)}>Cmd+K Search</Button>
+            {canWrite ? <ButtonLink size="sm" href="/engage/experiments/new/edit">Create experiment</ButtonLink> : null}
+          </>
+        }
+      />
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Experiment inventory unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
 
-      <section className="space-y-3 rounded-lg border border-stone-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-6">
-          <label className="text-sm md:col-span-2">
+      <FilterPanel density="compact">
+        <div className="grid gap-x-2 gap-y-2 md:grid-cols-6">
+          <FieldLabel className="md:col-span-2">
             Search
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="key or name" />
-          </label>
-          <label className="text-sm">
+            <input className={inputClassName} value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="key or name" />
+          </FieldLabel>
+          <FieldLabel>
             Status
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as InventoryFilters["status"] }))}>
+            <select className={inputClassName} value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as InventoryFilters["status"] }))}>
               <option value="">All</option>
               <option value="ACTIVE">ACTIVE</option>
               <option value="DRAFT">DRAFT</option>
               <option value="PAUSED">PAUSED</option>
               <option value="ARCHIVED">ARCHIVED</option>
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             AppKey
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.appKey} onChange={(event) => setFilters((current) => ({ ...current, appKey: event.target.value }))} />
-          </label>
-          <label className="text-sm">
+            <input className={inputClassName} value={filters.appKey} onChange={(event) => setFilters((current) => ({ ...current, appKey: event.target.value }))} />
+          </FieldLabel>
+          <FieldLabel>
             Placement
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.placement} onChange={(event) => setFilters((current) => ({ ...current, placement: event.target.value }))} />
-          </label>
-          <label className="text-sm">
+            <input className={inputClassName} value={filters.placement} onChange={(event) => setFilters((current) => ({ ...current, placement: event.target.value }))} />
+          </FieldLabel>
+          <FieldLabel>
             Ends in
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.endsInDays} onChange={(event) => setFilters((current) => ({ ...current, endsInDays: event.target.value as InventoryFilters["endsInDays"] }))}>
+            <select className={inputClassName} value={filters.endsInDays} onChange={(event) => setFilters((current) => ({ ...current, endsInDays: event.target.value as InventoryFilters["endsInDays"] }))}>
               <option value="">Any</option>
               <option value="3">3 days</option>
               <option value="7">7 days</option>
               <option value="14">14 days</option>
               <option value="30">30 days</option>
             </select>
-          </label>
+          </FieldLabel>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1 text-sm">
             <input type="checkbox" checked={filters.hasDraft} onChange={(event) => setFilters((current) => ({ ...current, hasDraft: event.target.checked }))} />
             Has draft
@@ -340,40 +350,39 @@ export default function ExperimentsInventoryPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button className="rounded border border-stone-300 px-3 py-1 text-sm disabled:opacity-50" onClick={() => void runBulk("pause")} disabled={!canWrite || selected.size === 0}>Bulk Pause</button>
-          <button className="rounded border border-stone-300 px-3 py-1 text-sm disabled:opacity-50" onClick={() => void runBulk("archive")} disabled={!canArchive || selected.size === 0}>Bulk Archive</button>
-          <button className="rounded border border-stone-300 px-3 py-1 text-sm disabled:opacity-50" onClick={() => void runBulk("activate")} disabled={!canActivate || selected.size === 0}>Bulk Activate</button>
-          <button className="rounded border border-stone-300 px-3 py-1 text-sm disabled:opacity-50" onClick={() => void runBulk("draft")} disabled={!canWrite || selected.size === 0}>Create Drafts</button>
-          {canPromote ? <Link className="rounded border border-stone-300 px-3 py-1 text-sm" href="/releases">Promote</Link> : null}
+          <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={() => void runBulk("pause")} disabled={!canWrite || selected.size === 0}>Bulk Pause</Button>
+          <Button size="sm" variant="outline" onClick={() => void runBulk("archive")} disabled={!canArchive || selected.size === 0}>Bulk Archive</Button>
+          <Button size="sm" variant="outline" onClick={() => void runBulk("activate")} disabled={!canActivate || selected.size === 0}>Bulk Activate</Button>
+          <Button size="sm" variant="outline" onClick={() => void runBulk("draft")} disabled={!canWrite || selected.size === 0}>Create Drafts</Button>
+          {canPromote ? <ButtonLink size="sm" href="/releases">Promote</ButtonLink> : null}
         </div>
-      </section>
+      </FilterPanel>
 
-      <section className="rounded-lg border border-stone-200 bg-white p-2">
-        <div className="max-h-[680px] overflow-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-stone-50 text-left text-stone-700">
+      <OperationalTableShell maxHeight="680px" tableMinWidth="1120px">
+          <table className={operationalTableClassName}>
+            <thead className={`sticky top-0 ${operationalTableHeadClassName}`}>
               <tr>
-                <th className="border-b border-stone-200 px-2 py-2"><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>
-                {activeColumns.name ? <th className="border-b border-stone-200 px-2 py-2">Name / Key</th> : null}
-                {activeColumns.status ? <th className="border-b border-stone-200 px-2 py-2">Status</th> : null}
-                {activeColumns.appKey ? <th className="border-b border-stone-200 px-2 py-2">AppKey</th> : null}
-                {activeColumns.placements ? <th className="border-b border-stone-200 px-2 py-2">Placements</th> : null}
-                {activeColumns.variants ? <th className="border-b border-stone-200 px-2 py-2">Variants</th> : null}
-                {activeColumns.holdout ? <th className="border-b border-stone-200 px-2 py-2">Holdout</th> : null}
-                {activeColumns.schedule ? <th className="border-b border-stone-200 px-2 py-2">Schedule</th> : null}
-                {activeColumns.updated ? <th className="border-b border-stone-200 px-2 py-2">Updated</th> : null}
-                {activeColumns.activeVersion ? <th className="border-b border-stone-200 px-2 py-2">Version</th> : null}
-                {activeColumns.health ? <th className="border-b border-stone-200 px-2 py-2">Health</th> : null}
-                <th className="border-b border-stone-200 px-2 py-2">Actions</th>
+                <th className={operationalTableHeaderCellClassName}><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>
+                {activeColumns.name ? <th className={operationalTableHeaderCellClassName}>Name / Key</th> : null}
+                {activeColumns.status ? <th className={operationalTableHeaderCellClassName}>Status</th> : null}
+                {activeColumns.appKey ? <th className={operationalTableHeaderCellClassName}>AppKey</th> : null}
+                {activeColumns.placements ? <th className={operationalTableHeaderCellClassName}>Placements</th> : null}
+                {activeColumns.variants ? <th className={operationalTableHeaderCellClassName}>Variants</th> : null}
+                {activeColumns.holdout ? <th className={operationalTableHeaderCellClassName}>Holdout</th> : null}
+                {activeColumns.schedule ? <th className={operationalTableHeaderCellClassName}>Schedule</th> : null}
+                {activeColumns.updated ? <th className={operationalTableHeaderCellClassName}>Updated</th> : null}
+                {activeColumns.activeVersion ? <th className={operationalTableHeaderCellClassName}>Version</th> : null}
+                {activeColumns.health ? <th className={operationalTableHeaderCellClassName}>Health</th> : null}
+                <th className={operationalTableHeaderCellClassName}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredItems.map((item) => (
                 <tr key={item.key} className="hover:bg-stone-50">
-                  <td className="border-b border-stone-100 px-2 py-2"><input type="checkbox" checked={selected.has(item.key)} onChange={() => toggleRow(item.key)} /></td>
+                  <td className={operationalTableCellClassName}><input type="checkbox" checked={selected.has(item.key)} onChange={() => toggleRow(item.key)} /></td>
                   {activeColumns.name ? (
-                    <td className="border-b border-stone-100 px-2 py-2">
+                    <td className={operationalTableCellClassName}>
                       <Link className="font-medium text-ink underline" href={`/engage/experiments/${encodeURIComponent(item.key)}`}>{item.name}</Link>
                       <div className="text-xs text-stone-500">{item.key}</div>
                       <div className="mt-1 flex gap-1 text-[10px]">
@@ -382,20 +391,20 @@ export default function ExperimentsInventoryPage() {
                       </div>
                     </td>
                   ) : null}
-                  {activeColumns.status ? <td className="border-b border-stone-100 px-2 py-2"><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"} /></td> : null}
-                  {activeColumns.appKey ? <td className="border-b border-stone-100 px-2 py-2">{item.appKey ?? "-"}</td> : null}
-                  {activeColumns.placements ? <td className="border-b border-stone-100 px-2 py-2">{placementLabel(item.placements)}</td> : null}
-                  {activeColumns.variants ? <td className="border-b border-stone-100 px-2 py-2">{formatVariantsSummary(item)}</td> : null}
-                  {activeColumns.holdout ? <td className="border-b border-stone-100 px-2 py-2">{item.holdoutPct}%</td> : null}
+                  {activeColumns.status ? <td className={operationalTableCellClassName}><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"} /></td> : null}
+                  {activeColumns.appKey ? <td className={operationalTableCellClassName}>{item.appKey ?? "-"}</td> : null}
+                  {activeColumns.placements ? <td className={operationalTableCellClassName}>{placementLabel(item.placements)}</td> : null}
+                  {activeColumns.variants ? <td className={operationalTableCellClassName}>{formatVariantsSummary(item)}</td> : null}
+                  {activeColumns.holdout ? <td className={operationalTableCellClassName}>{item.holdoutPct}%</td> : null}
                   {activeColumns.schedule ? (
-                    <td className="border-b border-stone-100 px-2 py-2 text-xs">
+                    <td className={`${operationalTableCellClassName} text-xs`}>
                       {item.startAt ? new Date(item.startAt).toLocaleDateString() : "-"} → {item.endAt ? new Date(item.endAt).toLocaleDateString() : "-"}
                     </td>
                   ) : null}
-                  {activeColumns.updated ? <td className="border-b border-stone-100 px-2 py-2">{new Date(item.updatedAt).toLocaleString()}</td> : null}
-                  {activeColumns.activeVersion ? <td className="border-b border-stone-100 px-2 py-2">active v{item.activeVersion ?? "-"} / draft v{item.draftVersion ?? "-"}</td> : null}
-                  {activeColumns.health ? <td className="border-b border-stone-100 px-2 py-2 text-xs"><NoTrafficBadge /></td> : null}
-                  <td className="border-b border-stone-100 px-2 py-2">
+                  {activeColumns.updated ? <td className={operationalTableCellClassName}>{new Date(item.updatedAt).toLocaleString()}</td> : null}
+                  {activeColumns.activeVersion ? <td className={operationalTableCellClassName}>active v{item.activeVersion ?? "-"} / draft v{item.draftVersion ?? "-"}</td> : null}
+                  {activeColumns.health ? <td className={`${operationalTableCellClassName} text-xs`}><NoTrafficBadge /></td> : null}
+                  <td className={operationalTableCellClassName}>
                     <div className="flex flex-wrap gap-1 text-xs">
                       <Link className="rounded border border-stone-300 px-2 py-1" href={`/engage/experiments/${encodeURIComponent(item.key)}`}>Open</Link>
                       {canWrite ? <Link className="rounded border border-stone-300 px-2 py-1" href={`/engage/experiments/${encodeURIComponent(item.key)}/edit`}>Edit</Link> : null}
@@ -405,24 +414,25 @@ export default function ExperimentsInventoryPage() {
               ))}
               {filteredItems.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={12} className="px-2 py-6 text-center text-stone-500">No experiments found.</td>
+                  <td colSpan={12} className="px-2 py-6">
+                    <EmptyState title="No experiments found" description="Try clearing filters or creating a new experiment." className="border-0 p-4" />
+                  </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
-        </div>
 
         {nextCursor ? (
           <div className="border-t border-stone-200 p-3">
-            <button className="rounded border border-stone-300 px-3 py-1 text-sm" onClick={() => void loadPage(nextCursor, false)} disabled={loading}>Load more</button>
+            <Button size="sm" variant="outline" onClick={() => void loadPage(nextCursor, false)} disabled={loading}>Load more</Button>
           </div>
         ) : null}
-      </section>
+      </OperationalTableShell>
 
       {quickOpen ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-8" onClick={() => setQuickOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4" onClick={() => setQuickOpen(false)}>
           <div className="w-full max-w-xl rounded border border-stone-200 bg-white p-3" onClick={(event) => event.stopPropagation()}>
-            <input className="w-full rounded border border-stone-300 px-2 py-2" placeholder="Search by key or name" value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} />
+            <input className={inputClassName} placeholder="Search by key or name" value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} />
             <div className="mt-2 max-h-80 overflow-auto">
               {quickMatches.map((item) => (
                 <Link key={item.key} href={`/engage/experiments/${encodeURIComponent(item.key)}`} className="block rounded px-2 py-2 text-sm hover:bg-stone-100" onClick={() => setQuickOpen(false)}>

@@ -3,6 +3,7 @@
 import { useState, type KeyboardEvent } from "react";
 import type { CatalogOffer } from "@decisioning/shared";
 import { Button } from "../ui/button";
+import { PagePanel, inputClassName } from "../ui/page";
 
 export type OfferEditorModel = {
   key: string;
@@ -82,13 +83,13 @@ export function OfferEditor({
   };
 
   return (
-    <article className="panel grid gap-3 p-4 md:grid-cols-2">
+    <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
       <label className="flex flex-col gap-1 text-sm">
         Key
         <input
           value={value.key}
               onChange={(event) => onChange({ key: event.target.value })}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
               disabled={readOnlyKey || readOnly}
             />
       </label>
@@ -97,7 +98,7 @@ export function OfferEditor({
         <input
           value={value.name}
           onChange={(event) => onChange({ name: event.target.value })}
-          className="rounded-md border border-stone-300 px-2 py-1"
+          className={inputClassName}
           disabled={readOnly}
         />
       </label>
@@ -106,7 +107,7 @@ export function OfferEditor({
         <input
           value={value.description}
           onChange={(event) => onChange({ description: event.target.value })}
-          className="rounded-md border border-stone-300 px-2 py-1"
+          className={inputClassName}
           disabled={readOnly}
         />
       </label>
@@ -334,6 +335,6 @@ export function OfferEditor({
           </div>
         ) : null}
       </section>
-    </article>
+    </PagePanel>
   );
 }

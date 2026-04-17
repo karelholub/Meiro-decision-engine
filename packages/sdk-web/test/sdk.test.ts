@@ -163,6 +163,60 @@ describe("DecisioningWebSdk", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards anonymousId on decide and preserves experiment tracking on events", async () => {
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const payload = init?.body ? JSON.parse(String(init.body)) : {};
+        if (String(_input).endsWith("/v2/inapp/decide")) {
+          expect(payload.profileId).toBeUndefined();
+          expect(payload.anonymousId).toBe("anon-42");
+          return mockResponse(200, {
+            show: true,
+            placement: "home_top",
+            templateId: "banner_v2",
+            ttl_seconds: 60,
+            tracking: {
+              campaign_id: "c-exp",
+              message_id: "m-exp",
+              variant_id: "B",
+              experiment_id: "exp_checkout_banner",
+              experiment_version: 3,
+              is_holdout: false,
+              allocation_id: "alloc_123"
+            },
+            payload: {
+              title: "hello"
+            }
+          });
+        }
+
+        expect(payload.eventType).toBe("IMPRESSION");
+        expect(payload.tracking).toEqual({
+          campaign_id: "c-exp",
+          message_id: "m-exp",
+          variant_id: "B",
+          experiment_id: "exp_checkout_banner",
+          experiment_version: 3,
+          is_holdout: false,
+          allocation_id: "alloc_123"
+        });
+        return mockResponse(202, { status: "accepted" });
+      })
+      .mockName("fetchMock");
+
+    const sdk = new DecisioningWebSdk({
+      baseUrl: "https://example.com",
+      appKey: "meiro_store",
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+    sdk.setAnonymousId("anon-42");
+
+    const decision = await sdk.decide({ placement: "home_top" });
+    await sdk.trackImpression(decision);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("throws a config validation error for missing baseUrl", () => {
     expect(
       () =>

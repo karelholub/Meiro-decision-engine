@@ -46,7 +46,7 @@ export function LocaleTabsEditor({
   };
 
   return (
-    <section className="panel space-y-3 p-4">
+    <section className="panel space-y-3 p-3">
       <div className="flex flex-wrap items-center gap-2">
         {locales.map((locale) => (
           <button

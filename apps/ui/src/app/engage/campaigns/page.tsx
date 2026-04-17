@@ -3,6 +3,16 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppCampaign } from "@decisioning/shared";
+import { InlineError } from "../../../components/ui/app-state";
+import { Button, ButtonLink } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { EndsSoonBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
@@ -159,66 +169,66 @@ export default function CampaignInventoryPage() {
 
   return (
     <div className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-xl font-semibold">Campaign Inventory</h2>
-            <p className="text-sm text-stone-600">Browse and operate campaigns at scale.</p>
-          </div>
-          <div className="flex gap-2">
-            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/calendar">Calendar</Link>
-            {canWrite ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/engage/campaigns/new/edit">Create campaign</Link> : null}
-            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void loadPage(null, true)} disabled={loading}>Refresh</button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        eyebrow="Engage"
+        title="Campaign Inventory"
+        description="Browse and operate campaigns at scale. Use the calendar as the primary planning view."
+        actions={
+          <>
+            <ButtonLink size="sm" href="/engage/calendar" variant="default">Open calendar</ButtonLink>
+            {canWrite ? <ButtonLink size="sm" href="/engage/campaigns/new/edit">Create campaign</ButtonLink> : null}
+            <Button size="sm" variant="outline" onClick={() => void loadPage(null, true)} disabled={loading}>Refresh</Button>
+          </>
+        }
+      />
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Campaign inventory unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
 
-      <section className="space-y-3 rounded-lg border border-stone-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-6">
-          <label className="text-sm md:col-span-2">
+      <FilterPanel density="compact">
+        <div className="grid gap-x-2 gap-y-2 md:grid-cols-6">
+          <FieldLabel className="md:col-span-2">
             Search
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="key or name" />
-          </label>
-          <label className="text-sm">
+            <input className={inputClassName} value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="key or name" />
+          </FieldLabel>
+          <FieldLabel>
             Status
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as CampaignInventoryFilters["status"] }))}>
+            <select className={inputClassName} value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as CampaignInventoryFilters["status"] }))}>
               <option value="">All</option>
               <option value="DRAFT">DRAFT</option>
               <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
               <option value="ACTIVE">ACTIVE</option>
               <option value="ARCHIVED">ARCHIVED</option>
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             App key
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.appKey} onChange={(event) => setFilters((current) => ({ ...current, appKey: event.target.value }))}>
+            <select className={inputClassName} value={filters.appKey} onChange={(event) => setFilters((current) => ({ ...current, appKey: event.target.value }))}>
               <option value="">All</option>
               {uniqueAppKeys.map((key) => (
                 <option key={key} value={key}>{key}</option>
               ))}
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Placement
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.placement} onChange={(event) => setFilters((current) => ({ ...current, placement: event.target.value }))}>
+            <select className={inputClassName} value={filters.placement} onChange={(event) => setFilters((current) => ({ ...current, placement: event.target.value }))}>
               <option value="">All</option>
               {uniquePlacements.map((key) => (
                 <option key={key} value={key}>{key}</option>
               ))}
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Ends in
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={filters.endsInDays} onChange={(event) => setFilters((current) => ({ ...current, endsInDays: event.target.value as CampaignInventoryFilters["endsInDays"] }))}>
+            <select className={inputClassName} value={filters.endsInDays} onChange={(event) => setFilters((current) => ({ ...current, endsInDays: event.target.value as CampaignInventoryFilters["endsInDays"] }))}>
               <option value="">Any</option>
               <option value="7">7 days</option>
               <option value="14">14 days</option>
               <option value="30">30 days</option>
             </select>
-          </label>
+          </FieldLabel>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -284,20 +294,20 @@ export default function CampaignInventoryPage() {
           </div>
         </div>
 
-        <div className="overflow-auto rounded border border-stone-200">
-          <table className="w-full min-w-[980px] text-sm">
-            <thead className="bg-stone-50 text-stone-600">
+        <OperationalTableShell tableMinWidth="980px">
+          <table className={operationalTableClassName}>
+            <thead className={operationalTableHeadClassName}>
               <tr>
-                <th className="border-b border-stone-200 px-2 py-2"><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>
-                <th className="border-b border-stone-200 px-2 py-2 text-left">Name / Key</th>
-                {activeColumns.status ? <th className="border-b border-stone-200 px-2 py-2 text-left">Status</th> : null}
-                {activeColumns.appKey ? <th className="border-b border-stone-200 px-2 py-2 text-left">App</th> : null}
-                {activeColumns.placement ? <th className="border-b border-stone-200 px-2 py-2 text-left">Placement</th> : null}
-                {activeColumns.variants ? <th className="border-b border-stone-200 px-2 py-2 text-left">Variants</th> : null}
-                {activeColumns.holdout ? <th className="border-b border-stone-200 px-2 py-2 text-left">Holdout</th> : null}
-                {activeColumns.schedule ? <th className="border-b border-stone-200 px-2 py-2 text-left">Schedule</th> : null}
-                {activeColumns.updated ? <th className="border-b border-stone-200 px-2 py-2 text-left">Updated</th> : null}
-                {activeColumns.actions ? <th className="border-b border-stone-200 px-2 py-2 text-left">Actions</th> : null}
+                <th className={operationalTableHeaderCellClassName}><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>
+                <th className={operationalTableHeaderCellClassName}>Name / Key</th>
+                {activeColumns.status ? <th className={operationalTableHeaderCellClassName}>Status</th> : null}
+                {activeColumns.appKey ? <th className={operationalTableHeaderCellClassName}>App</th> : null}
+                {activeColumns.placement ? <th className={operationalTableHeaderCellClassName}>Placement</th> : null}
+                {activeColumns.variants ? <th className={operationalTableHeaderCellClassName}>Variants</th> : null}
+                {activeColumns.holdout ? <th className={operationalTableHeaderCellClassName}>Holdout</th> : null}
+                {activeColumns.schedule ? <th className={operationalTableHeaderCellClassName}>Schedule</th> : null}
+                {activeColumns.updated ? <th className={operationalTableHeaderCellClassName}>Updated</th> : null}
+                {activeColumns.actions ? <th className={operationalTableHeaderCellClassName}>Actions</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -305,25 +315,25 @@ export default function CampaignInventoryPage() {
                 const endingSoon = endsSoon(item.endAt, 7);
                 return (
                   <tr key={item.id} className="odd:bg-white even:bg-stone-50/40">
-                    <td className="border-b border-stone-100 px-2 py-2"><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleRow(item.id)} /></td>
-                    <td className="border-b border-stone-100 px-2 py-2">
+                    <td className={operationalTableCellClassName}><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleRow(item.id)} /></td>
+                    <td className={operationalTableCellClassName}>
                       <Link href={`/engage/campaigns/${item.id}`} className="font-medium text-indigo-700 hover:underline">{item.name}</Link>
                       <div className="font-mono text-xs text-stone-600">{item.key}</div>
                     </td>
-                    {activeColumns.status ? <td className="border-b border-stone-100 px-2 py-2"><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PENDING_APPROVAL" | "ARCHIVED"} /></td> : null}
-                    {activeColumns.appKey ? <td className="border-b border-stone-100 px-2 py-2">{item.appKey}</td> : null}
-                    {activeColumns.placement ? <td className="border-b border-stone-100 px-2 py-2">{item.placementKey}</td> : null}
-                    {activeColumns.variants ? <td className="border-b border-stone-100 px-2 py-2">{formatVariantsSummary(item)}</td> : null}
-                    {activeColumns.holdout ? <td className="border-b border-stone-100 px-2 py-2">{item.holdoutEnabled ? `${item.holdoutPercentage}%` : "Off"}</td> : null}
+                    {activeColumns.status ? <td className={operationalTableCellClassName}><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PENDING_APPROVAL" | "ARCHIVED"} /></td> : null}
+                    {activeColumns.appKey ? <td className={operationalTableCellClassName}>{item.appKey}</td> : null}
+                    {activeColumns.placement ? <td className={operationalTableCellClassName}>{item.placementKey}</td> : null}
+                    {activeColumns.variants ? <td className={operationalTableCellClassName}>{formatVariantsSummary(item)}</td> : null}
+                    {activeColumns.holdout ? <td className={operationalTableCellClassName}>{item.holdoutEnabled ? `${item.holdoutPercentage}%` : "Off"}</td> : null}
                     {activeColumns.schedule ? (
-                      <td className="border-b border-stone-100 px-2 py-2">
+                      <td className={operationalTableCellClassName}>
                         <div>{item.startAt ? new Date(item.startAt).toLocaleDateString() : "-"} - {item.endAt ? new Date(item.endAt).toLocaleDateString() : "-"}</div>
                         {endingSoon ? <div className="mt-1"><EndsSoonBadge /></div> : null}
                       </td>
                     ) : null}
-                    {activeColumns.updated ? <td className="border-b border-stone-100 px-2 py-2">{new Date(item.updatedAt).toLocaleString()}</td> : null}
+                    {activeColumns.updated ? <td className={operationalTableCellClassName}>{new Date(item.updatedAt).toLocaleString()}</td> : null}
                     {activeColumns.actions ? (
-                      <td className="border-b border-stone-100 px-2 py-2">
+                      <td className={operationalTableCellClassName}>
                         <div className="flex gap-2">
                           <Link className="rounded border border-stone-300 px-2 py-1 text-xs" href={`/engage/campaigns/${item.id}`}>Details</Link>
                           {canWrite ? <Link className="rounded border border-stone-300 px-2 py-1 text-xs" href={`/engage/campaigns/${item.id}/edit`}>Edit</Link> : null}
@@ -340,7 +350,7 @@ export default function CampaignInventoryPage() {
               ) : null}
             </tbody>
           </table>
-        </div>
+        </OperationalTableShell>
 
         <div className="flex items-center justify-between text-sm">
           <span>Loaded {items.length} items{filteredItems.length !== items.length ? ` (${filteredItems.length} visible)` : ""}</span>
@@ -348,7 +358,7 @@ export default function CampaignInventoryPage() {
             {nextCursor ? "Load more" : "No more results"}
           </button>
         </div>
-      </section>
+      </FilterPanel>
     </div>
   );
 }

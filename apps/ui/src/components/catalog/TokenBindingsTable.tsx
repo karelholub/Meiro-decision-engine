@@ -1,6 +1,14 @@
 "use client";
 
 import { Button } from "../ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../ui/operational-table";
+import { inputClassName } from "../ui/page";
 
 export type TokenBindingRow = {
   token: string;
@@ -30,26 +38,26 @@ const lookup = (input: Record<string, unknown>, path: string): unknown => {
 
 export function TokenBindingsTable({ rows, testContext, missing, unused, onChange, readOnly }: TokenBindingsTableProps) {
   return (
-    <section className="panel space-y-3 p-4">
+    <section className="panel space-y-3 p-3">
       <h3 className="font-semibold">Token bindings</h3>
 
       {missing.length > 0 ? <p className="text-xs text-amber-700">Missing bindings: {missing.join(", ")}</p> : null}
       {unused.length > 0 ? <p className="text-xs text-stone-600">Unused bindings: {unused.join(", ")}</p> : null}
 
-      <div className="overflow-auto">
-        <table className="min-w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 pb-1 pr-2">Token name</th>
-              <th className="border-b border-stone-200 pb-1 pr-2">Source path</th>
-              <th className="border-b border-stone-200 pb-1 pr-2">Test value</th>
-              <th className="border-b border-stone-200 pb-1 pr-2" />
+      <OperationalTableShell tableMinWidth="720px">
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
+            <tr>
+              <th className={operationalTableHeaderCellClassName}>Token name</th>
+              <th className={operationalTableHeaderCellClassName}>Source path</th>
+              <th className={operationalTableHeaderCellClassName}>Test value</th>
+              <th className={operationalTableHeaderCellClassName} />
             </tr>
           </thead>
           <tbody>
             {rows.map((row, index) => (
               <tr key={`${index}-${row.token}`}>
-                <td className="py-2 pr-2">
+                <td className={operationalTableCellClassName}>
                   <input
                     value={row.token}
                     onChange={(event) => {
@@ -58,12 +66,12 @@ export function TokenBindingsTable({ rows, testContext, missing, unused, onChang
                       next[index] = { ...currentRow, token: event.target.value };
                       onChange(next);
                     }}
-                    className="w-full rounded-md border border-stone-300 px-2 py-1"
+                    className={inputClassName}
                     disabled={readOnly}
                     placeholder="offer"
                   />
                 </td>
-                <td className="py-2 pr-2">
+                <td className={operationalTableCellClassName}>
                   <input
                     value={row.sourcePath}
                     onChange={(event) => {
@@ -72,15 +80,15 @@ export function TokenBindingsTable({ rows, testContext, missing, unused, onChang
                       next[index] = { ...currentRow, sourcePath: event.target.value };
                       onChange(next);
                     }}
-                    className="w-full rounded-md border border-stone-300 px-2 py-1"
+                    className={inputClassName}
                     disabled={readOnly}
                     placeholder="context.offer"
                   />
                 </td>
-                <td className="py-2 pr-2 text-xs text-stone-600">
+                <td className={`${operationalTableCellClassName} text-xs text-stone-600`}>
                   {row.sourcePath.trim() ? JSON.stringify(lookup(testContext, row.sourcePath), null, 0) ?? "-" : "-"}
                 </td>
-                <td className="py-2">
+                <td className={operationalTableCellClassName}>
                   <Button
                     type="button"
                     variant="ghost"
@@ -94,7 +102,7 @@ export function TokenBindingsTable({ rows, testContext, missing, unused, onChang
             ))}
           </tbody>
         </table>
-      </div>
+      </OperationalTableShell>
 
       <Button type="button" variant="outline" onClick={() => onChange([...rows, { token: "", sourcePath: "" }])} disabled={readOnly}>
         Add binding

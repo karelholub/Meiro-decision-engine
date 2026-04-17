@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import { MetricCard } from "../../../components/ui/card";
+import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 import { apiClient } from "../../../lib/api";
 import { useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
@@ -76,39 +80,27 @@ export default function ExecutionCachePage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Realtime Cache</h2>
-        <p className="text-sm text-stone-700">Environment: {environment}</p>
-      </header>
+      <PageHeader density="compact" title="Realtime Cache" description={`Environment: ${environment}.`} />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-3">
-        <div>
-          <p className="text-xs uppercase text-stone-500">Redis</p>
-          <p className="text-sm font-medium">{stats?.redisEnabled ? "Enabled" : "Disabled"}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase text-stone-500">TTL Default</p>
-          <p className="text-sm font-medium">{stats?.ttlSecondsDefault ?? 0}s</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase text-stone-500">Cache Hit Rate</p>
-          <p className="text-sm font-medium">{stats ? `${(stats.hitRate * 100).toFixed(1)}%` : "0.0%"}</p>
-        </div>
-        <div className="md:col-span-3">
+      <section className="grid gap-2 md:grid-cols-3">
+        <MetricCard label="Redis" value={stats?.redisEnabled ? "Enabled" : "Disabled"} />
+        <MetricCard label="TTL Default" value={`${stats?.ttlSecondsDefault ?? 0}s`} />
+        <MetricCard label="Cache Hit Rate" value={stats ? `${(stats.hitRate * 100).toFixed(1)}%` : "0.0%"} />
+        <div className="rounded-md border border-stone-200 bg-white px-3 py-2 md:col-span-3">
           <p className="text-xs uppercase text-stone-500">Important Context Keys</p>
           <p className="text-sm text-stone-700">{stats?.importantContextKeys.join(", ") || "-"}</p>
         </div>
-      </div>
+      </section>
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
+      <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
+        <FieldLabel className="flex flex-col gap-1">
           Scope
-          <select className="rounded-md border border-stone-300 px-2 py-1" value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
+          <select className={inputClassName} value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
             <option value="profile">profile</option>
             <option value="lookup">lookup</option>
             <option value="prefix">prefix</option>
           </select>
-        </label>
+        </FieldLabel>
 
         <label className="flex items-center gap-2 self-end text-sm">
           <input type="checkbox" checked={alsoExpireResults} onChange={(event) => setAlsoExpireResults(event.target.checked)} />
@@ -116,18 +108,18 @@ export default function ExecutionCachePage() {
         </label>
 
         {scope === "profile" ? (
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <FieldLabel className="flex flex-col gap-1 md:col-span-2">
             Profile ID
-            <input className="rounded-md border border-stone-300 px-2 py-1" value={profileId} onChange={(event) => setProfileId(event.target.value)} />
-          </label>
+            <input className={inputClassName} value={profileId} onChange={(event) => setProfileId(event.target.value)} />
+          </FieldLabel>
         ) : null}
 
         {scope === "lookup" ? (
           <>
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel className="flex flex-col gap-1">
               Lookup Attribute
               <select
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={lookupAttributeSelectValue}
                 onChange={(event) => {
                   const next = event.target.value;
@@ -149,42 +141,42 @@ export default function ExecutionCachePage() {
               </select>
               {lookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
                 <input
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                   value={lookupAttribute}
                   onChange={(event) => setLookupAttribute(event.target.value)}
                   placeholder="custom attribute key"
                 />
               ) : null}
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+            </FieldLabel>
+            <FieldLabel className="flex flex-col gap-1">
               Lookup Value
               <input
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={lookupValue}
                 onChange={(event) => setLookupValue(event.target.value)}
               />
-            </label>
+            </FieldLabel>
           </>
         ) : null}
 
         {scope === "prefix" ? (
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <FieldLabel className="flex flex-col gap-1 md:col-span-2">
             Prefix (decisionKey or stackKey)
-            <input className="rounded-md border border-stone-300 px-2 py-1" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
-          </label>
+            <input className={inputClassName} value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+          </FieldLabel>
         ) : null}
-      </div>
+      </PagePanel>
 
       <div className="flex gap-2">
-        <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" disabled={loading} onClick={() => void invalidate()}>
+        <Button size="sm" disabled={loading} onClick={() => void invalidate()}>
           Invalidate
-        </button>
-        <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" disabled={loading} onClick={() => void load()}>
+        </Button>
+        <Button size="sm" variant="outline" disabled={loading} onClick={() => void load()}>
           Reload
-        </button>
+        </Button>
       </div>
 
-      {message ? <p className="text-sm text-stone-800">{message}</p> : null}
+      {message ? <InlineError title="Realtime cache notice" description={message} /> : null}
     </section>
   );
 }

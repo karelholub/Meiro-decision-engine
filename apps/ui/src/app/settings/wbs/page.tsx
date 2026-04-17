@@ -7,6 +7,7 @@ import { useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { Button } from "../../../components/ui/button";
 import { TestResultPanel, validateWbsSettingsForm } from "../../../components/configure";
+import { PageHeader, PagePanel } from "../../../components/ui/page";
 
 const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
@@ -172,13 +173,14 @@ export default function WbsSettingsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">WBS Settings</h2>
-        <p className="text-sm text-stone-700">Connect to verify and test your WBS instance ({environment}).</p>
-        {updatedAt ? <p className="text-xs text-stone-600">Last updated: {new Date(updatedAt).toLocaleString()}</p> : null}
-      </header>
+      <PageHeader
+        density="compact"
+        title="WBS Settings"
+        description={`Connect to verify and test your WBS instance (${environment}).`}
+        meta={updatedAt ? `Last updated: ${new Date(updatedAt).toLocaleString()}` : undefined}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2">
+      <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           Name
           <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
@@ -261,7 +263,7 @@ export default function WbsSettingsPage() {
             <input value={testSegmentValue} onChange={(event) => setTestSegmentValue(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" placeholder="107" />
           </label>
         ) : null}
-      </div>
+      </PagePanel>
 
       <div className="flex items-center gap-3">
         <Button onClick={() => void save()} disabled={loading || hasErrors}>Save</Button>
@@ -271,7 +273,7 @@ export default function WbsSettingsPage() {
 
       {feedback ? <p className="text-sm text-stone-800">{feedback}</p> : null}
 
-      <section className="panel space-y-2 p-4">
+      <section className="panel space-y-2 p-3">
         <h3 className="font-semibold">Test Connection Result</h3>
         <p className="text-sm">URL preview: <span className="font-mono text-xs">{urlPreview ?? "-"}</span></p>
         {testResult ? (

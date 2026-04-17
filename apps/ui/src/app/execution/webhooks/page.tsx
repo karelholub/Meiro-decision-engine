@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api";
 import { useAppEnumSettings } from "../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { Button } from "../../../components/ui/button";
+import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 
 const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
 
@@ -88,53 +90,55 @@ export default function WebhookRulesPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Webhook Rules</h2>
-        <p className="text-sm text-stone-700">Event type mapping for cache invalidation and optional targeted recompute. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Webhook Rules"
+        description="Event type mapping for cache invalidation and optional targeted recompute."
+        meta={`Environment: ${environment}`}
+      />
 
-      <div className="panel space-y-3 p-4">
-        <label className="flex flex-col gap-1 text-sm">
+      <PagePanel density="compact" className="space-y-3">
+        <FieldLabel className="block">
           Rules JSON
-          <textarea className="h-64 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs" value={rulesJson} onChange={(event) => setRulesJson(event.target.value)} />
-        </label>
+          <textarea className={`${inputClassName} h-64 font-mono text-xs`} value={rulesJson} onChange={(event) => setRulesJson(event.target.value)} />
+        </FieldLabel>
         <div className="flex gap-2">
-          <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void save()} disabled={loading}>
+          <Button size="sm" onClick={() => void save()} disabled={loading}>
             Save Rules
-          </button>
-          <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={() => void load()} disabled={loading}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
             Reload
-          </button>
+          </Button>
         </div>
-      </div>
+      </PagePanel>
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
+      <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
+        <FieldLabel>
           Test Event Type
-          <input className="rounded-md border border-stone-300 px-2 py-1" value={eventType} onChange={(event) => setEventType(event.target.value)} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+          <input className={inputClassName} value={eventType} onChange={(event) => setEventType(event.target.value)} />
+        </FieldLabel>
+        <FieldLabel>
           Identity Mode
           <select
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             value={identityMode}
             onChange={(event) => setIdentityMode(event.target.value as "profile" | "lookup")}
           >
             <option value="profile">profile</option>
             <option value="lookup">lookup</option>
           </select>
-        </label>
+        </FieldLabel>
         {identityMode === "profile" ? (
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <FieldLabel className="md:col-span-2">
             Profile ID
-            <input className="rounded-md border border-stone-300 px-2 py-1" value={profileId} onChange={(event) => setProfileId(event.target.value)} />
-          </label>
+            <input className={inputClassName} value={profileId} onChange={(event) => setProfileId(event.target.value)} />
+          </FieldLabel>
         ) : (
           <>
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel>
               Lookup Attribute
               <select
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={lookupAttributeSelectValue}
                 onChange={(event) => {
                   const next = event.target.value;
@@ -156,24 +160,24 @@ export default function WebhookRulesPage() {
               </select>
               {lookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
                 <input
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                   value={lookupAttribute}
                   onChange={(event) => setLookupAttribute(event.target.value)}
                   placeholder="custom attribute key"
                 />
               ) : null}
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+            </FieldLabel>
+            <FieldLabel>
               Lookup Value
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={lookupValue} onChange={(event) => setLookupValue(event.target.value)} />
-            </label>
+              <input className={inputClassName} value={lookupValue} onChange={(event) => setLookupValue(event.target.value)} />
+            </FieldLabel>
           </>
         )}
-      </div>
+      </PagePanel>
 
-      <button className="rounded-md border border-stone-300 px-4 py-2 text-sm" onClick={() => void trigger()} disabled={loading}>
+      <Button size="sm" variant="outline" onClick={() => void trigger()} disabled={loading}>
         Trigger Test Event
-      </button>
+      </Button>
 
       {message ? <p className="text-sm text-stone-800">{message}</p> : null}
     </section>

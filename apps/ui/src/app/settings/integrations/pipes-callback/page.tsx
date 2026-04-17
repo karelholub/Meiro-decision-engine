@@ -6,6 +6,7 @@ import { apiClient, type PipesCallbackConfigResponse } from "../../../../lib/api
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 import { Button } from "../../../../components/ui/button";
 import { CollapsibleSection, RedactedJsonViewer, StatusChipsRow, isCallbackConfigValid } from "../../../../components/configure";
+import { PageHeader, PagePanel } from "../../../../components/ui/page";
 
 const parseCsvList = (value: string): string[] => {
   return [...new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean))].sort((left, right) =>
@@ -178,14 +179,13 @@ export default function PipesCallbackSettingsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Pipes Callback Settings</h2>
-        <p className="text-sm text-stone-700">
-          Configure Decision Engine callback delivery ({environment}). Effective source: {source}
-        </p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Pipes Callback Settings"
+        description={`Configure Governed Activation callback delivery (${environment}). Effective source: ${source}`}
+      />
 
-      <section className="panel space-y-2 p-4">
+      <PagePanel density="compact" className="space-y-2">
         <h3 className="font-semibold">Connection status</h3>
         <StatusChipsRow
           chips={[
@@ -200,9 +200,9 @@ export default function PipesCallbackSettingsPage() {
         <Link className="text-sm underline" href="/execution/dlq?topic=PIPES_CALLBACK_DELIVERY">
           Open callback DLQ
         </Link>
-      </section>
+      </PagePanel>
 
-      <section className="panel space-y-3 p-4">
+      <section className="panel space-y-3 p-3">
         <label className="flex flex-col gap-1 text-sm">
           App key (optional override)
           <input
@@ -372,7 +372,7 @@ export default function PipesCallbackSettingsPage() {
 
       {testModalOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
-          <div className="panel max-h-[90vh] w-full max-w-2xl overflow-auto p-4">
+          <div className="panel max-h-[90vh] w-full max-w-2xl overflow-auto p-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Send Test Callback</h3>
               <Button variant="ghost" size="sm" onClick={() => setTestModalOpen(false)}>Close</Button>

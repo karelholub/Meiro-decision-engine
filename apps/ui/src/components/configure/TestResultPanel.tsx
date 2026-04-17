@@ -22,7 +22,7 @@ export function TestResultPanel({
   maxChars?: number;
 }) {
   return (
-    <section className="panel space-y-2 p-4">
+    <section className="panel space-y-2 p-3">
       <h4 className="font-semibold">{title}</h4>
       <div className="grid gap-2 text-sm md:grid-cols-4">
         <p>URL: <span className="font-mono text-xs">{url ?? "-"}</span></p>

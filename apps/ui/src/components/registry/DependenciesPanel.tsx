@@ -42,7 +42,7 @@ const hrefByRef = (ref: Ref): string | null => {
 
 export function DependenciesPanel({ items, title = "Dependencies" }: { items: DependencyItem[]; title?: string }) {
   return (
-    <section className="panel space-y-3 p-4">
+    <section className="panel space-y-3 p-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="font-semibold">{title}</h3>
         <Link href="/releases" className="rounded-md border border-stone-300 px-2 py-1 text-xs">

@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiClient, type DlqMessage } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
+import { Button, ButtonLink } from "../../../../components/ui/button";
+import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../../components/ui/page";
 
 export default function DlqDetailsPage() {
   const params = useParams<{ id: string }>();
@@ -78,25 +80,27 @@ export default function DlqDetailsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">DLQ Message</h2>
-        <p className="text-sm text-stone-700">Inspect and operate failed async event replay state. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="DLQ Message"
+        description="Inspect and operate failed async event replay state."
+        meta={`Environment: ${environment}`}
+      />
 
       <div className="flex gap-2">
-        <Link className="rounded-md border border-stone-300 px-3 py-1 text-sm" href="/execution/dlq">
+        <ButtonLink href="/execution/dlq" size="sm" variant="outline">
           Back to DLQ
-        </Link>
-        <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" disabled={loading} onClick={() => void load()}>
+        </ButtonLink>
+        <Button size="sm" variant="outline" disabled={loading} onClick={() => void load()}>
           Reload
-        </button>
+        </Button>
       </div>
 
       {message ? <p className="text-sm text-stone-800">{message}</p> : null}
 
       {item ? (
         <>
-          <div className="panel grid gap-3 p-4 md:grid-cols-2">
+          <PagePanel density="compact" className="grid gap-2 md:grid-cols-2">
             <p className="text-sm">
               <span className="font-semibold">Topic:</span> {item.topic}
             </p>
@@ -121,9 +125,9 @@ export default function DlqDetailsPage() {
             <p className="text-sm">
               <span className="font-semibold">Dedupe:</span> {item.dedupeKey ?? "-"}
             </p>
-          </div>
+          </PagePanel>
 
-          <div className="panel space-y-2 p-4">
+          <PagePanel density="compact" className="space-y-2">
             <h3 className="font-semibold">Error Details</h3>
             <p className="text-sm">
               <span className="font-semibold">Type:</span> {item.errorType}
@@ -132,37 +136,37 @@ export default function DlqDetailsPage() {
               <span className="font-semibold">Message:</span> {item.errorMessage}
             </p>
             <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{JSON.stringify(item.errorMeta ?? {}, null, 2)}</pre>
-          </div>
+          </PagePanel>
 
-          <div className="panel space-y-2 p-4">
+          <PagePanel density="compact" className="space-y-2">
             <h3 className="font-semibold">Payload (redacted)</h3>
             <p className="text-xs text-stone-600">Sensitive fields are redacted before storage.</p>
             <pre className="max-h-[28rem] overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{JSON.stringify(item.payload ?? {}, null, 2)}</pre>
-          </div>
+          </PagePanel>
 
-          <div className="panel space-y-3 p-4">
-            <label className="flex flex-col gap-1 text-sm">
+          <PagePanel density="compact" className="space-y-3">
+            <FieldLabel className="block">
               Resolution Note
-              <textarea className="h-20 rounded-md border border-stone-300 px-2 py-1" value={note} onChange={(event) => setNote(event.target.value)} />
-            </label>
+              <textarea className={`${inputClassName} h-20`} value={note} onChange={(event) => setNote(event.target.value)} />
+            </FieldLabel>
 
             <div className="flex flex-wrap gap-2">
-              <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" disabled={loading} onClick={() => void retryNow()}>
+              <Button size="sm" disabled={loading} onClick={() => void retryNow()}>
                 Retry Now
-              </button>
-              <button className="rounded-md border border-amber-300 px-4 py-2 text-sm text-amber-800" disabled={loading} onClick={() => void quarantine()}>
+              </Button>
+              <Button size="sm" variant="outline" className="border-amber-300 text-amber-800" disabled={loading} onClick={() => void quarantine()}>
                 Quarantine
-              </button>
-              <button className="rounded-md border border-emerald-300 px-4 py-2 text-sm text-emerald-800" disabled={loading} onClick={() => void resolve()}>
+              </Button>
+              <Button size="sm" variant="outline" className="border-emerald-300 text-emerald-800" disabled={loading} onClick={() => void resolve()}>
                 Resolve
-              </button>
+              </Button>
               {item.correlationId ? (
                 <Link className="rounded-md border border-stone-300 px-4 py-2 text-sm" href={`/logs?q=${encodeURIComponent(item.correlationId)}`}>
                   Search Logs by Correlation
                 </Link>
               ) : null}
             </div>
-          </div>
+          </PagePanel>
         </>
       ) : null}
     </section>

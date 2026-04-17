@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { parseLegacyKey } from "@decisioning/shared";
 import type { DecisionStackVersionSummary, DecisionVersionSummary, InAppApplication, InAppPlacement } from "@decisioning/shared";
 import { DependenciesPanel } from "../../../../components/registry/DependenciesPanel";
+import { InlineError } from "../../../../components/ui/app-state";
+import { Button } from "../../../../components/ui/button";
+import { FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../../components/ui/page";
 import { apiClient, type InAppV2DecideResponse } from "../../../../lib/api";
 import { useAppEnumSettings } from "../../../../lib/app-enum-settings";
 import type { DependencyItem } from "../../../../lib/dependencies";
@@ -179,15 +182,12 @@ export default function InAppDecideDebuggerPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Decide Debugger (v2)</h2>
-        <p className="text-sm text-stone-700">Environment: {environment}</p>
-      </header>
+      <PageHeader density="compact" title="Decide Debugger (v2)" meta={`Environment: ${environment}`} />
 
-      <article className="panel grid gap-3 p-4 md:grid-cols-2">
+      <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           App Key
-          <select className="rounded-md border border-stone-300 px-2 py-1" value={appKey} onChange={(event) => setAppKey(event.target.value)}>
+          <select className={inputClassName} value={appKey} onChange={(event) => setAppKey(event.target.value)}>
             <option value="">Select app</option>
             {apps.map((item) => (
               <option key={item.id} value={item.key}>
@@ -198,7 +198,7 @@ export default function InAppDecideDebuggerPage() {
         </label>
         <label className="flex flex-col gap-1 text-sm">
           Placement
-          <select className="rounded-md border border-stone-300 px-2 py-1" value={placement} onChange={(event) => setPlacement(event.target.value)}>
+          <select className={inputClassName} value={placement} onChange={(event) => setPlacement(event.target.value)}>
             <option value="">Select placement</option>
             {placements.map((item) => (
               <option key={item.id} value={item.key}>
@@ -210,7 +210,7 @@ export default function InAppDecideDebuggerPage() {
         <label className="flex flex-col gap-1 text-sm">
           Decision Key (optional)
           <select
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             value={decisionKey}
             onChange={(event) => {
               const next = event.target.value;
@@ -231,7 +231,7 @@ export default function InAppDecideDebuggerPage() {
         <label className="flex flex-col gap-1 text-sm">
           Stack Key (optional)
           <select
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             value={stackKey}
             onChange={(event) => {
               const next = event.target.value;
@@ -253,7 +253,7 @@ export default function InAppDecideDebuggerPage() {
         <label className="flex flex-col gap-1 text-sm">
           Identity
           <select
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
             value={identityMode}
             onChange={(event) => setIdentityMode(event.target.value as "profile" | "lookup")}
           >
@@ -266,7 +266,7 @@ export default function InAppDecideDebuggerPage() {
           <label className="flex flex-col gap-1 text-sm">
             Profile ID
             <input
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
               value={profileId}
               onChange={(event) => setProfileId(event.target.value)}
             />
@@ -276,7 +276,7 @@ export default function InAppDecideDebuggerPage() {
             <label className="flex flex-col gap-1 text-sm">
               Lookup Attribute
               <select
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={lookupAttributeSelectValue}
                 onChange={(event) => {
                   const next = event.target.value;
@@ -298,7 +298,7 @@ export default function InAppDecideDebuggerPage() {
               </select>
               {lookupAttributeSelectValue === CUSTOM_LOOKUP_ATTRIBUTE ? (
                 <input
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                   value={lookupAttribute}
                   onChange={(event) => setLookupAttribute(event.target.value)}
                   placeholder="custom attribute key"
@@ -308,7 +308,7 @@ export default function InAppDecideDebuggerPage() {
             <label className="flex flex-col gap-1 text-sm">
               Lookup Value
               <input
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
                 value={lookupValue}
                 onChange={(event) => setLookupValue(event.target.value)}
               />
@@ -320,23 +320,23 @@ export default function InAppDecideDebuggerPage() {
           Context JSON
           <textarea
             rows={5}
-            className="rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+            className={`${inputClassName} font-mono text-xs`}
             value={contextText}
             onChange={(event) => setContextText(event.target.value)}
           />
         </label>
 
         <div className="md:col-span-2">
-          <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void run()} disabled={loading}>
+          <Button size="sm" onClick={() => void run()} disabled={loading}>
             {loading ? "Running..." : "Run /v2/inapp/decide"}
-          </button>
+          </Button>
         </div>
-      </article>
+      </FilterPanel>
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Decide debugger failed" description={error} /> : null}
 
       {result ? (
-        <article className="panel space-y-3 p-4">
+        <PagePanel density="compact" className="space-y-3">
           <div className="grid gap-3 md:grid-cols-3">
             <div>
               <p className="text-xs uppercase text-stone-500">Show</p>
@@ -387,7 +387,7 @@ export default function InAppDecideDebuggerPage() {
             <pre className="overflow-x-auto rounded-md bg-stone-100 p-3 text-xs">{toPrettyJson(result)}</pre>
           </div>
           <DependenciesPanel items={dependencyItems} />
-        </article>
+        </PagePanel>
       ) : null}
     </section>
   );

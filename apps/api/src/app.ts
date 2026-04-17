@@ -230,6 +230,101 @@ const previewActivationBodySchema = z
   })
   .optional();
 
+const decisionAuthoringBodySchema = z
+  .object({
+    definition: z.unknown().optional()
+  })
+  .optional();
+
+const decisionReadinessBodySchema = z
+  .object({
+    definition: z.unknown().optional(),
+    testResults: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          status: z.enum(["pending", "pass", "fail"]),
+          required: z.boolean().optional(),
+          detail: z.string().optional()
+        })
+      )
+      .optional()
+  })
+  .optional();
+
+const activateDecisionBodySchema = z
+  .object({
+    activationNote: z.string().max(2_000).optional(),
+    expectedDraftVersion: z.number().int().positive().optional(),
+    approvalOverride: z
+      .object({
+        reason: z.string().min(10).max(2_000)
+      })
+      .optional()
+  })
+  .optional();
+
+const decisionEvidenceBodySchema = z.object({
+  version: z.number().int().positive().optional(),
+  evidenceType: z.enum(["scenario_test", "approval_request"]),
+  status: z.enum(["passed", "failed", "pending", "approved", "rejected"]),
+  summary: z.string().max(500).optional(),
+  payload: z.record(z.unknown()).optional()
+});
+
+const submitDecisionApprovalBodySchema = z
+  .object({
+    note: z.string().max(2_000).optional(),
+    expectedDraftVersion: z.number().int().positive().optional(),
+    testResults: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          status: z.enum(["pending", "pass", "fail"]),
+          required: z.boolean().optional(),
+          detail: z.string().optional()
+        })
+      )
+      .optional()
+  })
+  .optional();
+
+const reviewDecisionApprovalBodySchema = z.object({
+  action: z.enum(["approve", "reject"]),
+  note: z.string().max(2_000).optional()
+});
+
+const decisionScenarioStatusSchema = z.enum(["pending", "pass", "fail"]);
+
+const decisionScenarioSuiteBodySchema = z.object({
+  version: z.number().int().positive().nullable().optional(),
+  items: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(120),
+        required: z.boolean().optional(),
+        enabled: z.boolean().optional(),
+        profile: z.record(z.unknown()),
+        expected: z.record(z.unknown()).optional(),
+        lastStatus: decisionScenarioStatusSchema.optional(),
+        lastDetail: z.string().max(1000).nullable().optional(),
+        lastResult: z.record(z.unknown()).nullable().optional(),
+        lastRunAt: z.string().datetime().nullable().optional()
+      })
+    )
+    .max(20)
+});
+
+const decisionScenarioRunBodySchema = z
+  .object({
+    version: z.number().int().positive().nullable().optional(),
+    scenarioIds: z.array(z.string().uuid()).max(20).optional(),
+    context: z.record(z.unknown()).optional()
+  })
+  .optional();
+
 const decisionListQuerySchema = z.object({
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
   q: z.string().optional(),
@@ -258,6 +353,13 @@ const logByIdParamsSchema = z.object({
 const logByIdQuerySchema = z.object({
   type: z.enum(["decision", "inapp", "stack"]).optional(),
   includeTrace: z.coerce.boolean().optional()
+});
+
+const scenarioProfileSchema = z.object({
+  profileId: z.string().min(1),
+  attributes: z.record(z.unknown()).default({}),
+  audiences: z.array(z.string()).default([]),
+  consents: z.array(z.string()).optional()
 });
 
 const stackListQuerySchema = z.object({
@@ -589,8 +691,164 @@ const toInputJson = (value: unknown): Prisma.InputJsonValue => {
   return value as Prisma.InputJsonValue;
 };
 
+const serializeDecisionAuthoringEvidence = (row: {
+  id: string;
+  decisionId: string;
+  environment: Environment;
+  version: number | null;
+  evidenceType: string;
+  status: string;
+  summary: string;
+  payloadJson: unknown;
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  createdAt: Date;
+}) => ({
+  id: row.id,
+  decisionId: row.decisionId,
+  environment: row.environment,
+  version: row.version,
+  evidenceType: row.evidenceType,
+  status: row.status,
+  summary: row.summary,
+  payload: isPlainObject(row.payloadJson) ? row.payloadJson : {},
+  createdByUserId: row.createdByUserId,
+  createdByEmail: row.createdByEmail,
+  createdAt: row.createdAt.toISOString()
+});
+
+const decisionApprovalStatus = async (
+  evidenceModel: any,
+  input: {
+    decisionId: string;
+    environment: Environment;
+    version: number;
+  }
+): Promise<{
+  status: "approved" | "pending" | "rejected" | "missing";
+  evidenceId: string | null;
+  summary: string | null;
+  createdAt: string | null;
+  reviewedAt: string | null;
+  reviewedByEmail: string | null;
+}> => {
+  if (!evidenceModel?.findMany) {
+    return {
+      status: "missing",
+      evidenceId: null,
+      summary: null,
+      createdAt: null,
+      reviewedAt: null,
+      reviewedByEmail: null
+    };
+  }
+
+  const rows = await evidenceModel.findMany({
+    where: {
+      decisionId: input.decisionId,
+      environment: input.environment,
+      version: input.version,
+      evidenceType: "approval_request"
+    },
+    orderBy: { createdAt: "desc" },
+    take: 1
+  });
+  const latest = rows[0] as
+    | {
+        id: string;
+        status: string;
+        summary: string;
+        payloadJson: unknown;
+        createdAt: Date;
+      }
+    | undefined;
+  if (!latest) {
+    return {
+      status: "missing",
+      evidenceId: null,
+      summary: null,
+      createdAt: null,
+      reviewedAt: null,
+      reviewedByEmail: null
+    };
+  }
+
+  const payload = isPlainObject(latest.payloadJson) ? latest.payloadJson : {};
+  const review = isPlainObject(payload.review) ? payload.review : {};
+  const status = latest.status === "approved" ? "approved" : latest.status === "rejected" ? "rejected" : "pending";
+  return {
+    status,
+    evidenceId: latest.id,
+    summary: latest.summary || null,
+    createdAt: latest.createdAt.toISOString(),
+    reviewedAt: typeof review.reviewedAt === "string" ? review.reviewedAt : null,
+    reviewedByEmail: typeof review.reviewedByEmail === "string" ? review.reviewedByEmail : null
+  };
+};
+
+const normalizeScenarioStatus = (status: string): "pending" | "pass" | "fail" => {
+  if (status === "pass" || status === "fail") {
+    return status;
+  }
+  return "pending";
+};
+
+const serializeDecisionScenarioTest = (row: {
+  id: string;
+  decisionId: string;
+  environment: Environment;
+  version: number | null;
+  name: string;
+  required: boolean;
+  enabled: boolean;
+  profileJson: unknown;
+  expectedJson: unknown;
+  lastStatus: string;
+  lastDetail: string | null;
+  lastResultJson: unknown | null;
+  lastRunAt: Date | null;
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) => ({
+  id: row.id,
+  decisionId: row.decisionId,
+  environment: row.environment,
+  version: row.version,
+  name: row.name,
+  required: row.required,
+  enabled: row.enabled,
+  profile: isPlainObject(row.profileJson) ? row.profileJson : {},
+  expected: isPlainObject(row.expectedJson) ? row.expectedJson : {},
+  lastStatus: normalizeScenarioStatus(row.lastStatus),
+  lastDetail: row.lastDetail,
+  lastResult: isPlainObject(row.lastResultJson) ? row.lastResultJson : null,
+  lastRunAt: row.lastRunAt?.toISOString() ?? null,
+  createdByUserId: row.createdByUserId,
+  createdByEmail: row.createdByEmail,
+  createdAt: row.createdAt.toISOString(),
+  updatedAt: row.updatedAt.toISOString()
+});
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+};
+
+const deepContains = (actual: unknown, expected: unknown): boolean => {
+  if (isPlainObject(expected)) {
+    if (!isPlainObject(actual)) {
+      return false;
+    }
+    return Object.entries(expected).every(([key, value]) => deepContains(actual[key], value));
+  }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual) || expected.length > actual.length) {
+      return false;
+    }
+    return expected.every((value, index) => deepContains(actual[index], value));
+  }
+  return Object.is(actual, expected);
 };
 
 const INLINE_EVALUATE_BODY_LIMIT_BYTES = 64 * 1024;
@@ -1523,6 +1781,66 @@ interface DecisionSemanticAnalysis {
   metrics: DecisionValidationMetrics;
 }
 
+interface DecisionAuthoringTestResult {
+  id: string;
+  name: string;
+  status: "pending" | "pass" | "fail";
+  required?: boolean;
+  detail?: string;
+}
+
+interface DecisionScenarioRunResult {
+  scenarioId: string;
+  name: string;
+  status: "pass" | "fail";
+  detail: string;
+  result: Record<string, unknown>;
+  runAt: string;
+}
+
+interface DecisionAuthoringDiagnostic {
+  code: string;
+  severity: "info" | "warning" | "blocking";
+  message: string;
+  step: "basics" | "eligibility" | "rules" | "guardrails" | "fallback" | "test_activate";
+  path?: string;
+  nextAction?: string;
+}
+
+type DecisionDependencyRefType = "offer" | "content" | "bundle" | "template" | "placement" | "experiment";
+type DecisionDependencyStatus = "resolved_active" | "resolved_inactive" | "missing";
+
+interface DecisionDependencyReference {
+  label: string;
+  type: DecisionDependencyRefType;
+  key: string;
+  version?: number;
+  sourcePath: string;
+}
+
+interface DecisionDependencyItem {
+  label: string;
+  ref: {
+    type: DecisionDependencyRefType;
+    key: string;
+    version?: number;
+  };
+  status: DecisionDependencyStatus;
+  detail?: string;
+  sourcePath?: string;
+  resolved?: {
+    name?: string | null;
+    version?: number | null;
+    status?: string | null;
+    updatedAt?: string | null;
+  };
+  readiness?: {
+    status: "ready" | "ready_with_warnings" | "blocked";
+    riskLevel: "low" | "medium" | "high" | "blocking";
+    summary?: string;
+  };
+}
+
 interface StackValidationMetrics {
   stepCount: number;
   enabledStepCount: number;
@@ -1677,6 +1995,358 @@ const compareDefinitions = (active: DecisionDefinition | null, draft: DecisionDe
     holdoutChanged,
     capsChanged,
     policiesChanged
+  };
+};
+
+const parseDependencyKey = (key: string): { key: string; version?: number } => {
+  const trimmed = key.trim();
+  if (!trimmed) {
+    return { key: "" };
+  }
+  const marker = trimmed.lastIndexOf("@v");
+  if (marker > 0) {
+    const base = trimmed.slice(0, marker).trim();
+    const version = Number.parseInt(trimmed.slice(marker + 2), 10);
+    if (base && Number.isFinite(version)) {
+      return { key: base, version };
+    }
+  }
+  return { key: trimmed };
+};
+
+const addDecisionDependencyReference = (
+  target: Map<string, DecisionDependencyReference>,
+  input: DecisionDependencyReference
+) => {
+  const parsed = parseDependencyKey(input.key);
+  if (!parsed.key) {
+    return;
+  }
+  const id = `${input.type}:${parsed.key}:${parsed.version ?? ""}:${input.sourcePath}`;
+  target.set(id, {
+    ...input,
+    key: parsed.key,
+    ...(parsed.version ? { version: parsed.version } : {})
+  });
+};
+
+const collectPayloadDependencyReferences = (
+  payload: unknown,
+  target: Map<string, DecisionDependencyReference>,
+  sourcePath: string
+) => {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (Array.isArray(payload)) {
+    payload.forEach((entry, index) => collectPayloadDependencyReferences(entry, target, `${sourcePath}.${index}`));
+    return;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const payloadRef = record.payloadRef;
+  if (isPlainObject(payloadRef)) {
+    if (typeof payloadRef.contentKey === "string") {
+      addDecisionDependencyReference(target, {
+        label: "Reusable asset",
+        type: "content",
+        key: payloadRef.contentKey,
+        sourcePath: `${sourcePath}.payloadRef.contentKey`
+      });
+    }
+    if (typeof payloadRef.offerKey === "string") {
+      addDecisionDependencyReference(target, {
+        label: "Offer",
+        type: "offer",
+        key: payloadRef.offerKey,
+        sourcePath: `${sourcePath}.payloadRef.offerKey`
+      });
+    }
+    if (typeof payloadRef.bundleKey === "string") {
+      addDecisionDependencyReference(target, {
+        label: "Asset bundle",
+        type: "bundle",
+        key: payloadRef.bundleKey,
+        sourcePath: `${sourcePath}.payloadRef.bundleKey`
+      });
+    }
+  }
+
+  if (typeof record.experimentKey === "string") {
+    addDecisionDependencyReference(target, {
+      label: "Experiment",
+      type: "experiment",
+      key: record.experimentKey,
+      sourcePath: `${sourcePath}.experimentKey`
+    });
+  }
+  if (typeof record.templateId === "string") {
+    addDecisionDependencyReference(target, {
+      label: "Template",
+      type: "template",
+      key: record.templateId,
+      sourcePath: `${sourcePath}.templateId`
+    });
+  }
+  if (typeof record.placement === "string") {
+    addDecisionDependencyReference(target, {
+      label: "Placement",
+      type: "placement",
+      key: record.placement,
+      sourcePath: `${sourcePath}.placement`
+    });
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "payloadRef") {
+      continue;
+    }
+    collectPayloadDependencyReferences(value, target, `${sourcePath}.${key}`);
+  }
+};
+
+const collectDecisionDependencyReferences = (definition: DecisionDefinition): DecisionDependencyReference[] => {
+  const references = new Map<string, DecisionDependencyReference>();
+  definition.flow.rules.forEach((rule, index) => {
+    collectPayloadDependencyReferences(rule.then.payload, references, `flow.rules.${index}.then.payload`);
+    if (rule.else) {
+      collectPayloadDependencyReferences(rule.else.payload, references, `flow.rules.${index}.else.payload`);
+    }
+  });
+
+  for (const [name, output] of Object.entries(definition.outputs ?? {})) {
+    collectPayloadDependencyReferences(output?.payload, references, `outputs.${name}.payload`);
+  }
+
+  return [...references.values()].sort((left, right) => `${left.type}:${left.key}`.localeCompare(`${right.type}:${right.key}`));
+};
+
+const validationErrorPath = (error: string) => {
+  const [path] = error.trim().split(/\s+/);
+  return path || undefined;
+};
+
+const readinessStepForPath = (path?: string): DecisionAuthoringDiagnostic["step"] => {
+  if (!path) return "test_activate";
+  if (path.startsWith("eligibility.")) return "eligibility";
+  if (path.startsWith("flow.rules")) return "rules";
+  if (path.startsWith("holdout") || path.startsWith("caps")) return "guardrails";
+  if (path.startsWith("performance.") || path.startsWith("cachePolicy.") || path.startsWith("fallback.") || path.startsWith("outputs.")) {
+    return "fallback";
+  }
+  if (path.startsWith("name") || path.startsWith("key") || path.startsWith("description")) return "basics";
+  return "test_activate";
+};
+
+const buildDecisionReadinessDiagnostics = (input: {
+  definition: DecisionDefinition | null;
+  validationErrors: string[];
+  validationWarnings: string[];
+  semanticWarnings: string[];
+  requirementNotes: string[];
+  dependencyItems?: DecisionDependencyItem[];
+  testResults: DecisionAuthoringTestResult[];
+}): DecisionAuthoringDiagnostic[] => {
+  const diagnostics: DecisionAuthoringDiagnostic[] = [];
+
+  for (const error of input.validationErrors) {
+    const path = validationErrorPath(error);
+    diagnostics.push({
+      code: "SCHEMA_ERROR",
+      severity: "blocking",
+      message: error,
+      step: readinessStepForPath(path),
+      ...(path ? { path } : {}),
+      nextAction: "Fix the invalid field before activation."
+    });
+  }
+
+  for (const warning of [...input.validationWarnings, ...input.semanticWarnings]) {
+    diagnostics.push({
+      code: "VALIDATION_WARNING",
+      severity: "warning",
+      message: warning,
+      step: "test_activate",
+      nextAction: "Review the warning and confirm the runtime behavior is intended."
+    });
+  }
+
+  for (const note of input.requirementNotes) {
+    diagnostics.push({
+      code: "REQUIREMENTS_NOTE",
+      severity: "warning",
+      message: note,
+      step: "test_activate",
+      nextAction: "Resolve missing catalog/runtime requirements before publishing."
+    });
+  }
+
+  for (const dependency of input.dependencyItems ?? []) {
+    if (dependency.status === "missing") {
+      diagnostics.push({
+        code: "MISSING_DEPENDENCY",
+        severity: "blocking",
+        message: `${dependency.label} ${dependency.ref.type}:${dependency.ref.key} is missing.`,
+        step: "rules",
+        ...(dependency.sourcePath ? { path: dependency.sourcePath } : {}),
+        nextAction: "Create, activate, or replace the referenced asset before activation."
+      });
+      continue;
+    }
+    if (dependency.status === "resolved_inactive") {
+      diagnostics.push({
+        code: "INACTIVE_DEPENDENCY",
+        severity: "warning",
+        message: `${dependency.label} ${dependency.ref.type}:${dependency.ref.key} is not active.`,
+        step: "rules",
+        ...(dependency.sourcePath ? { path: dependency.sourcePath } : {}),
+        nextAction: "Activate the referenced asset or confirm the inactive dependency is intentional."
+      });
+    }
+  }
+
+  if (input.definition) {
+    const usesMessaging =
+      input.definition.outputs.default?.actionType === "message" ||
+      input.definition.flow.rules.some((rule) => rule.then.actionType === "message");
+    const emptyEligibility =
+      (input.definition.eligibility.attributes?.length ?? 0) === 0 &&
+      (input.definition.eligibility.audiencesAny?.length ?? 0) === 0 &&
+      (input.definition.eligibility.audiencesAll?.length ?? 0) === 0 &&
+      (input.definition.eligibility.audiencesNone?.length ?? 0) === 0;
+
+    if (usesMessaging && emptyEligibility) {
+      diagnostics.push({
+        code: "BROAD_MESSAGING_AUDIENCE",
+        severity: "warning",
+        message: "Messaging action applies to all profiles because no audience or profile eligibility is configured.",
+        step: "eligibility",
+        nextAction: "Add audience or profile conditions, or document why broad delivery is intentional."
+      });
+    }
+
+    if (usesMessaging && !input.definition.caps.perProfilePerDay && !input.definition.caps.perProfilePerWeek) {
+      diagnostics.push({
+        code: "MISSING_MESSAGING_CAPS",
+        severity: "warning",
+        message: "Messaging action has no per-profile cap.",
+        step: "guardrails",
+        nextAction: "Apply standard messaging caps or confirm this is an advanced uncapped flow."
+      });
+    }
+
+    if (!input.definition.outputs.default) {
+      diagnostics.push({
+        code: "MISSING_DEFAULT_OUTPUT",
+        severity: "blocking",
+        message: "No default output is configured for rule misses.",
+        step: "fallback",
+        nextAction: "Configure a safe default output."
+      });
+    }
+  }
+
+  for (const result of input.testResults) {
+    if (result.required && result.status !== "pass") {
+      diagnostics.push({
+        code: result.status === "fail" ? "REQUIRED_TEST_FAILED" : "REQUIRED_TEST_PENDING",
+        severity: "blocking",
+        message: result.detail ?? `${result.name} has not passed.`,
+        step: "test_activate",
+        nextAction: "Run the required scenario and fix the decision until it passes."
+      });
+    }
+  }
+
+  return diagnostics;
+};
+
+const summarizeDecisionReadiness = (diagnostics: DecisionAuthoringDiagnostic[]) => {
+  const blockingCount = diagnostics.filter((diagnostic) => diagnostic.severity === "blocking").length;
+  const warningCount = diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
+  const status = blockingCount > 0 ? "blocked" : warningCount > 0 ? "ready_with_warnings" : "ready";
+  const riskLevel = blockingCount > 0 ? "blocking" : warningCount >= 3 ? "high" : warningCount > 0 ? "medium" : "low";
+  return {
+    status,
+    riskLevel,
+    blockingCount,
+    warningCount
+  };
+};
+
+const mergeAuthoringTestResults = (
+  savedResults: DecisionAuthoringTestResult[],
+  incomingResults: DecisionAuthoringTestResult[]
+): DecisionAuthoringTestResult[] => {
+  const byName = new Map<string, DecisionAuthoringTestResult>();
+  const keyFor = (result: DecisionAuthoringTestResult) => result.name.trim().toLowerCase();
+
+  for (const result of savedResults) {
+    byName.set(keyFor(result), result);
+  }
+
+  for (const result of incomingResults) {
+    const key = keyFor(result);
+    const existing = byName.get(key);
+    if (!existing || result.status !== "pending" || existing.status === "pending") {
+      byName.set(key, result);
+    }
+  }
+
+  return [...byName.values()];
+};
+
+const evaluateScenarioAssertion = (
+  expected: Record<string, unknown>,
+  result: {
+    actionType: string;
+    selectedRuleId?: string;
+    payload: Record<string, unknown>;
+    outcome: string;
+  }
+): { status: "pass" | "fail"; detail: string } => {
+  const assertion = typeof expected.assertion === "string" ? expected.assertion : "eligible_non_noop";
+  if (assertion === "eligible_non_noop") {
+    const passed = result.actionType !== "noop" && Boolean(result.selectedRuleId);
+    return {
+      status: passed ? "pass" : "fail",
+      detail: passed ? "Matched a rule with a non-noop action." : "Expected a matched non-noop action."
+    };
+  }
+  if (assertion === "ineligible_noop") {
+    const passed = result.actionType === "noop" || !result.selectedRuleId;
+    return {
+      status: passed ? "pass" : "fail",
+      detail: passed ? "Returned default/noop without a matching action." : "Expected default/noop without a matching action."
+    };
+  }
+  if (assertion === "action_type") {
+    const expectedActionType = typeof expected.actionType === "string" ? expected.actionType : "";
+    const passed = result.actionType === expectedActionType;
+    return {
+      status: passed ? "pass" : "fail",
+      detail: passed ? `Action type matched ${expectedActionType}.` : `Expected action type ${expectedActionType || "(missing)"}.`
+    };
+  }
+  if (assertion === "selected_rule") {
+    const expectedRuleId = typeof expected.ruleId === "string" ? expected.ruleId : "";
+    const passed = result.selectedRuleId === expectedRuleId;
+    return {
+      status: passed ? "pass" : "fail",
+      detail: passed ? `Selected rule matched ${expectedRuleId}.` : `Expected selected rule ${expectedRuleId || "(missing)"}.`
+    };
+  }
+  if (assertion === "payload_contains") {
+    const expectedPayload = isPlainObject(expected.payload) ? expected.payload : {};
+    const passed = deepContains(result.payload, expectedPayload);
+    return {
+      status: passed ? "pass" : "fail",
+      detail: passed ? "Payload contained expected fields." : "Payload did not contain the expected fields."
+    };
+  }
+  return {
+    status: "fail",
+    detail: `Unsupported scenario assertion: ${assertion}`
   };
 };
 
@@ -2188,6 +2858,151 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     return deriveDecisionRequirements(input.definition, contentBlocksByKey);
   };
 
+  const resolvedDependencyItem = (
+    ref: DecisionDependencyReference,
+    resolved: { name?: string | null; version?: number | null; status?: string | null; updatedAt?: Date | null } | null
+  ): DecisionDependencyItem => {
+    if (!resolved) {
+      return {
+        label: ref.label,
+        ref: {
+          type: ref.type,
+          key: ref.key,
+          ...(ref.version ? { version: ref.version } : {})
+        },
+        status: "missing",
+        detail: `${ref.type}:${ref.key} was not found in this environment.`,
+        sourcePath: ref.sourcePath,
+        readiness: {
+          status: "blocked",
+          riskLevel: "blocking",
+          summary: "Missing dependency blocks safe activation."
+        }
+      };
+    }
+
+    const rawStatus = resolved.status ?? "ACTIVE";
+    const isActive = rawStatus === "ACTIVE";
+    return {
+      label: ref.label,
+      ref: {
+        type: ref.type,
+        key: ref.key,
+        ...(ref.version ? { version: ref.version } : {})
+      },
+      status: isActive ? "resolved_active" : "resolved_inactive",
+      detail: isActive ? undefined : `Found ${rawStatus}. Activate or replace before publishing.`,
+      sourcePath: ref.sourcePath,
+      resolved: {
+        name: resolved.name ?? null,
+        version: resolved.version ?? null,
+        status: rawStatus,
+        updatedAt: resolved.updatedAt?.toISOString() ?? null
+      },
+      readiness: {
+        status: isActive ? "ready" : "ready_with_warnings",
+        riskLevel: isActive ? "low" : "medium",
+        summary: isActive ? "Dependency is available for runtime use." : "Dependency exists but is not active."
+      }
+    };
+  };
+
+  const resolveDecisionDependencyReference = async (
+    environment: Environment,
+    ref: DecisionDependencyReference
+  ): Promise<DecisionDependencyItem> => {
+    const versionWhere = ref.version ? { version: ref.version } : {};
+
+    if (ref.type === "content") {
+      const row = await prisma.contentBlock.findFirst({
+        where: { environment, key: ref.key, ...versionWhere },
+        orderBy: { version: "desc" }
+      });
+      return resolvedDependencyItem(ref, row);
+    }
+
+    if (ref.type === "offer") {
+      const row = await prisma.offer.findFirst({
+        where: { environment, key: ref.key, ...versionWhere },
+        orderBy: { version: "desc" }
+      });
+      return resolvedDependencyItem(ref, row);
+    }
+
+    if (ref.type === "bundle") {
+      const assetBundleModel = (prisma as any).assetBundle;
+      const row = assetBundleModel?.findFirst
+        ? await assetBundleModel.findFirst({
+            where: { environment, key: ref.key, ...versionWhere },
+            orderBy: { version: "desc" }
+          })
+        : null;
+      return resolvedDependencyItem(ref, row);
+    }
+
+    if (ref.type === "experiment") {
+      const row = await prisma.experimentVersion.findFirst({
+        where: { environment, key: ref.key, ...versionWhere },
+        orderBy: { version: "desc" }
+      });
+      return resolvedDependencyItem(ref, row ? { ...row, name: row.name, status: row.status } : null);
+    }
+
+    if (ref.type === "template") {
+      const row = await prisma.inAppTemplate.findFirst({
+        where: { environment, key: ref.key }
+      });
+      return resolvedDependencyItem(ref, row ? { ...row, version: null, status: "ACTIVE" } : null);
+    }
+
+    const row = await prisma.inAppPlacement.findFirst({
+      where: { environment, key: ref.key }
+    });
+    return resolvedDependencyItem(ref, row ? { ...row, version: null, status: "ACTIVE" } : null);
+  };
+
+  const loadSavedScenarioTestResults = async (input: {
+    environment: Environment;
+    decisionId: string;
+    version?: number | null;
+  }): Promise<DecisionAuthoringTestResult[]> => {
+    const scenarioModel = (prisma as any).decisionScenarioTest;
+    if (!scenarioModel?.findMany) {
+      return [];
+    }
+
+    const versionWhere =
+      typeof input.version === "number"
+        ? {
+            OR: [{ version: input.version }, { version: null }]
+          }
+        : {};
+
+    const rows = await scenarioModel.findMany({
+      where: {
+        decisionId: input.decisionId,
+        environment: input.environment,
+        enabled: true,
+        ...versionWhere
+      },
+      orderBy: [{ required: "desc" }, { updatedAt: "desc" }],
+      take: 20
+    });
+
+    return rows.map((row: { id: string; name: string; required: boolean; lastStatus: string; lastDetail: string | null }) => {
+      const status = normalizeScenarioStatus(row.lastStatus);
+      return {
+        id: row.id,
+        name: row.name,
+        status,
+        required: row.required,
+        detail:
+          row.lastDetail ??
+          (status === "pending" ? "Saved required scenario has not passed." : status === "fail" ? "Saved required scenario failed." : undefined)
+      };
+    });
+  };
+
   const clearStackCaches = (environment?: Environment) => {
     if (!environment) {
       activeStackCache.clear();
@@ -2570,6 +3385,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
     if (route.startsWith("/v1/decisions")) {
       if (route.includes("/activate")) return "decision.activate";
+      if (route.includes("/evidence/") && route.includes("/review")) return "decision.activate";
       if (route.includes("/archive")) return "decision.archive";
       if (method === "GET") return "decision.read";
       return "decision.write";
@@ -3791,6 +4607,50 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     };
   });
 
+  app.get("/v1/decisions/approvals", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const query = z
+      .object({
+        status: z.enum(["pending", "approved", "rejected"]).optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(50)
+      })
+      .safeParse(request.query);
+    if (!query.success) {
+      return buildResponseError(reply, 400, "Invalid approval queue query", query.error.flatten());
+    }
+
+    const evidenceModel = (prisma as any).decisionAuthoringEvidence;
+    if (!evidenceModel?.findMany) {
+      return { items: [] };
+    }
+
+    const rows = await evidenceModel.findMany({
+      where: {
+        environment,
+        evidenceType: "approval_request",
+        ...(query.data.status ? { status: query.data.status } : {})
+      },
+      include: {
+        decision: true
+      },
+      orderBy: { createdAt: "desc" },
+      take: query.data.limit
+    });
+
+    return {
+      items: rows.map((row: any) => ({
+        ...serializeDecisionAuthoringEvidence(row),
+        decisionKey: row.decision?.key ?? "",
+        decisionName: row.decision?.name ?? "",
+        decisionDescription: row.decision?.description ?? ""
+      }))
+    };
+  });
+
   app.get("/v1/decisions/:id", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -4112,6 +4972,892 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     };
   });
 
+  app.post("/v1/decisions/:id/requirements", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = decisionAuthoringBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid requirements request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    const sourceVersion = draft ?? active;
+    const rawDefinition = body.data?.definition ?? sourceVersion?.definitionJson;
+    if (!rawDefinition) {
+      return buildResponseError(reply, 404, "No decision definition found");
+    }
+
+    const parsedDefinition = DecisionDefinitionSchema.safeParse(rawDefinition);
+    if (!parsedDefinition.success) {
+      return buildResponseError(reply, 400, "Decision definition is invalid", parsedDefinition.error.flatten());
+    }
+
+    const requirements = await buildDecisionRequirementsWithCatalog({
+      environment,
+      definition: parsedDefinition.data
+    });
+
+    return {
+      decisionId: decision.id,
+      key: parsedDefinition.data.key,
+      type: "decision" as const,
+      version: parsedDefinition.data.version,
+      source: body.data?.definition ? "provided_definition" : sourceVersion?.status === "DRAFT" ? "draft" : "active",
+      required: requirements.required,
+      optional: requirements.optional,
+      notes: requirements.notes,
+      schema: {
+        operators: [...REQUIREMENTS_OPERATORS]
+      }
+    };
+  });
+
+  app.post("/v1/decisions/:id/dependencies", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = decisionAuthoringBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid dependencies request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    const sourceVersion = draft ?? active;
+    const rawDefinition = body.data?.definition ?? sourceVersion?.definitionJson;
+    if (!rawDefinition) {
+      return buildResponseError(reply, 404, "No decision definition found");
+    }
+
+    const parsedDefinition = DecisionDefinitionSchema.safeParse(rawDefinition);
+    if (!parsedDefinition.success) {
+      return buildResponseError(reply, 400, "Decision definition is invalid", parsedDefinition.error.flatten());
+    }
+
+    const refs = collectDecisionDependencyReferences(parsedDefinition.data);
+    const items = await Promise.all(refs.map((ref) => resolveDecisionDependencyReference(environment, ref)));
+    const missing = items.filter((item) => item.status === "missing").length;
+    const inactive = items.filter((item) => item.status === "resolved_inactive").length;
+    const blocking = items.filter((item) => item.readiness?.riskLevel === "blocking").length;
+    const warnings = items.filter((item) => item.readiness?.status === "ready_with_warnings").length;
+
+    return {
+      decisionId: decision.id,
+      key: parsedDefinition.data.key,
+      environment,
+      draftVersion: draft?.version ?? null,
+      activeVersion: active?.version ?? null,
+      source: body.data?.definition ? "provided_definition" : sourceVersion?.status === "DRAFT" ? "draft" : "active",
+      items,
+      summary: {
+        total: items.length,
+        missing,
+        inactive,
+        blocking,
+        warnings
+      }
+    };
+  });
+
+  app.get("/v1/decisions/:id/scenarios", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid decision id");
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const scenarioModel = (prisma as any).decisionScenarioTest;
+    if (!scenarioModel?.findMany) {
+      return {
+        decisionId: decision.id,
+        items: []
+      };
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    const targetVersion = draft?.version ?? active?.version ?? null;
+    const versionWhere =
+      typeof targetVersion === "number"
+        ? {
+            OR: [{ version: targetVersion }, { version: null }]
+          }
+        : { version: null };
+
+    const items = await scenarioModel.findMany({
+      where: {
+        decisionId: decision.id,
+        environment,
+        ...versionWhere
+      },
+      orderBy: [{ enabled: "desc" }, { required: "desc" }, { updatedAt: "desc" }],
+      take: 20
+    });
+
+    return {
+      decisionId: decision.id,
+      items: items.map(serializeDecisionScenarioTest)
+    };
+  });
+
+  app.put("/v1/decisions/:id/scenarios", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = decisionScenarioSuiteBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid scenario suite request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const scenarioModel = (prisma as any).decisionScenarioTest;
+    if (!scenarioModel?.findMany || !scenarioModel?.deleteMany || !scenarioModel?.createMany) {
+      return buildResponseError(reply, 501, "Decision scenario storage is not available");
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    const targetVersion = body.data.version ?? draft?.version ?? active?.version ?? null;
+    const auth = await resolveAuthContext(request, reply);
+
+    await prisma.$transaction(async (tx) => {
+      const txScenarioModel = (tx as any).decisionScenarioTest;
+      await txScenarioModel.deleteMany({
+        where: {
+          decisionId: decision.id,
+          environment,
+          version: targetVersion
+        }
+      });
+      if (body.data.items.length > 0) {
+        await txScenarioModel.createMany({
+          data: body.data.items.map((item) => ({
+            decisionId: decision.id,
+            environment,
+            version: targetVersion,
+            name: item.name.trim(),
+            required: item.required ?? true,
+            enabled: item.enabled ?? true,
+            profileJson: toInputJson(item.profile),
+            expectedJson: toInputJson(item.expected ?? {}),
+            lastStatus: item.lastStatus ?? "pending",
+            lastDetail: item.lastDetail ?? null,
+            lastResultJson: item.lastResult ? toInputJson(item.lastResult) : Prisma.JsonNull,
+            lastRunAt: item.lastRunAt ? new Date(item.lastRunAt) : null,
+            createdByUserId: auth?.userId ?? null,
+            createdByEmail: auth?.email ?? null
+          }))
+        });
+      }
+    });
+
+    const items = await scenarioModel.findMany({
+      where: {
+        decisionId: decision.id,
+        environment,
+        version: targetVersion
+      },
+      orderBy: [{ required: "desc" }, { updatedAt: "desc" }],
+      take: 20
+    });
+
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.scenarios.saved",
+          entityType: "decision",
+          entityKey: decision.key,
+          entityVersion: targetVersion,
+          metadata: toInputJson({
+            scenarioCount: body.data.items.length,
+            requiredCount: body.data.items.filter((item) => item.required ?? true).length
+          })
+        }
+      });
+    }
+
+    return {
+      decisionId: decision.id,
+      items: items.map(serializeDecisionScenarioTest)
+    };
+  });
+
+  app.post("/v1/decisions/:id/scenarios/run", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = decisionScenarioRunBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid scenario run request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const scenarioModel = (prisma as any).decisionScenarioTest;
+    if (!scenarioModel?.findMany || !scenarioModel?.update) {
+      return buildResponseError(reply, 501, "Decision scenario storage is not available");
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    const targetVersion = body.data?.version ?? draft?.version ?? active?.version ?? null;
+    const sourceVersion =
+      (typeof targetVersion === "number" ? decision.versions.find((version) => version.version === targetVersion) : null) ??
+      draft ??
+      active;
+    if (!sourceVersion) {
+      return buildResponseError(reply, 404, "No decision version found for scenario run");
+    }
+
+    const scenarioIds = body.data?.scenarioIds;
+    const rows = await scenarioModel.findMany({
+      where: {
+        decisionId: decision.id,
+        environment,
+        enabled: true,
+        ...(typeof targetVersion === "number" ? { OR: [{ version: targetVersion }, { version: null }] } : { version: null }),
+        ...(scenarioIds && scenarioIds.length > 0 ? { id: { in: scenarioIds } } : {})
+      },
+      orderBy: [{ required: "desc" }, { updatedAt: "asc" }],
+      take: 20
+    });
+
+    const definition = parseDefinition(sourceVersion.definitionJson);
+    const runAt = now().toISOString();
+    const runResults: DecisionScenarioRunResult[] = [];
+
+    for (const row of rows) {
+      const parsedProfile = scenarioProfileSchema.safeParse(row.profileJson);
+      let status: "pass" | "fail";
+      let detail: string;
+      let resultRecord: Record<string, unknown>;
+
+      if (!parsedProfile.success) {
+        status = "fail";
+        detail = "Scenario profile is invalid.";
+        resultRecord = {
+          error: "INVALID_PROFILE",
+          details: parsedProfile.error.flatten()
+        };
+      } else {
+        const scenarioContext = {
+          now: runAt,
+          channel: "web",
+          ...(body.data?.context ?? {})
+        } as EngineContext;
+        const engineResult = evaluateDecision({
+          definition,
+          profile: parsedProfile.data,
+          context: scenarioContext,
+          history: {
+            perProfilePerDay: 0,
+            perProfilePerWeek: 0
+          },
+          debug: true
+        });
+        const resolved = await catalogResolver.resolvePayloadRef({
+          environment,
+          actionType: engineResult.actionType,
+          payload: engineResult.payload,
+          locale: typeof scenarioContext.locale === "string" ? scenarioContext.locale : undefined,
+          profile: parsedProfile.data,
+          context: scenarioContext,
+          now: new Date(runAt)
+        });
+        resultRecord = {
+          decisionId: engineResult.decisionId,
+          version: engineResult.version,
+          actionType: engineResult.actionType,
+          payload: resolved.payload,
+          outcome: engineResult.outcome,
+          reasons: engineResult.reasons,
+          selectedRuleId: engineResult.selectedRuleId ?? null
+        };
+        const assertion = evaluateScenarioAssertion(isPlainObject(row.expectedJson) ? row.expectedJson : {}, {
+          actionType: engineResult.actionType,
+          selectedRuleId: engineResult.selectedRuleId,
+          payload: resolved.payload,
+          outcome: engineResult.outcome
+        });
+        status = assertion.status;
+        detail = assertion.detail;
+      }
+
+      await scenarioModel.update({
+        where: { id: row.id },
+        data: {
+          lastStatus: status,
+          lastDetail: detail,
+          lastResultJson: toInputJson(resultRecord),
+          lastRunAt: new Date(runAt)
+        }
+      });
+
+      runResults.push({
+        scenarioId: row.id,
+        name: row.name,
+        status,
+        detail,
+        result: resultRecord,
+        runAt
+      });
+    }
+
+    const items = await scenarioModel.findMany({
+      where: {
+        decisionId: decision.id,
+        environment,
+        ...(typeof targetVersion === "number" ? { OR: [{ version: targetVersion }, { version: null }] } : { version: null })
+      },
+      orderBy: [{ enabled: "desc" }, { required: "desc" }, { updatedAt: "desc" }],
+      take: 20
+    });
+
+    const auth = await resolveAuthContext(request, reply);
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.scenarios.run",
+          entityType: "decision",
+          entityKey: decision.key,
+          entityVersion: sourceVersion.version,
+          metadata: toInputJson({
+            runCount: runResults.length,
+            passCount: runResults.filter((result) => result.status === "pass").length,
+            failCount: runResults.filter((result) => result.status === "fail").length
+          })
+        }
+      });
+    }
+
+    return {
+      decisionId: decision.id,
+      version: sourceVersion.version,
+      ranAt: runAt,
+      summary: {
+        total: runResults.length,
+        passed: runResults.filter((result) => result.status === "pass").length,
+        failed: runResults.filter((result) => result.status === "fail").length
+      },
+      results: runResults,
+      items: items.map(serializeDecisionScenarioTest)
+    };
+  });
+
+  app.post("/v1/decisions/:id/readiness", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = decisionReadinessBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid readiness request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    const sourceVersion = draft ?? active;
+    const rawDefinition = body.data?.definition ?? sourceVersion?.definitionJson;
+    if (!rawDefinition) {
+      return buildResponseError(reply, 404, "No decision definition found");
+    }
+
+    const validation = validateDecisionDefinition(rawDefinition);
+    const definition = validation.data ?? null;
+    const semantic = definition ? analyzeDecisionSemantics(definition) : { warnings: [], metrics: { ruleCount: 0, hasElse: false, usesHoldout: false, usesCaps: false } };
+    const requirements = definition
+      ? await buildDecisionRequirementsWithCatalog({
+          environment,
+          definition
+        })
+      : {
+          required: { attributes: [], audiences: [], contextKeys: [] },
+          optional: { attributes: [], contextKeys: [] },
+          notes: []
+        };
+    const dependencyItems = definition
+      ? await Promise.all(collectDecisionDependencyReferences(definition).map((ref) => resolveDecisionDependencyReference(environment, ref)))
+      : [];
+    const savedScenarioResults = await loadSavedScenarioTestResults({
+      environment,
+      decisionId: decision.id,
+      version: draft?.version ?? active?.version ?? null
+    });
+    const testResults = mergeAuthoringTestResults(savedScenarioResults, body.data?.testResults ?? []);
+
+    const validationWarnings = validation.valid ? validation.warnings : [];
+    const diagnostics = buildDecisionReadinessDiagnostics({
+      definition,
+      validationErrors: validation.errors,
+      validationWarnings,
+      semanticWarnings: semantic.warnings,
+      requirementNotes: requirements.notes,
+      dependencyItems,
+      testResults
+    });
+    const summary = summarizeDecisionReadiness(diagnostics);
+
+    return {
+      decisionId: decision.id,
+      environment,
+      draftVersion: draft?.version ?? null,
+      activeVersion: active?.version ?? null,
+      source: body.data?.definition ? "provided_definition" : sourceVersion?.status === "DRAFT" ? "draft" : "active",
+      readiness: summary,
+      diagnostics,
+      validation: {
+        valid: validation.valid,
+        errors: validation.errors,
+        schemaErrors: validation.errors,
+        warnings: validation.valid ? [...validation.warnings, ...semantic.warnings] : validation.warnings,
+        metrics: semantic.metrics,
+        formatted: validation.valid && definition ? formatDecisionDefinition(definition) : null
+      },
+      requirements: {
+        required: requirements.required,
+        optional: requirements.optional,
+        notes: requirements.notes
+      }
+    };
+  });
+
+  app.get("/v1/decisions/:id/evidence", async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return buildResponseError(reply, 400, "Invalid decision id");
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const evidenceModel = (prisma as any).decisionAuthoringEvidence;
+    if (!evidenceModel?.findMany) {
+      return {
+        decisionId: decision.id,
+        items: []
+      };
+    }
+
+    const items = await evidenceModel.findMany({
+      where: {
+        decisionId: decision.id,
+        environment
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25
+    });
+
+    return {
+      decisionId: decision.id,
+      items: items.map(serializeDecisionAuthoringEvidence)
+    };
+  });
+
+  app.post("/v1/decisions/:id/evidence", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = decisionEvidenceBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid evidence request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const evidenceModel = (prisma as any).decisionAuthoringEvidence;
+    if (!evidenceModel?.create) {
+      return buildResponseError(reply, 501, "Decision authoring evidence storage is not available");
+    }
+
+    const auth = await resolveAuthContext(request, reply);
+    const created = await evidenceModel.create({
+      data: {
+        decisionId: decision.id,
+        environment,
+        version: body.data.version ?? null,
+        evidenceType: body.data.evidenceType,
+        status: body.data.status,
+        summary: body.data.summary ?? "",
+        payloadJson: toInputJson(body.data.payload ?? {}),
+        createdByUserId: auth?.userId ?? null,
+        createdByEmail: auth?.email ?? null
+      }
+    });
+
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: `decision.evidence.${body.data.evidenceType}`,
+          entityType: "decision",
+          entityKey: decision.key,
+          entityVersion: body.data.version ?? null,
+          metadata: toInputJson({
+            evidenceId: created.id,
+            status: body.data.status,
+            summary: body.data.summary ?? ""
+          })
+        }
+      });
+    }
+
+    return reply.code(201).send({
+      decisionId: decision.id,
+      evidence: serializeDecisionAuthoringEvidence(created)
+    });
+  });
+
+  app.post("/v1/decisions/:id/evidence/:evidenceId/review", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        evidenceId: z.string().uuid()
+      })
+      .safeParse(request.params);
+    const body = reviewDecisionApprovalBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid approval review request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const evidenceModel = (prisma as any).decisionAuthoringEvidence;
+    if (!evidenceModel?.findFirst || !evidenceModel?.update) {
+      return buildResponseError(reply, 501, "Decision authoring evidence storage is not available");
+    }
+
+    const existing = await evidenceModel.findFirst({
+      where: {
+        id: params.data.evidenceId,
+        decisionId: decision.id,
+        environment
+      }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Approval request not found");
+    }
+    if (existing.evidenceType !== "approval_request") {
+      return buildResponseError(reply, 400, "Evidence record is not an approval request");
+    }
+    if (existing.status !== "pending") {
+      return buildResponseError(reply, 409, "Approval request has already been reviewed", {
+        status: existing.status
+      });
+    }
+
+    const auth = await resolveAuthContext(request, reply);
+    const reviewedAt = now().toISOString();
+    const reviewStatus = body.data.action === "approve" ? "approved" : "rejected";
+    const reviewNote = body.data.note?.trim() ?? "";
+    const existingPayload = isPlainObject(existing.payloadJson) ? existing.payloadJson : {};
+    const updated = await evidenceModel.update({
+      where: { id: existing.id },
+      data: {
+        status: reviewStatus,
+        summary: `${reviewStatus === "approved" ? "Approved" : "Rejected"} ${decision.key} v${existing.version ?? "-"}`,
+        payloadJson: toInputJson({
+          ...existingPayload,
+          review: {
+            status: reviewStatus,
+            note: reviewNote,
+            reviewedAt,
+            reviewedByUserId: auth?.userId ?? null,
+            reviewedByEmail: auth?.email ?? null
+          }
+        })
+      }
+    });
+
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: `decision.approval.${reviewStatus}`,
+          entityType: "decision",
+          entityKey: decision.key,
+          entityVersion: existing.version ?? null,
+          metadata: toInputJson({
+            evidenceId: updated.id,
+            note: reviewNote,
+            reviewedAt
+          })
+        }
+      });
+    }
+
+    return {
+      decisionId: decision.id,
+      evidence: serializeDecisionAuthoringEvidence(updated)
+    };
+  });
+
+  app.post("/v1/decisions/:id/submit-approval", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = submitDecisionApprovalBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid approval request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment },
+      include: {
+        versions: {
+          where: { status: { in: ["DRAFT", "ACTIVE"] } },
+          orderBy: { version: "desc" }
+        }
+      }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const draft = decision.versions.find((version) => version.status === "DRAFT") ?? null;
+    const active = decision.versions.find((version) => version.status === "ACTIVE") ?? null;
+    if (!draft) {
+      return buildResponseError(reply, 404, "No draft version to submit for approval");
+    }
+    if (body.data?.expectedDraftVersion && body.data.expectedDraftVersion !== draft.version) {
+      return buildResponseError(
+        reply,
+        409,
+        `Draft version changed before approval request. Expected v${body.data.expectedDraftVersion}, found v${draft.version}.`
+      );
+    }
+
+    const validation = validateDecisionDefinition(draft.definitionJson);
+    const definition = validation.data ?? null;
+    const semantic = definition ? analyzeDecisionSemantics(definition) : { warnings: [], metrics: { ruleCount: 0, hasElse: false, usesHoldout: false, usesCaps: false } };
+    const requirements = definition
+      ? await buildDecisionRequirementsWithCatalog({
+          environment,
+          definition
+        })
+      : {
+          required: { attributes: [], audiences: [], contextKeys: [] },
+          optional: { attributes: [], contextKeys: [] },
+          notes: []
+        };
+    const dependencyItems = definition
+      ? await Promise.all(collectDecisionDependencyReferences(definition).map((ref) => resolveDecisionDependencyReference(environment, ref)))
+      : [];
+    const savedScenarioResults = await loadSavedScenarioTestResults({
+      environment,
+      decisionId: decision.id,
+      version: draft.version
+    });
+    const testResults = mergeAuthoringTestResults(savedScenarioResults, body.data?.testResults ?? []);
+    const diagnostics = buildDecisionReadinessDiagnostics({
+      definition,
+      validationErrors: validation.errors,
+      validationWarnings: validation.valid ? validation.warnings : [],
+      semanticWarnings: semantic.warnings,
+      requirementNotes: requirements.notes,
+      dependencyItems,
+      testResults
+    });
+    const readiness = summarizeDecisionReadiness(diagnostics);
+    if (!validation.valid || readiness.status === "blocked") {
+      return buildResponseError(reply, 409, "Decision is not ready for approval", {
+        readiness,
+        diagnostics
+      });
+    }
+
+    const evidenceModel = (prisma as any).decisionAuthoringEvidence;
+    if (!evidenceModel?.create) {
+      return buildResponseError(reply, 501, "Decision authoring evidence storage is not available");
+    }
+
+    const auth = await resolveAuthContext(request, reply);
+    const created = await evidenceModel.create({
+      data: {
+        decisionId: decision.id,
+        environment,
+        version: draft.version,
+        evidenceType: "approval_request",
+        status: "pending",
+        summary: `Approval requested for ${decision.key} v${draft.version}`,
+        payloadJson: toInputJson({
+          note: body.data?.note?.trim() ?? "",
+          activeVersion: active?.version ?? null,
+          readiness,
+          diagnostics,
+          testResults,
+          requirements
+        }),
+        createdByUserId: auth?.userId ?? null,
+        createdByEmail: auth?.email ?? null
+      }
+    });
+
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.approval.requested",
+          entityType: "decision",
+          entityKey: decision.key,
+          entityVersion: draft.version,
+          metadata: toInputJson({
+            evidenceId: created.id,
+            note: body.data?.note?.trim() ?? "",
+            readiness
+          })
+        }
+      });
+    }
+
+    return reply.code(201).send({
+      decisionId: decision.id,
+      evidence: serializeDecisionAuthoringEvidence(created),
+      readiness
+    });
+  });
+
   app.post("/v1/decisions/:id/preview-activation", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);
     if (!environment) {
@@ -4155,6 +5901,18 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
     if (diffSummary.rulesRemoved > 0) {
       warnings.push("Rules were removed compared to active version.");
+    }
+    const approval = await decisionApprovalStatus((prisma as any).decisionAuthoringEvidence, {
+      decisionId: decision.id,
+      environment,
+      version: draft.version
+    });
+    if (approval.status !== "approved") {
+      warnings.push(
+        approval.status === "missing"
+          ? "No approved activation request exists for this draft version."
+          : `Latest activation request is ${approval.status}.`
+      );
     }
 
     const previewNow = now();
@@ -4245,6 +6003,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       environment,
       draftVersion: draft.version,
       activeVersion: active?.version ?? null,
+      approval,
       diffSummary,
       warnings: [...new Set(warnings)],
       policyImpact: {
@@ -4260,7 +6019,8 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
-    if (!params.success) {
+    const body = activateDecisionBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
       return buildResponseError(reply, 400, "Invalid decision id");
     }
 
@@ -4278,6 +6038,27 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
       if (!draft) {
         return null;
+      }
+
+      if (body.data?.expectedDraftVersion && body.data.expectedDraftVersion !== draft.version) {
+        return {
+          versionMismatch: true as const,
+          expectedDraftVersion: body.data.expectedDraftVersion,
+          actualDraftVersion: draft.version
+        };
+      }
+
+      const approval = await decisionApprovalStatus((tx as any).decisionAuthoringEvidence, {
+        decisionId: params.data.id,
+        environment,
+        version: draft.version
+      });
+      const approvalOverrideReason = body.data?.approvalOverride?.reason.trim();
+      if (approval.status !== "approved" && !approvalOverrideReason) {
+        return {
+          approvalRequired: true as const,
+          approval
+        };
       }
 
       const activeVersions = await tx.decisionVersion.findMany({
@@ -4316,15 +6097,69 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
       return {
         version,
-        definition: activeDefinition
+        definition: activeDefinition,
+        approval,
+        approvalOverrideReason: approval.status !== "approved" ? approvalOverrideReason : undefined
       };
     });
 
     if (!activated) {
       return buildResponseError(reply, 404, "No draft version to activate");
     }
+    if ("versionMismatch" in activated) {
+      return buildResponseError(
+        reply,
+        409,
+        `Draft version changed before activation. Expected v${activated.expectedDraftVersion}, found v${activated.actualDraftVersion}.`
+      );
+    }
+    if ("approvalRequired" in activated) {
+      return buildResponseError(reply, 409, "Decision approval is required before activation", {
+        approval: activated.approval
+      });
+    }
 
     clearDecisionCaches(environment);
+
+    const auth = await resolveAuthContext(request, reply);
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create && body.data?.activationNote?.trim()) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.activate.note",
+          entityType: "decision",
+          entityKey: activated.definition.key,
+          entityVersion: activated.version.version,
+          metadata: toInputJson({
+            activationNote: body.data.activationNote.trim(),
+            decisionId: params.data.id,
+            versionId: activated.version.id
+          })
+        }
+      });
+    }
+    if (auditModel?.create && activated.approvalOverrideReason) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.activate.approval_override",
+          entityType: "decision",
+          entityKey: activated.definition.key,
+          entityVersion: activated.version.version,
+          metadata: toInputJson({
+            reason: activated.approvalOverrideReason,
+            approval: activated.approval,
+            decisionId: params.data.id,
+            versionId: activated.version.id
+          })
+        }
+      });
+    }
 
     return {
       decisionId: params.data.id,
@@ -4332,6 +6167,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       version: activated.version.version,
       status: activated.version.status,
       activatedAt: activated.version.activatedAt?.toISOString() ?? null,
+      activationNoteStored: Boolean(body.data?.activationNote?.trim()),
+      approval: activated.approval,
+      approvalOverrideStored: Boolean(activated.approvalOverrideReason),
       definition: activated.definition
     };
   });

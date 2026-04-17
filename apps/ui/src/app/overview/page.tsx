@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
+import { InlineError } from "../../components/ui/app-state";
+import { PageHeader } from "../../components/ui/page";
 import { Skeleton } from "../../components/ui/skeleton";
 import { apiClient, type RealtimeCacheStatsResponse, type SystemHealthResponse } from "../../lib/api";
 import type { DecisionStackVersionSummary, DecisionVersionSummary, InAppOverviewReport, LogsQueryResponseItem } from "@decisioning/shared";
@@ -206,19 +208,19 @@ export default function OverviewPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Operational Heartbeat</h2>
-        <p className="text-sm text-stone-700">System status, delivery reliability, and recent decision activity for {environment}.</p>
-        <p className="mt-2 text-xs text-stone-500">
-          Last refreshed: {lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleString() : "Not loaded yet"}
-        </p>
-      </header>
+      <PageHeader
+        density="compact"
+        eyebrow="Governed Activation"
+        title="Operational Heartbeat"
+        description={`System status, delivery reliability, and recent activation activity for ${environment}.`}
+        meta={`Last refreshed: ${lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleString() : "Not loaded yet"}`}
+      />
 
-      {error ? <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error}</p> : null}
+      {error ? <InlineError title="Heartbeat partially unavailable" description={error} /> : null}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {heartbeatCards.map((card) => (
-          <Card key={card.title} className="space-y-2 p-4">
+          <Card key={card.title} className="space-y-2 p-3">
             <div className="flex items-start justify-between gap-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">{card.title}</p>
               <Badge variant={heartbeatBadgeVariant[card.status]}>{heartbeatStatusLabel[card.status]}</Badge>
@@ -229,25 +231,25 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      <header className="panel p-4">
+      <header className="panel p-3">
         <h3 className="text-lg font-semibold">Current Overviews</h3>
         <p className="text-sm text-stone-700">Existing summary views for active definitions, recent outcomes, and operator shortcuts.</p>
       </header>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <Card className="p-4">
+        <Card className="p-3">
           <p className="text-xs uppercase tracking-wide text-stone-500">Active decisions</p>
           {loading ? <Skeleton className="mt-2 h-7 w-16" /> : <p className="mt-2 text-3xl font-semibold">{activeDecisions.length}</p>}
         </Card>
-        <Card className="p-4">
+        <Card className="p-3">
           <p className="text-xs uppercase tracking-wide text-stone-500">Active stacks</p>
           {loading ? <Skeleton className="mt-2 h-7 w-16" /> : <p className="mt-2 text-3xl font-semibold">{activeStacks.length}</p>}
         </Card>
-        <Card className="p-4">
+        <Card className="p-3">
           <p className="text-xs uppercase tracking-wide text-stone-500">Recent errors</p>
           {loading ? <Skeleton className="mt-2 h-7 w-16" /> : <p className="mt-2 text-3xl font-semibold">{errorCount}</p>}
         </Card>
-        <Card className="p-4">
+        <Card className="p-3">
           <p className="text-xs uppercase tracking-wide text-stone-500">Last activation</p>
           {loading ? (
             <Skeleton className="mt-2 h-6 w-32" />
@@ -258,7 +260,7 @@ export default function OverviewPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="space-y-3 p-4 lg:col-span-2">
+        <Card className="space-y-3 p-3 lg:col-span-2">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold">Active Decisions</h3>
             <Link href="/decisions" className="text-sm text-stone-700 underline">
@@ -289,44 +291,59 @@ export default function OverviewPage() {
           </div>
         </Card>
 
-        <Card className="space-y-3 p-4">
+        <Card className="space-y-3 p-3">
           <h3 className="font-semibold">Quick Actions</h3>
           <div className="space-y-3 text-sm">
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Navigate</p>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/usecases">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/usecases">
                 Open Use Cases Navigator
               </Link>
             </div>
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Build</p>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/decisions?create=wizard">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/catalog?create=asset">
+                Create Activation Asset
+              </Link>
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/catalog">
+                Open Asset Library
+              </Link>
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/decisions?create=wizard">
                 New Decision Draft
               </Link>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/simulate">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/simulate">
                 Run Simulation
               </Link>
               {environment === "DEV" && hasPermission("promotion.create") ? (
-                <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/releases">
+                <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/releases">
                   Promote from DEV
                 </Link>
               ) : null}
             </div>
             <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-stone-500">Plan</p>
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/engage/calendar">
+                Campaign Calendar
+              </Link>
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/engage/campaigns">
+                Campaign Inventory
+              </Link>
+            </div>
+            <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Operate</p>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/execution/cache">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/execution/cache">
                 Realtime Cache
               </Link>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/execution/precompute">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/execution/precompute">
                 Precompute Runs
               </Link>
             </div>
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Configure</p>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/settings/wbs">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/settings/wbs">
                 WBS Settings
               </Link>
-              <Link className="block rounded-md border border-stone-300 px-3 py-2 hover:bg-stone-100" href="/settings/wbs-mapping">
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/settings/wbs-mapping">
                 WBS Mapping
               </Link>
             </div>
@@ -334,7 +351,7 @@ export default function OverviewPage() {
         </Card>
       </div>
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-3 p-3">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">Recent Decision Logs</h3>
           <Link href="/logs" className="text-sm text-stone-700 underline">

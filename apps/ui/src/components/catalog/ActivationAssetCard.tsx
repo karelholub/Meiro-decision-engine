@@ -2,36 +2,17 @@
 
 import React from "react";
 import Link from "next/link";
+import { activationChannelLabel, activationChannelMark } from "@decisioning/shared";
 import type { ActivationAssetChannel, ActivationLibraryItem } from "../../lib/api";
+import { AssetActions } from "./AssetActions";
+import { assetEditorHref } from "./activationAssetConfig";
 
-export const channelLabel = (channel: ActivationAssetChannel | string) => {
-  const labels: Record<string, string> = {
-    website_personalization: "Website",
-    popup_banner: "Popup",
-    email: "Email",
-    mobile_push: "Push",
-    whatsapp: "WhatsApp",
-    journey_canvas: "Journey"
-  };
-  return labels[channel] ?? channel;
-};
+export const channelLabel = (channel: ActivationAssetChannel | string) => activationChannelLabel(channel, "short");
 
-const channelMark = (channel: ActivationAssetChannel | string) => {
-  const marks: Record<string, string> = {
-    website_personalization: "Web",
-    popup_banner: "Pop",
-    email: "Mail",
-    mobile_push: "Push",
-    whatsapp: "WA",
-    journey_canvas: "Flow"
-  };
-  return marks[channel] ?? channel.slice(0, 4);
-};
+const channelMark = (channel: ActivationAssetChannel | string) => activationChannelMark(channel);
 
 export const assetHref = (item: Pick<ActivationLibraryItem, "entityType" | "key">) => {
-  if (item.entityType === "offer") return `/catalog/offers?key=${encodeURIComponent(item.key)}`;
-  if (item.entityType === "content") return `/catalog/content?key=${encodeURIComponent(item.key)}`;
-  return `/catalog/bundles?key=${encodeURIComponent(item.key)}`;
+  return assetEditorHref(item);
 };
 
 export const badgeClass = (value: string) => {
@@ -48,7 +29,7 @@ export function AssetBadge({ children, value }: { children: React.ReactNode; val
   return <span className={`rounded border px-2 py-0.5 text-xs ${badgeClass(value)}`}>{children}</span>;
 }
 
-const friendlyStatus = (value: string) => {
+export const friendlyStatus = (value: string) => {
   const labels: Record<string, string> = {
     ACTIVE: "Active",
     DRAFT: "Draft",
@@ -63,6 +44,29 @@ const friendlyStatus = (value: string) => {
     critical: "Needs attention"
   };
   return labels[value] ?? value;
+};
+
+export function AssetSignalBadges({ item, compact = false }: { item: ActivationLibraryItem; compact?: boolean }) {
+  return (
+    <div className={`flex flex-wrap gap-1 ${compact ? "" : "items-center"}`}>
+      <AssetBadge value={item.status}>{friendlyStatus(item.status)}</AssetBadge>
+      {item.readiness ? <AssetBadge value={item.readiness.status}>{friendlyStatus(item.readiness.status)}</AssetBadge> : null}
+      {item.health ? <AssetBadge value={item.health}>{friendlyStatus(item.health)}</AssetBadge> : null}
+      {item.brokenPrimitiveReferences.length > 0 ? (
+        <AssetBadge value="blocked">{item.brokenPrimitiveReferences.length} missing part{item.brokenPrimitiveReferences.length === 1 ? "" : "s"}</AssetBadge>
+      ) : null}
+    </div>
+  );
+}
+
+const imageUrlStatus = (url: string | null) => {
+  if (!url) return "No thumbnail URL";
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "data:" ? "Preview source" : "Reference only";
+  } catch {
+    return "Reference only";
+  }
 };
 
 const formatDate = (value: string) =>
@@ -82,6 +86,32 @@ export function ChannelBadges({ channels, limit = 3 }: { channels: Array<Activat
       ))}
       {channels.length > visible.length ? <span className="rounded border border-stone-200 bg-white px-2 py-0.5 text-xs text-stone-500">+{channels.length - visible.length}</span> : null}
     </span>
+  );
+}
+
+const limitedList = (values: string[], fallback: string, limit: number) => {
+  if (values.length === 0) return fallback;
+  const visible = values.slice(0, limit).join(", ");
+  return values.length > limit ? `${visible}...` : visible;
+};
+
+export const activationAssetRuntimeReferenceLabel = (item: ActivationLibraryItem) => {
+  if (item.runtimeRef.bundleKey) return `bundle ${item.runtimeRef.bundleKey}`;
+  const references = [
+    item.runtimeRef.contentKey ? `content ${item.runtimeRef.contentKey}` : null,
+    item.runtimeRef.offerKey ? `offer ${item.runtimeRef.offerKey}` : null
+  ].filter((entry): entry is string => Boolean(entry));
+  return references.length > 0 ? references.join(" and ") : "this governed asset";
+};
+
+export function AssetCompatibilitySummary({ item, compact = false }: { item: ActivationLibraryItem; compact?: boolean }) {
+  const columns = compact ? "" : "md:grid-cols-3";
+  return (
+    <div className={`grid gap-2 text-xs text-stone-600 ${columns}`}>
+      <p><span className="font-medium text-stone-700">Templates:</span> {limitedList(item.compatibility.templateKeys, "Any template", 2)}</p>
+      <p><span className="font-medium text-stone-700">Placements:</span> {limitedList(item.compatibility.placementKeys, "Any placement", 2)}</p>
+      <p><span className="font-medium text-stone-700">Locales:</span> {limitedList(item.compatibility.locales, "All locales", 3)}</p>
+    </div>
   );
 }
 
@@ -148,9 +178,12 @@ export function ActivationAssetPreview({ item, compact = false }: { item: Activa
     return (
       <PreviewShell item={item} compact={compact} className="border-stone-200 bg-stone-100">
         {item.preview.thumbnailUrl ? (
-          <img src={item.preview.thumbnailUrl} alt="" className={`${compact ? "h-24" : "h-40"} w-full object-cover`} />
+          <div>
+            <img src={item.preview.thumbnailUrl} alt="" className={`${compact ? "h-24" : "h-40"} w-full object-cover`} />
+            <p className="border-t border-stone-200 bg-white px-3 py-2 text-xs text-stone-600">{imageUrlStatus(item.preview.thumbnailUrl)} · {item.preview.thumbnailUrl}</p>
+          </div>
         ) : (
-          <PreviewUnavailable message="Image reference is ready, but no thumbnail URL is available." />
+          <PreviewUnavailable message="Image reference is saved, but no browser-previewable thumbnail URL is available." />
         )}
       </PreviewShell>
     );
@@ -213,7 +246,7 @@ export function ActivationAssetPreview({ item, compact = false }: { item: Activa
       <PreviewShell item={item} compact={compact} className="border-stone-200 bg-white">
         <div className="p-4">
           <div className="border-b border-stone-200 pb-2">
-            <p className="text-xs text-stone-500">Inbox content block</p>
+            <p className="text-xs text-stone-500">Inbox asset</p>
             <p className="font-semibold">{title}</p>
           </div>
           <p className="mt-3 text-sm text-stone-700">{snippet || "Email body is not filled in yet."}</p>
@@ -237,7 +270,7 @@ export function ActivationAssetPreview({ item, compact = false }: { item: Activa
             </div>
             <div className={`rounded border px-3 py-2 text-sm ${hasContent ? "border-stone-200 bg-white" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
               <span className="text-xs uppercase tracking-wide text-stone-500">Content</span>
-              <p className="font-medium">{item.runtimeRef.contentKey ?? "No content block linked"}</p>
+              <p className="font-medium">{item.runtimeRef.contentKey ?? "No reusable asset linked"}</p>
             </div>
           </div>
           <PreviewFooter item={item} />
@@ -278,16 +311,7 @@ export function ActivationAssetPreview({ item, compact = false }: { item: Activa
 }
 
 export function ActivationAssetMeta({ item }: { item: ActivationLibraryItem }) {
-  const templates = item.compatibility.templateKeys.slice(0, 2).join(", ") || "Any template";
-  const placements = item.compatibility.placementKeys.slice(0, 2).join(", ") || "Any placement";
-  const locales = item.compatibility.locales.slice(0, 3).join(", ") || "All locales";
-  return (
-    <div className="grid gap-2 text-xs text-stone-600 md:grid-cols-3">
-      <p><span className="font-medium text-stone-700">Templates:</span> {templates}{item.compatibility.templateKeys.length > 2 ? "..." : ""}</p>
-      <p><span className="font-medium text-stone-700">Placements:</span> {placements}{item.compatibility.placementKeys.length > 2 ? "..." : ""}</p>
-      <p><span className="font-medium text-stone-700">Locales:</span> {locales}</p>
-    </div>
-  );
+  return <AssetCompatibilitySummary item={item} />;
 }
 
 export function ActivationAssetUsageSummary({ item, compact = false }: { item: ActivationLibraryItem; compact?: boolean }) {
@@ -350,29 +374,28 @@ export function ReusablePartsPanel({ item, compact = false }: { item: Activation
 
 export function ActivationAssetCard({ item, dense = false }: { item: ActivationLibraryItem; dense?: boolean }) {
   return (
-    <Link href={assetHref(item)} className="panel block overflow-hidden transition hover:border-stone-400">
-      <ActivationAssetPreview item={item} compact={dense} />
+    <article className="panel overflow-hidden transition hover:border-stone-400">
+      <Link href={assetHref(item)} className="block">
+        <ActivationAssetPreview item={item} compact={dense} />
+      </Link>
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-wide text-stone-500">{item.assetTypeLabel}</p>
-            <h3 className="text-lg font-semibold">{item.name}</h3>
+            <Link href={assetHref(item)} className="text-lg font-semibold underline decoration-transparent hover:decoration-stone-400">{item.name}</Link>
             <p className="text-xs text-stone-500">{item.key} · v{item.version}</p>
           </div>
           <AssetBadge value={item.category}>{item.category}</AssetBadge>
         </div>
-        <div className="flex flex-wrap gap-1">
-          <AssetBadge value={item.status}>{friendlyStatus(item.status)}</AssetBadge>
-          {item.readiness ? <AssetBadge value={item.readiness.status}>{friendlyStatus(item.readiness.status)}</AssetBadge> : null}
-          {item.health ? <AssetBadge value={item.health}>{friendlyStatus(item.health)}</AssetBadge> : null}
-        </div>
+        <AssetSignalBadges item={item} />
         <ChannelBadges channels={item.compatibility.channels} />
         <ActivationAssetMeta item={item} />
         <ActivationAssetUsageSummary item={item} compact />
+        <AssetActions item={item} compact showOpen showPlan showCalendar />
         <div className="text-xs text-stone-500">
           Updated {formatDate(item.updatedAt)}
         </div>
       </div>
-    </Link>
+    </article>
   );
 }

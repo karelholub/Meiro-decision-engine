@@ -10,6 +10,8 @@ import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../.
 import { usePermissions } from "../../../lib/permissions";
 import { useRegistry } from "../../../lib/registry";
 import { Button } from "../../../components/ui/button";
+import { InlineError, LoadingState } from "../../../components/ui/app-state";
+import { PageHeader } from "../../../components/ui/page";
 import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import {
   AssetVariantsEditor,
@@ -195,7 +197,7 @@ export default function CatalogContentPage() {
       }
       setError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load content blocks");
+      setError(loadError instanceof Error ? loadError.message : "Failed to load reusable assets");
     } finally {
       setLoading(false);
     }
@@ -312,7 +314,7 @@ export default function CatalogContentPage() {
         setSelectedId(response.item.id);
         setCreateMode(false);
         setEditor(makeContentEditorSeed(response.item));
-        setMessage(`Saved content block ${response.item.key} v${response.item.version}`);
+        setMessage(`Saved asset ${response.item.key} v${response.item.version}`);
       } else {
         const response = await apiClient.catalog.content.update(selectedId, {
           name: payload.name,
@@ -467,10 +469,11 @@ export default function CatalogContentPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Catalog / Content Blocks</h2>
-        <p className="text-sm text-stone-700">Schema-driven locale editing with token bindings diagnostics and marketer-first preview.</p>
-      </header>
+      <PageHeader
+        eyebrow="Catalog"
+        title="Reusable Assets"
+        description="Guided authoring for primitive and channel assets with locale editing, token diagnostics, and marketer-first preview."
+      />
 
       <CatalogActionBar
         status={editor.status}
@@ -494,9 +497,9 @@ export default function CatalogContentPage() {
         onDuplicate={duplicate}
       />
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Reusable assets unavailable" description={error} /> : null}
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
-      {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
+      {loading ? <LoadingState title="Loading reusable assets" /> : null}
 
       {!createMode && editor.key.trim() ? <ActivationAssetProfilePanel entityType="content" assetKey={editor.key.trim()} /> : null}
 
@@ -541,7 +544,7 @@ export default function CatalogContentPage() {
                 setLastValidationValid(null);
               }}
             >
-              New content block
+              New reusable asset
             </Button>
             {versionsForKey.length === 1 && versionsForKey[0]?.status === "ACTIVE" ? (
               <Button variant="outline" className="w-full" onClick={() => void createNewVersion()}>
@@ -573,7 +576,7 @@ export default function CatalogContentPage() {
                 <p className="text-xs text-stone-600">{statusLabel(item.status, item.version)}</p>
               </button>
             ))}
-            {filteredItems.length === 0 ? <p className="text-xs text-stone-600">No content blocks found.</p> : null}
+            {filteredItems.length === 0 ? <p className="text-xs text-stone-600">No reusable assets found.</p> : null}
           </div>
         </aside>
 
@@ -643,7 +646,7 @@ export default function CatalogContentPage() {
         missingTokens={localRendered.missingTokens}
       />
 
-      <section className="panel space-y-3 p-4">
+      <section className="panel space-y-3 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-semibold">Usage & Dependencies</h3>
@@ -682,7 +685,7 @@ export default function CatalogContentPage() {
         )}
       </section>
 
-      <section className="panel space-y-3 border-red-300 p-4">
+      <section className="panel space-y-3 border-red-300 p-3">
         <h3 className="font-semibold text-red-700">Danger zone</h3>
         <p className="text-sm text-stone-700">Archive key permanently hides all versions of this content key from active use.</p>
         {assetReport?.dependencies.archiveSafety?.warning ? <p className="text-sm font-medium text-red-700">{assetReport.dependencies.archiveSafety.warning}</p> : null}
@@ -717,7 +720,7 @@ export default function CatalogContentPage() {
       </section>
 
       {versionsForKey.length > 0 ? (
-        <section className="panel p-4">
+        <section className="panel p-3">
           <h3 className="font-semibold">Version history - {editor.key}</h3>
           <ul className="mt-2 space-y-1 text-sm text-stone-700">
             {versionsForKey.map((item) => (

@@ -80,6 +80,8 @@ For campaign forms that do not have a native `bundleKey` field, selecting a bund
 
 The library exposes a first-class `Create asset` flow backed by `/v1/catalog/library/create`. The flow is typed at the UI layer, but the created records stay inside the existing governed model.
 
+The type registry now lives in `@decisioning/shared` so API creation, API classification, UI menus, browse tabs, picker labels, and channel labels all read from the same product contract. Route helpers and editor-specific actions remain in the UI layer; governed object creation remains in the API layer.
+
 | User-facing type | Governed object created | Starter defaults |
 | --- | --- | --- |
 | Image | `ContentBlock` | `image_ref_v1`, image reference/source fields, description/tags, website/popup/email compatibility |

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -15,6 +14,15 @@ import { DependenciesPanel } from "../../../../../components/registry/Dependenci
 import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { ActivationAssetPicker } from "../../../../../components/catalog/ActivationAssetPicker";
 import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
+import { Button, ButtonLink } from "../../../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../../../components/ui/operational-table";
+import { PageHeader, PagePanel, inputClassName } from "../../../../../components/ui/page";
 import { apiClient, type ActivationAssetChannel, type ActivationLibraryItem } from "../../../../../lib/api";
 import { validateCampaignDependencies } from "../../../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
@@ -685,43 +693,30 @@ export default function InAppCampaignEditPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">In-App Campaign Editor</h2>
-            <p className="text-sm text-stone-700">
-              {isCreateMode
-                ? `Create a new campaign draft in ${environment}`
-                : `Campaign: ${campaign?.name ?? "-"} (${campaign?.key ?? "-"}) in ${environment}`}
-            </p>
-          </div>
-          <Link href="/engage/campaigns" className="rounded-md border border-stone-300 px-3 py-2 text-sm">
-            Back
-          </Link>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        title="In-App Campaign Editor"
+        description={
+          isCreateMode
+            ? `Create a new campaign draft in ${environment}`
+            : `Campaign: ${campaign?.name ?? "-"} (${campaign?.key ?? "-"}) in ${environment}`
+        }
+        actions={<ButtonLink href="/engage/campaigns" size="sm" variant="outline">Back</ButtonLink>}
+      />
 
-      <div className="panel flex flex-wrap items-center gap-2 p-3 text-sm">
-        <button
-          className={`rounded-md px-3 py-2 ${activeTab === "basic" ? "bg-ink text-white" : "border border-stone-300"}`}
-          onClick={() => setActiveTab("basic")}
-        >
+      <PagePanel density="compact" className="flex flex-wrap items-center gap-2 text-sm">
+        <Button size="xs" variant={activeTab === "basic" ? "default" : "outline"} onClick={() => setActiveTab("basic")}>
           Basic
-        </button>
-        <button
-          className={`rounded-md px-3 py-2 ${activeTab === "variants" ? "bg-ink text-white" : "border border-stone-300"}`}
-          onClick={() => setActiveTab("variants")}
-        >
+        </Button>
+        <Button size="xs" variant={activeTab === "variants" ? "default" : "outline"} onClick={() => setActiveTab("variants")}>
           Variants
-        </button>
-        <button
-          className={`rounded-md px-3 py-2 ${activeTab === "bindings" ? "bg-ink text-white" : "border border-stone-300"}`}
-          onClick={() => setActiveTab("bindings")}
-        >
+        </Button>
+        <Button size="xs" variant={activeTab === "bindings" ? "default" : "outline"} onClick={() => setActiveTab("bindings")}>
           Token Bindings
-        </button>
-        <button
-          className={`rounded-md px-3 py-2 ${activeTab === "governance" ? "bg-ink text-white" : "border border-stone-300"} ${isCreateMode ? "cursor-not-allowed opacity-50" : ""}`}
+        </Button>
+        <Button
+          size="xs"
+          variant={activeTab === "governance" ? "default" : "outline"}
           onClick={() => {
             if (!isCreateMode) {
               setActiveTab("governance");
@@ -730,7 +725,7 @@ export default function InAppCampaignEditPage() {
           disabled={isCreateMode}
         >
           Governance
-        </button>
+        </Button>
         <div className="ml-auto">
           <EditorActionBar
             statusLabel={status}
@@ -777,25 +772,25 @@ export default function InAppCampaignEditPage() {
             ]}
           />
         </div>
-      </div>
+      </PagePanel>
 
       {activeTab === "basic" ? (
         <>
-          <article className="panel grid gap-3 p-4 md:grid-cols-3">
+          <PagePanel density="compact" className="grid gap-3 md:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm">
             Key
-            <input value={key} onChange={(event) => setKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+            <input value={key} onChange={(event) => setKey(event.target.value)} className={inputClassName} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Name
-            <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+            <input value={name} onChange={(event) => setName(event.target.value)} className={inputClassName} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             Status
             <select
               value={status}
               onChange={(event) => setStatus(event.target.value as "DRAFT" | "PENDING_APPROVAL" | "ACTIVE" | "ARCHIVED")}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             >
               <option value="DRAFT">DRAFT</option>
               <option value="PENDING_APPROVAL">PENDING_APPROVAL</option>
@@ -970,13 +965,13 @@ export default function InAppCampaignEditPage() {
               className="min-h-24 rounded-md border border-stone-300 px-2 py-1"
             />
           </label>
-          </article>
+          </PagePanel>
           <DependenciesPanel items={dependencyItems} />
         </>
       ) : null}
 
       {activeTab === "variants" ? (
-        <article className="panel space-y-3 p-4">
+        <article className="panel space-y-3 p-3">
           {variants.map((variant, index) => (
             <div key={`${variant.variantKey}-${index}`} className="rounded-md border border-stone-200 p-3">
               <div className="mb-2 grid gap-2 md:grid-cols-2">
@@ -1060,7 +1055,7 @@ export default function InAppCampaignEditPage() {
       ) : null}
 
       {activeTab === "bindings" ? (
-        <article className="panel space-y-3 p-4">
+        <article className="panel space-y-3 p-3">
           {bindings.map((binding, index) => (
             <div key={`${binding.token}-${index}`} className="grid gap-2 md:grid-cols-2">
               <label className="flex flex-col gap-1 text-sm">
@@ -1192,7 +1187,7 @@ export default function InAppCampaignEditPage() {
       ) : null}
 
       {activeTab === "governance" ? (
-        <article className="panel space-y-4 p-4">
+        <article className="panel space-y-3 p-3">
           {isCreateMode ? <p className="text-sm text-stone-600">Save the campaign first to access governance, versions, and audit actions.</p> : null}
           <div className="grid gap-3 md:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm md:col-span-2">
@@ -1275,16 +1270,12 @@ export default function InAppCampaignEditPage() {
       ) : null}
 
       {activationPreview ? (
-        <article className={`panel space-y-3 p-4 ${activationPreview.warnings.length > 0 ? "border-amber-300 bg-amber-50" : ""}`}>
+        <PagePanel density="compact" className={`space-y-3 ${activationPreview.warnings.length > 0 ? "border-amber-300 bg-amber-50" : ""}`}>
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Activation Preview</h3>
-            <button
-              className="rounded-md border border-stone-300 px-2 py-1 text-xs"
-              onClick={() => void load()}
-              disabled={loading || saving}
-            >
+            <Button size="xs" variant="outline" onClick={() => void load()} disabled={loading || saving}>
               Refresh
-            </button>
+            </Button>
           </div>
 
           <p className="text-sm text-stone-700">
@@ -1302,30 +1293,30 @@ export default function InAppCampaignEditPage() {
           )}
 
           {activationPreview.conflicts.length > 0 ? (
-            <div className="overflow-auto rounded-md border border-stone-200">
-              <table className="w-full border-collapse text-sm">
-                <thead>
+            <OperationalTableShell>
+              <table className={operationalTableClassName}>
+                <thead className={operationalTableHeadClassName}>
                   <tr className="text-left text-stone-600">
-                    <th className="border-b border-stone-200 px-3 py-2">Campaign</th>
-                    <th className="border-b border-stone-200 px-3 py-2">Priority</th>
-                    <th className="border-b border-stone-200 px-3 py-2">Schedule Overlap</th>
-                    <th className="border-b border-stone-200 px-3 py-2">Activated</th>
+                    <th className={operationalTableHeaderCellClassName}>Campaign</th>
+                    <th className={operationalTableHeaderCellClassName}>Priority</th>
+                    <th className={operationalTableHeaderCellClassName}>Schedule Overlap</th>
+                    <th className={operationalTableHeaderCellClassName}>Activated</th>
                   </tr>
                 </thead>
                 <tbody>
                   {activationPreview.conflicts.map((conflict) => (
                     <tr key={conflict.id}>
-                      <td className="border-b border-stone-100 px-3 py-2">{conflict.key}</td>
-                      <td className="border-b border-stone-100 px-3 py-2">{conflict.priority}</td>
-                      <td className="border-b border-stone-100 px-3 py-2">{conflict.scheduleOverlaps ? "Yes" : "No"}</td>
-                      <td className="border-b border-stone-100 px-3 py-2">
+                      <td className={operationalTableCellClassName}>{conflict.key}</td>
+                      <td className={operationalTableCellClassName}>{conflict.priority}</td>
+                      <td className={operationalTableCellClassName}>{conflict.scheduleOverlaps ? "Yes" : "No"}</td>
+                      <td className={operationalTableCellClassName}>
                         {conflict.activatedAt ? new Date(conflict.activatedAt).toLocaleString() : "-"}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </OperationalTableShell>
           ) : null}
 
           {activationPreview.policyImpact ? (
@@ -1351,7 +1342,7 @@ export default function InAppCampaignEditPage() {
               ) : null}
             </div>
           ) : null}
-        </article>
+        </PagePanel>
       ) : null}
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}

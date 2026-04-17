@@ -1,9 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, DevLoginProfile, apiClient, setApiUserEmail, USER_EMAIL_STORAGE_KEY } from "../../lib/api";
 import { setEnvironment } from "../../lib/environment";
+import { InlineError } from "../../components/ui/app-state";
+import { Button, ButtonLink } from "../../components/ui/button";
+import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 
 const presets: Array<{ profile: DevLoginProfile; email: string; label: string; detail: string }> = [
   { profile: "viewer", email: "viewer.dev@decisioning.local", label: "Viewer", detail: "Read-only in all environments" },
@@ -63,22 +65,19 @@ export default function LoginPage() {
 
   return (
     <section className="mx-auto max-w-3xl space-y-4">
-      <header className="panel space-y-2 p-4">
-        <h2 className="text-xl font-semibold">Developer Login</h2>
-        <p className="text-sm text-stone-600">
-          Pick a preset role profile to test RBAC behavior quickly. This works in DEV environment only.
-        </p>
-        <p className="text-xs text-stone-500">
-          Active user: {activeEmail ?? "none"}{activeProfileLabel ? ` (${activeProfileLabel})` : ""}
-        </p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Developer Login"
+        description="Pick a preset role profile to test RBAC behavior quickly. This works in DEV environment only."
+        meta={`Active user: ${activeEmail ?? "none"}${activeProfileLabel ? ` (${activeProfileLabel})` : ""}`}
+      />
 
-      <article className="panel grid gap-2 p-4 md:grid-cols-2">
+      <PagePanel density="compact" className="grid gap-2 md:grid-cols-2">
         {presets.map((preset) => (
           <button
             key={preset.profile}
             type="button"
-            className="rounded border border-stone-300 px-3 py-3 text-left hover:bg-stone-50 disabled:opacity-60"
+            className="rounded-md border border-stone-300 px-3 py-2 text-left hover:bg-stone-50 disabled:opacity-60"
             onClick={() => void signIn(preset.email, preset.profile)}
             disabled={busy}
           >
@@ -87,19 +86,17 @@ export default function LoginPage() {
             <p className="mt-1 text-xs text-stone-600">{preset.email}</p>
           </button>
         ))}
-      </article>
+      </PagePanel>
 
-      <article className="panel space-y-3 p-4">
+      <PagePanel density="compact" className="space-y-3">
         <h3 className="font-medium">Custom Email</h3>
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            className="min-w-[260px] rounded border border-stone-300 px-3 py-2 text-sm"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="name@company.com"
-          />
+          <FieldLabel className="min-w-[260px]">
+            Email
+            <input className={inputClassName} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" />
+          </FieldLabel>
           <select
-            className="rounded border border-stone-300 px-3 py-2 text-sm"
+            className={`${inputClassName} w-auto`}
             value={profile}
             onChange={(event) => setProfile(event.target.value as DevLoginProfile)}
           >
@@ -109,17 +106,18 @@ export default function LoginPage() {
             <option value="operator">operator</option>
             <option value="admin">admin</option>
           </select>
-          <button
+          <Button
             type="button"
-            className="rounded bg-ink px-3 py-2 text-sm text-white disabled:opacity-60"
+            size="sm"
             onClick={() => void signIn(email, profile)}
             disabled={busy || !email.trim()}
           >
             Sign In
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="rounded border border-stone-300 px-3 py-2 text-sm"
+            size="sm"
+            variant="outline"
             onClick={() => {
               setApiUserEmail(null);
               window.location.reload();
@@ -127,13 +125,13 @@ export default function LoginPage() {
             disabled={busy}
           >
             Clear User
-          </button>
-          <Link className="rounded border border-stone-300 px-3 py-2 text-sm hover:bg-stone-100" href="/overview">
+          </Button>
+          <ButtonLink size="sm" variant="outline" href="/overview">
             Back to Overview
-          </Link>
+          </ButtonLink>
         </div>
-        {error ? <p className="text-sm text-red-700">{error}</p> : null}
-      </article>
+        {error ? <InlineError title="Login failed" description={error} /> : null}
+      </PagePanel>
     </section>
   );
 }

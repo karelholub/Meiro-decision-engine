@@ -18,6 +18,7 @@ export interface DecideRequestBody {
   decisionKey?: string;
   stackKey?: string;
   profileId?: string;
+  anonymousId?: string;
   lookup?: IdentityLookup;
   context?: Record<string, unknown>;
 }
@@ -26,6 +27,10 @@ export interface TrackingInfo {
   campaign_id: string;
   message_id: string;
   variant_id: string;
+  experiment_id?: string;
+  experiment_version?: number;
+  is_holdout?: boolean;
+  allocation_id?: string;
 }
 
 export interface DecideResponse {

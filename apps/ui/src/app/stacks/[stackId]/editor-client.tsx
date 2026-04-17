@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { DecisionStackDefinition } from "@decisioning/dsl";
 import type { DecisionStackDetailsResponse, DecisionStackValidationResponse, DecisionVersionSummary } from "@decisioning/shared";
 import PermissionDenied from "../../../components/permission-denied";
+import { Button } from "../../../components/ui/button";
 import { EditorActionBar } from "../../../components/ui/editor-action-bar";
+import { PagePanel, inputClassName } from "../../../components/ui/page";
 import { StatusBadge } from "../../../components/ui/status-badges";
 import { ApiError, apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
@@ -294,10 +296,10 @@ export default function StackEditorClient({
 
   return (
     <section className="space-y-4">
-      <header className="panel space-y-3 p-4">
+      <header className="panel space-y-3 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-xl font-semibold">{details.name}</h2>
+            <h2 className="text-lg font-semibold">{details.name}</h2>
             <p className="text-sm text-stone-700">
               key: {details.key} ({details.environment})
             </p>
@@ -338,28 +340,22 @@ export default function StackEditorClient({
         />
       </header>
 
-      <div className="panel flex flex-wrap gap-2 p-4 text-sm">
-        <button
-          className={`rounded-md border px-3 py-1 ${tab === "basic" ? "bg-ink text-white" : "border-stone-300"}`}
-          onClick={() => setTab("basic")}
-        >
+      <PagePanel density="compact" className="flex flex-wrap gap-2 text-sm">
+        <Button size="xs" variant={tab === "basic" ? "default" : "outline"} onClick={() => setTab("basic")}>
           Basic
-        </button>
-        <button
-          className={`rounded-md border px-3 py-1 ${tab === "advanced" ? "bg-ink text-white" : "border-stone-300"}`}
-          onClick={() => setTab("advanced")}
-        >
+        </Button>
+        <Button size="xs" variant={tab === "advanced" ? "default" : "outline"} onClick={() => setTab("advanced")}>
           JSON (Advanced)
-        </button>
-        <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => void ensureDraft()} disabled={!canWrite} title={!canWrite ? "Insufficient permission." : undefined}>
+        </Button>
+        <Button size="xs" variant="outline" onClick={() => void ensureDraft()} disabled={!canWrite} title={!canWrite ? "Insufficient permission." : undefined}>
           Create Draft From Active
-        </button>
-      </div>
+        </Button>
+      </PagePanel>
 
       {feedback ? <p className="text-sm text-stone-800">{feedback}</p> : null}
 
       {validation ? (
-        <section className="panel space-y-2 p-4 text-sm">
+        <PagePanel density="compact" className="space-y-2 text-sm">
           <h3 className="font-semibold">Validation</h3>
           <p>Valid: {validation.valid ? "yes" : "no"}</p>
           <p>Step count: {validation.metrics.stepCount}</p>
@@ -378,39 +374,39 @@ export default function StackEditorClient({
               ))}
             </ul>
           ) : null}
-        </section>
+        </PagePanel>
       ) : null}
 
       {tab === "basic" ? (
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="panel space-y-3 p-4">
+          <PagePanel density="compact" className="space-y-3">
             <h3 className="font-semibold">Basic</h3>
             <label className="flex flex-col gap-1 text-sm">
               Name
-              <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+              <input value={name} onChange={(event) => setName(event.target.value)} className={inputClassName} />
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Description
               <textarea
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
-                className="min-h-24 rounded-md border border-stone-300 px-2 py-1"
+                className={`${inputClassName} min-h-24`}
               />
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Max steps (hard cap 20)
-              <input type="number" min={1} max={20} value={maxSteps} onChange={(event) => setMaxSteps(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+              <input type="number" min={1} max={20} value={maxSteps} onChange={(event) => setMaxSteps(event.target.value)} className={inputClassName} />
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Max total ms
-              <input type="number" min={1} value={maxTotalMs} onChange={(event) => setMaxTotalMs(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
+              <input type="number" min={1} value={maxTotalMs} onChange={(event) => setMaxTotalMs(event.target.value)} className={inputClassName} />
             </label>
             <label className="flex flex-col gap-1 text-sm">
               Final output mode
               <select
                 value={finalOutputMode}
                 onChange={(event) => setFinalOutputMode(event.target.value as "FIRST_NON_NOOP" | "LAST_MATCH" | "EXPLICIT")}
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
               >
                 <option value="FIRST_NON_NOOP">FIRST_NON_NOOP</option>
                 <option value="LAST_MATCH">LAST_MATCH</option>
@@ -422,7 +418,7 @@ export default function StackEditorClient({
               <select
                 value={defaultActionType}
                 onChange={(event) => setDefaultActionType(event.target.value as "noop" | "personalize" | "message" | "suppress" | "experiment")}
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
               >
                 <option value="noop">noop</option>
                 <option value="personalize">personalize</option>
@@ -436,17 +432,17 @@ export default function StackEditorClient({
               <textarea
                 value={defaultPayload}
                 onChange={(event) => setDefaultPayload(event.target.value)}
-                className="min-h-28 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+                className={`${inputClassName} min-h-28 font-mono text-xs`}
               />
             </label>
-          </div>
+          </PagePanel>
 
-          <div className="panel space-y-3 p-4">
+          <PagePanel density="compact" className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Ordered steps</h3>
-              <button className="rounded-md border border-stone-300 px-2 py-1 text-sm" onClick={addStep}>
+              <Button size="xs" variant="outline" onClick={addStep}>
                 Add Step
-              </button>
+              </Button>
             </div>
             {steps.map((step, index) => (
               <div key={`${step.id}-${index}`} className="space-y-2 rounded-md border border-stone-200 p-3">
@@ -589,24 +585,24 @@ export default function StackEditorClient({
                 <option key={decision.versionId} value={decision.key} />
               ))}
             </datalist>
-          </div>
+          </PagePanel>
         </div>
       ) : (
-        <div className="panel space-y-3 p-4">
+        <PagePanel density="compact" className="space-y-3">
           <div className="flex gap-2">
-            <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" onClick={formatJson}>
+            <Button size="sm" variant="outline" onClick={formatJson}>
               Format JSON
-            </button>
-            <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" onClick={() => void validateDraft()}>
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void validateDraft()}>
               Validate Draft
-            </button>
+            </Button>
           </div>
           <textarea
             value={jsonDraft}
             onChange={(event) => setJsonDraft(event.target.value)}
             className="min-h-[32rem] w-full rounded-md border border-stone-300 px-3 py-2 font-mono text-sm"
           />
-        </div>
+        </PagePanel>
       )}
     </section>
   );

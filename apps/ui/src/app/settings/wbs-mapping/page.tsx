@@ -7,6 +7,7 @@ import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { Button } from "../../../components/ui/button";
 import { RedactedJsonViewer, summarizeMappingWarnings } from "../../../components/configure";
+import { PageHeader, PagePanel } from "../../../components/ui/page";
 
 interface MappingValidateResponse {
   valid: boolean;
@@ -326,30 +327,31 @@ export default function WbsMappingPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">WBS Mapping</h2>
-        <p className="text-sm text-stone-700">Map WBS returned_attributes into profile attributes, audiences, and consents ({environment}).</p>
-        {updatedAt ? <p className="text-xs text-stone-600">Last updated: {new Date(updatedAt).toLocaleString()}</p> : null}
-      </header>
+      <PageHeader
+        density="compact"
+        title="WBS Mapping"
+        description={`Map WBS returned_attributes into profile attributes, audiences, and consents (${environment}).`}
+        meta={updatedAt ? `Last updated: ${new Date(updatedAt).toLocaleString()}` : undefined}
+      />
 
-      <section className="panel space-y-2 p-4">
+      <PagePanel density="compact" className="space-y-2">
         <h3 className="font-semibold">Mapping health</h3>
         <p className="text-sm">Last tested: {lastTestedAt ? new Date(lastTestedAt).toLocaleString() : "Not available yet"}</p>
         <p className="text-sm">Missing fields: {warningSummary.missingFields} | Type mismatches: {warningSummary.typeIssues}</p>
         <Link className="text-sm underline" href="/overview">Open Observability for mapping</Link>
-      </section>
+      </PagePanel>
 
-      <div className="panel flex flex-wrap items-center gap-2 p-4 text-sm">
+      <PagePanel density="compact" className="flex flex-wrap items-center gap-2 text-sm">
         <button className={`rounded-md border px-3 py-1 ${tab === "mapping" ? "bg-ink text-white" : "border-stone-300"}`} onClick={() => setTab("mapping")}>Mapping Table</button>
         <button className={`rounded-md border px-3 py-1 ${tab === "advanced" ? "bg-ink text-white" : "border-stone-300"}`} onClick={() => setTab("advanced")}>Advanced JSON</button>
         <Button onClick={() => void save()}>Save</Button>
         <Button variant="outline" onClick={() => void validate()}>Validate</Button>
         <Button variant="outline" onClick={() => void testMapping()}>Test mapping</Button>
-      </div>
+      </PagePanel>
 
       {tab === "mapping" ? (
         <div className="space-y-4">
-          <div className="panel grid gap-3 p-4 md:grid-cols-2">
+          <div className="panel grid gap-3 p-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm">
               Mapping name
               <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
@@ -372,7 +374,7 @@ export default function WbsMappingPage() {
             ) : null}
           </div>
 
-          <div className="panel space-y-3 p-4">
+          <div className="panel space-y-3 p-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Attribute mappings</h3>
               <Button variant="outline" size="sm" onClick={() => setAttributeMappings((prev) => [...prev, createEmptyAttributeMapping()])}>Add row</Button>
@@ -406,7 +408,7 @@ export default function WbsMappingPage() {
             </div>
           </div>
 
-          <div className="panel space-y-3 p-4">
+          <div className="panel space-y-3 p-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Audience rules</h3>
               <Button variant="outline" size="sm" onClick={() => setAudienceRules((prev) => [...prev, createEmptyAudienceRule()])}>Add rule</Button>
@@ -463,7 +465,7 @@ export default function WbsMappingPage() {
             </div>
           </div>
 
-          <div className="panel space-y-3 p-4">
+          <div className="panel space-y-3 p-3">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={consentEnabled} onChange={(event) => setConsentEnabled(event.target.checked)} />
               Enable consent mapping
@@ -478,7 +480,7 @@ export default function WbsMappingPage() {
             <p className="text-xs text-stone-600">Consent preview: {consentPreview}</p>
           </div>
 
-          <div className="panel grid gap-3 p-4 md:grid-cols-3">
+          <div className="panel grid gap-3 p-3 md:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm">
               Test lookup attribute
               <input value={testLookupAttribute} onChange={(event) => setTestLookupAttribute(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
@@ -494,7 +496,7 @@ export default function WbsMappingPage() {
           </div>
         </div>
       ) : (
-        <div className="panel space-y-3 p-4">
+        <div className="panel space-y-3 p-3">
           <div className="flex gap-2">
             <Button variant="outline" onClick={formatJson}>Format JSON</Button>
             <Button variant="outline" onClick={() => void validate()}>Validate</Button>
@@ -506,7 +508,7 @@ export default function WbsMappingPage() {
       {feedback ? <p className="text-sm text-stone-800">{feedback}</p> : null}
 
       {lastTestRaw || lastTestProfile || lastTestSummary ? (
-        <section className="panel space-y-3 p-4">
+        <section className="panel space-y-3 p-3">
           <h3 className="font-semibold">Test Mapping Output</h3>
           <div className="grid gap-3 lg:grid-cols-3">
             <RedactedJsonViewer title="Raw WBS response" value={lastTestRaw} maxChars={2048} defaultOpen />
@@ -517,7 +519,7 @@ export default function WbsMappingPage() {
       ) : null}
 
       {validation ? (
-        <section className="panel space-y-2 p-4 text-sm">
+        <section className="panel space-y-2 p-3 text-sm">
           <h3 className="font-semibold">Validation</h3>
           <div>
             <h4 className="font-medium">Errors</h4>

@@ -11,6 +11,7 @@ import { DEFAULT_APP_ENUM_SETTINGS } from "../../../../lib/app-enum-settings";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 import { Button } from "../../../../components/ui/button";
 import { CollapsibleSection, RedactedJsonViewer, StatusChipsRow, buildTesterSkeletonFromRequirements, simpleHash } from "../../../../components/configure";
+import { PageHeader } from "../../../../components/ui/page";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 
@@ -238,10 +239,7 @@ export default function PipesIntegrationPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Pipes Integration</h2>
-        <p className="text-sm text-stone-700">Task flow: connect to verify requirements to run inline evaluate debug.</p>
-      </header>
+      <PageHeader density="compact" title="Pipes Integration" description="Task flow: connect to verify requirements to run inline evaluate debug." />
 
       <StatusChipsRow
         chips={[

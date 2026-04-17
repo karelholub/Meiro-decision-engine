@@ -10,6 +10,9 @@ import type {
   InAppPlacement
 } from "@decisioning/shared";
 import { parseLegacyKey } from "@decisioning/shared";
+import { InlineError } from "../../components/ui/app-state";
+import { Button } from "../../components/ui/button";
+import { FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 import { DependenciesPanel } from "../../components/registry/DependenciesPanel";
 import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
 import { useAppEnumSettings } from "../../lib/app-enum-settings";
@@ -645,20 +648,19 @@ export default function SimulatePage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Simulator</h2>
-        <p className="text-sm text-stone-700">
-          Decision simulation and in-app runtime preview in <strong>{environment}</strong>
-        </p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Simulator"
+        description={<>Decision simulation and in-app runtime preview in <strong>{environment}</strong>.</>}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
+      <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">
           Simulator mode
           <select
             value={simulatorType}
             onChange={(event) => setSimulatorType(event.target.value as "decision" | "inapp")}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           >
             <option value="decision">Decision</option>
             <option value="stack">Stack</option>
@@ -692,7 +694,7 @@ export default function SimulatePage() {
                       setDecisionKey(selected.key);
                     }
                   }}
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                 >
                   {decisions.map((item) => (
                     <option key={item.versionId} value={item.decisionId}>
@@ -707,7 +709,7 @@ export default function SimulatePage() {
                 <select
                   value={decisionKey}
                   onChange={(event) => setDecisionKey(event.target.value)}
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                 >
                   <option value="">Use selected Decision ID</option>
                   {activeDecisionKeys.map((key) => (
@@ -866,7 +868,7 @@ export default function SimulatePage() {
                 <input
                   value={stackProfileId}
                   onChange={(event) => setStackProfileId(event.target.value)}
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                 />
               </label>
             ) : (
@@ -969,7 +971,7 @@ export default function SimulatePage() {
                 <input
                   value={inAppProfileId}
                   onChange={(event) => setInAppProfileId(event.target.value)}
-                  className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                 />
               </label>
             ) : (
@@ -988,7 +990,7 @@ export default function SimulatePage() {
                       }
                       setInAppLookupAttribute(next);
                     }}
-                    className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                   >
                     {enumSettings.lookupAttributes.map((attribute) => (
                       <option key={attribute} value={attribute}>
@@ -1001,7 +1003,7 @@ export default function SimulatePage() {
                     <input
                       value={inAppLookupAttribute}
                       onChange={(event) => setInAppLookupAttribute(event.target.value)}
-                      className="rounded-md border border-stone-300 px-2 py-1"
+                  className={inputClassName}
                       placeholder="custom attribute key"
                     />
                   ) : null}
@@ -1018,10 +1020,10 @@ export default function SimulatePage() {
             )}
           </>
         )}
-      </div>
+      </FilterPanel>
 
       {simulatorType === "decision" && executionMode === "simulate" && profileInputMode === "json" ? (
-        <div className="panel p-4">
+        <PagePanel density="compact">
           <label className="flex flex-col gap-1 text-sm">
             Profile JSON
             <textarea
@@ -1030,22 +1032,22 @@ export default function SimulatePage() {
               className="min-h-56 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
             />
           </label>
-        </div>
+        </PagePanel>
       ) : null}
 
       <div className="flex items-center gap-3">
-        <button className="rounded-md bg-ink px-4 py-2 text-sm text-white" onClick={() => void run()} disabled={loading}>
+        <Button size="sm" onClick={() => void run()} disabled={loading}>
           {loading ? "Running..." : "Run"}
-        </button>
+        </Button>
         <p className="text-xs text-stone-600">Runs are deterministic for identical inputs.</p>
       </div>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Simulation failed" description={error} /> : null}
       {saveProfileNotice ? <p className="text-sm text-emerald-700">{saveProfileNotice}</p> : null}
 
       {simulatorType === "decision" ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          <article className="panel space-y-2 p-4 text-sm">
+          <PagePanel density="compact" className="space-y-2 text-sm">
             <h3 className="font-semibold">Current run</h3>
             {!decisionResult ? <p className="text-stone-600">No run yet.</p> : null}
             {decisionResult ? (
@@ -1119,9 +1121,9 @@ export default function SimulatePage() {
                 ) : null}
               </>
             ) : null}
-          </article>
+          </PagePanel>
 
-          <article className="panel space-y-2 p-4 text-sm">
+          <PagePanel density="compact" className="space-y-2 text-sm">
             <h3 className="font-semibold">Previous run (compare)</h3>
             {!previousDecisionResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
             {previousDecisionResult ? (
@@ -1156,11 +1158,11 @@ export default function SimulatePage() {
                 <p>Removed: {reasonDiff.removed.length ? reasonDiff.removed.join(", ") : "none"}</p>
               </div>
             ) : null}
-          </article>
+          </PagePanel>
         </div>
       ) : simulatorType === "stack" ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          <article className="panel space-y-2 p-4 text-sm">
+          <PagePanel density="compact" className="space-y-2 text-sm">
             <h3 className="font-semibold">Current Stack response</h3>
             {!stackResult ? <p className="text-stone-600">No run yet.</p> : null}
             {stackResult ? (
@@ -1199,9 +1201,9 @@ export default function SimulatePage() {
                 </div>
                 <DependenciesPanel items={stackDependencyItems} title="Dependencies" />
                 <div className="flex items-center gap-2">
-                  <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(stackResult)}>
+                  <Button size="xs" variant="outline" onClick={() => void copyJson(stackResult)}>
                     Copy JSON
-                  </button>
+                  </Button>
                 </div>
                 <details open>
                   <summary className="cursor-pointer font-medium">Step trace</summary>
@@ -1224,9 +1226,9 @@ export default function SimulatePage() {
                 <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{pretty(stackResult)}</pre>
               </>
             ) : null}
-          </article>
+          </PagePanel>
 
-          <article className="panel space-y-2 p-4 text-sm">
+          <PagePanel density="compact" className="space-y-2 text-sm">
             <h3 className="font-semibold">Previous Stack response</h3>
             {!previousStackResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
             {previousStackResult ? (
@@ -1242,11 +1244,11 @@ export default function SimulatePage() {
                 </pre>
               </>
             ) : null}
-          </article>
+          </PagePanel>
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
-          <article className="panel space-y-2 p-4 text-sm">
+          <PagePanel density="compact" className="space-y-2 text-sm">
             <h3 className="font-semibold">Current In-App response</h3>
             {!inAppResult ? <p className="text-stone-600">No run yet.</p> : null}
             {inAppResult ? (
@@ -1288,16 +1290,16 @@ export default function SimulatePage() {
                 </div>
                 <DependenciesPanel items={inAppDependencyItems} title="Dependencies" />
                 <div className="flex items-center gap-2">
-                  <button className="rounded border border-stone-300 px-2 py-1 text-xs" onClick={() => void copyJson(inAppResult)}>
+                  <Button size="xs" variant="outline" onClick={() => void copyJson(inAppResult)}>
                     Copy JSON
-                  </button>
+                  </Button>
                 </div>
                 <pre className="overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">{pretty(inAppResult)}</pre>
               </>
             ) : null}
-          </article>
+          </PagePanel>
 
-          <article className="panel space-y-2 p-4 text-sm">
+          <PagePanel density="compact" className="space-y-2 text-sm">
             <h3 className="font-semibold">Previous In-App response</h3>
             {!previousInAppResult ? <p className="text-stone-600">Run once to capture a baseline.</p> : null}
             {previousInAppResult ? (
@@ -1322,7 +1324,7 @@ export default function SimulatePage() {
                 </pre>
               </>
             ) : null}
-          </article>
+          </PagePanel>
         </div>
       )}
     </section>

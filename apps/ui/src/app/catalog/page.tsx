@@ -10,7 +10,18 @@ import {
 } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
 import { Button } from "../../components/ui/button";
-import { ActivationAssetCard, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, ChannelBadges, assetHref } from "../../components/catalog/ActivationAssetCard";
+import { MetricCard } from "../../components/ui/card";
+import { EmptyState, InlineError, LoadingState } from "../../components/ui/app-state";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../components/ui/page";
+import { ActivationAssetCard, ActivationAssetPreview, ActivationAssetUsageSummary, AssetBadge, AssetSignalBadges, ChannelBadges, assetHref } from "../../components/catalog/ActivationAssetCard";
+import { AssetActions } from "../../components/catalog/AssetActions";
 import {
   activationAssetBrowseTabs,
   activationAssetCreationGroups,
@@ -34,7 +45,7 @@ const noResultsMessage = (input: {
   if (input.channel) return `No ${input.channel} assets match the current filters.`;
   if (input.readiness || input.health) return "No assets match the selected readiness or health filters.";
   if (input.query) return `No assets matched "${input.query}". Search by name, key, type, channel, template, or placement.`;
-  return "No activation assets are available yet. Create an offer, content block, or bundle to start the library.";
+  return "No activation assets are available yet. Create an asset, offer, or bundle to start the library.";
 };
 
 export default function CatalogLibraryPage() {
@@ -63,6 +74,14 @@ export default function CatalogLibraryPage() {
   useEffect(() => {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") === "asset") {
+      openCreate("website_banner");
+    }
   }, []);
 
   const activeTab = activationAssetBrowseTabs.find((tab) => tab.id === browseTab) ?? activationAssetBrowseTabs[0]!;
@@ -146,53 +165,34 @@ export default function CatalogLibraryPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-stone-500">Catalog</p>
-            <h2 className="text-2xl font-semibold">Activation Asset Library</h2>
-            <p className="max-w-3xl text-sm text-stone-700">
-              Browse reusable activation assets for website personalization, popup banners, email, push, WhatsApp, and journeys in {environment}.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={() => openCreate()}>Create asset</Button>
-            <Button variant="outline" onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        eyebrow="Governed Activation"
+        title="Activation Asset Library"
+        description={`Browse reusable assets for website personalization, popup banners, email, push, WhatsApp, and journeys in ${environment}.`}
+        actions={
+          <>
+            <Button size="sm" onClick={() => openCreate()}>Create asset</Button>
+            <Button size="sm" variant="outline" onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
+          </>
+        }
+      />
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Activation asset library unavailable" description={error} /> : null}
 
       <section className="grid gap-3 md:grid-cols-4">
-        <button className="panel p-3 text-left" onClick={() => setBrowseTab("images")}>
-          <p className="text-xs uppercase tracking-wide text-stone-500">Primitive assets</p>
-          <p className="text-2xl font-semibold">{counts.primitive}</p>
-          <p className="text-xs text-stone-600">Reusable images, copy, CTAs, offers</p>
-        </button>
-        <button className="panel p-3 text-left" onClick={() => setBrowseTab("channel")}>
-          <p className="text-xs uppercase tracking-wide text-stone-500">Channel assets</p>
-          <p className="text-2xl font-semibold">{counts.channel}</p>
-          <p className="text-xs text-stone-600">Ready for templates, placements, messages</p>
-        </button>
-        <button className="panel p-3 text-left" onClick={() => setBrowseTab("bundles")}>
-          <p className="text-xs uppercase tracking-wide text-stone-500">Bundles</p>
-          <p className="text-2xl font-semibold">{counts.composite}</p>
-          <p className="text-xs text-stone-600">Reusable offer + content packages</p>
-        </button>
-        <button className="panel p-3 text-left" onClick={() => setHealth("critical")}>
-          <p className="text-xs uppercase tracking-wide text-stone-500">Needs attention</p>
-          <p className="text-2xl font-semibold">{counts.attention}</p>
-          <p className="text-xs text-stone-600">Blocked readiness, missing parts, critical health</p>
-        </button>
+        <MetricCard label="Primitive assets" value={counts.primitive} description="Images, copy, and CTAs" onClick={() => setBrowseTab("images")} />
+        <MetricCard label="Channel assets" value={counts.channel} description="Templates, placements, messages" onClick={() => setBrowseTab("channel")} />
+        <MetricCard label="Bundles" value={counts.composite} description="Offer + content packages" onClick={() => setBrowseTab("bundles")} />
+        <MetricCard label="Needs attention" value={counts.attention} description="Blocked readiness or health" onClick={() => setHealth("critical")} />
       </section>
 
-      <section className="panel space-y-4 p-4">
+      <FilterPanel density="compact">
         <div className="flex gap-2 overflow-x-auto pb-1">
           {activationAssetBrowseTabs.map((tab) => (
             <button
               key={tab.id}
-              className={`shrink-0 rounded-md border px-3 py-2 text-sm ${browseTab === tab.id ? "border-ink bg-ink text-white" : "border-stone-300 bg-white"}`}
+              className={`shrink-0 rounded-md border px-3 py-1 text-sm ${browseTab === tab.id ? "border-ink bg-ink text-white" : "border-stone-300 bg-white"}`}
               onClick={() => {
                 setBrowseTab(tab.id);
                 setAssetType("");
@@ -204,29 +204,29 @@ export default function CatalogLibraryPage() {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-stone-600">{activeTab.description}</p>
-          <Button variant="outline" onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
+          <Button size="sm" variant="outline" onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-7">
-          <label className="text-sm md:col-span-2">
+        <div className="grid gap-x-2 gap-y-2 md:grid-cols-7">
+          <FieldLabel className="md:col-span-2">
             Find activation assets
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name, key, type, channel, template, or placement" />
-          </label>
-          <label className="text-sm">
+            <input className={inputClassName} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name, key, type, channel, template, or placement" />
+          </FieldLabel>
+          <FieldLabel>
             Type
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={assetType} onChange={(event) => setAssetType(event.target.value as "" | ActivationAssetType)}>
+            <select className={inputClassName} value={assetType} onChange={(event) => setAssetType(event.target.value as "" | ActivationAssetType)}>
               {activationAssetTypeFilterOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Works in
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={channel} onChange={(event) => setChannel(event.target.value as "" | ActivationAssetChannel)}>
+            <select className={inputClassName} value={channel} onChange={(event) => setChannel(event.target.value as "" | ActivationAssetChannel)}>
               {activationChannelFilterOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Status
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={status} onChange={(event) => setStatus(event.target.value)}>
+            <select className={inputClassName} value={status} onChange={(event) => setStatus(event.target.value)}>
               <option value="">Any</option>
               <option value="ACTIVE">ACTIVE</option>
               <option value="DRAFT">DRAFT</option>
@@ -234,55 +234,56 @@ export default function CatalogLibraryPage() {
               <option value="PAUSED">PAUSED</option>
               <option value="ARCHIVED">ARCHIVED</option>
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Readiness
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={readiness} onChange={(event) => setReadiness(event.target.value)}>
+            <select className={inputClassName} value={readiness} onChange={(event) => setReadiness(event.target.value)}>
               <option value="">Any</option>
               <option value="ready">Ready to use</option>
               <option value="ready_with_warnings">Ready with warnings</option>
               <option value="blocked">Needs fix</option>
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Health
-            <select className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={health} onChange={(event) => setHealth(event.target.value)}>
+            <select className={inputClassName} value={health} onChange={(event) => setHealth(event.target.value)}>
               <option value="">Any</option>
               <option value="healthy">Healthy</option>
               <option value="warning">Warning</option>
               <option value="critical">Critical</option>
             </select>
-          </label>
-          <label className="text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Template
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={templateKey} onChange={(event) => setTemplateKey(event.target.value)} placeholder="template key" />
-          </label>
-          <label className="text-sm">
+            <input className={inputClassName} value={templateKey} onChange={(event) => setTemplateKey(event.target.value)} placeholder="template key" />
+          </FieldLabel>
+          <FieldLabel>
             Placement
-            <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={placementKey} onChange={(event) => setPlacementKey(event.target.value)} placeholder="placement key" />
-          </label>
+            <input className={inputClassName} value={placementKey} onChange={(event) => setPlacementKey(event.target.value)} placeholder="placement key" />
+          </FieldLabel>
         </div>
         <div className="flex items-center justify-between gap-2 text-sm text-stone-600">
           <span>{loading ? "Loading activation assets..." : `${visibleItems.length} assets ready to browse`}</span>
           <div className="flex gap-2">
-            <Button variant={view === "grid" ? "default" : "outline"} onClick={() => setView("grid")}>Visual cards</Button>
-            <Button variant={view === "table" ? "default" : "outline"} onClick={() => setView("table")}>Dense list</Button>
-            <Button variant="outline" onClick={() => void load()}>Refresh</Button>
+            <Button size="sm" variant={view === "grid" ? "default" : "outline"} onClick={() => setView("grid")}>Visual cards</Button>
+            <Button size="sm" variant={view === "table" ? "default" : "outline"} onClick={() => setView("table")}>Dense list</Button>
+            <Button size="sm" variant="outline" onClick={() => void load()}>Refresh</Button>
           </div>
         </div>
-      </section>
+      </FilterPanel>
 
       {loading && visibleItems.length === 0 ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {[0, 1, 2].map((item) => <div key={item} className="panel h-72 animate-pulse bg-stone-100" />)}
+          {[0, 1, 2].map((item) => <LoadingState key={item} title="Loading activation assets" />)}
         </section>
       ) : null}
 
       {!loading && visibleItems.length === 0 ? (
-        <section className="panel p-6 text-center">
-          <h3 className="text-lg font-semibold">No matching assets</h3>
-          <p className="mx-auto mt-2 max-w-2xl text-sm text-stone-600">{noResultsMessage({ query, channel, templateKey, placementKey, readiness, health })}</p>
-          <div className="mt-4 flex justify-center gap-2">
+        <EmptyState
+          title="No matching assets"
+          description={noResultsMessage({ query, channel, templateKey, placementKey, readiness, health })}
+          actions={
+            <>
             <Button onClick={() => openCreate(tabCreateType)}>Create {tabCreateLabel}</Button>
             <Button variant="outline" onClick={() => {
               setQuery("");
@@ -297,8 +298,9 @@ export default function CatalogLibraryPage() {
             }}>
               Clear filters
             </Button>
-          </div>
-        </section>
+            </>
+          }
+        />
       ) : null}
 
       {createOpen ? (
@@ -378,9 +380,9 @@ export default function CatalogLibraryPage() {
                   />
                 </label>
                 <div className="rounded-md border border-stone-200 bg-white p-3 text-sm text-stone-700">
-                  {activeCreateOption.assetType === "offer" ? "Creates an Offer draft and opens the Offer editor." : null}
-                  {activeCreateOption.assetType === "bundle" ? "Creates a Bundle draft and opens the Bundle editor." : null}
-                  {activeCreateOption.assetType !== "offer" && activeCreateOption.assetType !== "bundle" ? "Creates a typed Content Block draft and opens the Content Block editor." : null}
+                  {activeCreateOption.assetType === "offer" ? "Creates an offer draft and opens the governed offer editor." : null}
+                  {activeCreateOption.assetType === "bundle" ? "Creates a bundle draft and opens the bundle editor." : null}
+                  {activeCreateOption.assetType !== "offer" && activeCreateOption.assetType !== "bundle" ? "Creates a typed asset draft and opens the guided asset editor." : null}
                 </div>
                 {createError ? <p className="text-sm text-red-700">{createError}</p> : null}
                 <Button className="w-full" onClick={() => void createAsset()} disabled={creating}>
@@ -399,50 +401,49 @@ export default function CatalogLibraryPage() {
       ) : null}
 
       {view === "table" && visibleItems.length > 0 ? (
-        <section className="panel overflow-x-auto p-4">
-          <table className="min-w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-stone-200 text-xs uppercase tracking-wide text-stone-500">
-                <th className="py-2 pr-3">Asset</th>
-                <th className="py-2 pr-3">Preview</th>
-                <th className="py-2 pr-3">Type</th>
-                <th className="py-2 pr-3">Works in</th>
-                <th className="py-2 pr-3">Compatibility</th>
-                <th className="py-2 pr-3">Readiness</th>
-                <th className="py-2 pr-3">Used</th>
-                <th className="py-2 pr-3">Updated</th>
+        <OperationalTableShell tableMinWidth="1120px">
+          <table className={`${operationalTableClassName} text-left`}>
+            <thead className={operationalTableHeadClassName}>
+              <tr>
+                <th className={operationalTableHeaderCellClassName}>Asset</th>
+                <th className={operationalTableHeaderCellClassName}>Preview</th>
+                <th className={operationalTableHeaderCellClassName}>Type</th>
+                <th className={operationalTableHeaderCellClassName}>Works in</th>
+                <th className={operationalTableHeaderCellClassName}>Compatibility</th>
+                <th className={operationalTableHeaderCellClassName}>Readiness</th>
+                <th className={operationalTableHeaderCellClassName}>Used</th>
+                <th className={operationalTableHeaderCellClassName}>Updated</th>
+                <th className={operationalTableHeaderCellClassName}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {visibleItems.map((item) => (
-                <tr key={item.id} className="border-b border-stone-100 align-top">
-                  <td className="py-3 pr-3">
+                <tr key={item.id}>
+                  <td className={operationalTableCellClassName}>
                     <Link className="font-medium underline decoration-stone-300" href={assetHref(item)}>{item.name}</Link>
                     <p className="text-xs text-stone-500">{item.key}</p>
                     <ActivationAssetUsageSummary item={item} compact />
                   </td>
-                  <td className="w-52 py-3 pr-3">
+                  <td className={`${operationalTableCellClassName} w-52`}>
                     <ActivationAssetPreview item={item} compact />
                   </td>
-                  <td className="py-3 pr-3"><AssetBadge value={item.category}>{item.assetTypeLabel}</AssetBadge></td>
-                  <td className="py-3 pr-3"><ChannelBadges channels={item.compatibility.channels} /></td>
-                  <td className="py-3 pr-3 text-xs text-stone-600">
+                  <td className={operationalTableCellClassName}><AssetBadge value={item.category}>{item.assetTypeLabel}</AssetBadge></td>
+                  <td className={operationalTableCellClassName}><ChannelBadges channels={item.compatibility.channels} /></td>
+                  <td className={`${operationalTableCellClassName} text-xs text-stone-600`}>
                     <p>Templates: {item.compatibility.templateKeys.join(", ") || "Any"}</p>
                     <p>Placements: {item.compatibility.placementKeys.join(", ") || "Any"}</p>
                   </td>
-                  <td className="py-3 pr-3">
-                    <div className="flex flex-wrap gap-1">
-                      {item.readiness ? <AssetBadge value={item.readiness.status}>{item.readiness.status}</AssetBadge> : null}
-                      {item.health ? <AssetBadge value={item.health}>{item.health}</AssetBadge> : null}
-                    </div>
+                  <td className={operationalTableCellClassName}>
+                    <AssetSignalBadges item={item} compact />
                   </td>
-                  <td className="py-3 pr-3 text-xs text-stone-700">{item.usedInCount === 0 ? "No active usage" : `${item.usedInCount} place${item.usedInCount === 1 ? "" : "s"}`}</td>
-                  <td className="py-3 pr-3">{new Date(item.updatedAt).toLocaleDateString()}</td>
+                  <td className={`${operationalTableCellClassName} text-xs text-stone-700`}>{item.usedInCount === 0 ? "No active usage" : `${item.usedInCount} place${item.usedInCount === 1 ? "" : "s"}`}</td>
+                  <td className={operationalTableCellClassName}>{new Date(item.updatedAt).toLocaleDateString()}</td>
+                  <td className={operationalTableCellClassName}><AssetActions item={item} compact /></td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </section>
+        </OperationalTableShell>
       ) : null}
     </section>
   );

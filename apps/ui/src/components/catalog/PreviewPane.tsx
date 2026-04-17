@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "../ui/button";
+import { PagePanel, inputClassName } from "../ui/page";
 
 type PreviewPaneProps = {
   localeOptions: string[];
@@ -30,12 +31,12 @@ export function PreviewPane({
   missingTokens
 }: PreviewPaneProps) {
   return (
-    <section className="panel grid gap-4 p-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+    <PagePanel density="compact" className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
       <div className="space-y-3">
         <h3 className="font-semibold">Preview inputs</h3>
         <label className="flex flex-col gap-1 text-sm">
           Locale
-          <select value={previewLocale} onChange={(event) => onPreviewLocaleChange(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1">
+          <select value={previewLocale} onChange={(event) => onPreviewLocaleChange(event.target.value)} className={inputClassName}>
             {localeOptions.map((locale) => (
               <option key={locale} value={locale}>
                 {locale}
@@ -48,7 +49,7 @@ export function PreviewPane({
           <input
             value={testProfileId}
             onChange={(event) => onTestProfileIdChange(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
@@ -56,7 +57,7 @@ export function PreviewPane({
           <textarea
             value={contextJsonText}
             onChange={(event) => onContextJsonChange(event.target.value)}
-            className="min-h-32 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+            className={`${inputClassName} min-h-32 font-mono text-xs`}
           />
         </label>
         <Button variant="outline" onClick={onRunPreview}>
@@ -66,9 +67,9 @@ export function PreviewPane({
 
       <div className="space-y-3">
         <h3 className="font-semibold">Visual preview</h3>
-        <article className="rounded-xl border border-stone-200 bg-gradient-to-r from-sky-50 via-white to-emerald-50 p-4">
+        <article className="rounded-md border border-stone-200 bg-gradient-to-r from-sky-50 via-white to-emerald-50 p-3">
           <p className="text-sm text-stone-600">banner_v1</p>
-          <h4 className="mt-2 text-xl font-semibold">{String(visualPayload?.title ?? "Title")}</h4>
+          <h4 className="mt-1.5 text-lg font-semibold">{String(visualPayload?.title ?? "Title")}</h4>
           <p className="mt-1 text-sm text-stone-700">{String(visualPayload?.subtitle ?? "Subtitle")}</p>
           <div className="mt-3 flex items-center justify-between gap-3">
             <button className="rounded-md bg-ink px-3 py-2 text-sm text-white">{String(visualPayload?.cta ?? "Open")}</button>
@@ -86,6 +87,6 @@ export function PreviewPane({
           </pre>
         </details>
       </div>
-    </section>
+    </PagePanel>
   );
 }

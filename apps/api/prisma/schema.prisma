@@ -91,15 +91,17 @@ enum DlqStatus {
 }
 
 model Decision {
-  id          String            @id @default(uuid())
-  environment Environment       @default(DEV)
+  id          String                      @id @default(uuid())
+  environment Environment                 @default(DEV)
   key         String
   name        String
-  description String            @default("")
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  description String                      @default("")
+  createdAt   DateTime                    @default(now())
+  updatedAt   DateTime                    @updatedAt
   versions    DecisionVersion[]
   logs        DecisionLog[]
+  evidence    DecisionAuthoringEvidence[]
+  scenarios   DecisionScenarioTest[]
 
   @@unique([environment, key])
 }
@@ -188,6 +190,50 @@ model DecisionLog {
   @@index([decisionId, outcome, timestamp])
   @@index([timestamp])
   @@index([requestId])
+}
+
+model DecisionAuthoringEvidence {
+  id              String      @id @default(uuid())
+  decisionId      String
+  environment     Environment @default(DEV)
+  version         Int?
+  evidenceType    String
+  status          String
+  summary         String      @default("")
+  payloadJson     Json
+  createdByUserId String?
+  createdByEmail  String?
+  createdAt       DateTime    @default(now())
+  decision        Decision    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([decisionId, createdAt])
+  @@index([environment, status, createdAt])
+  @@map("decision_authoring_evidence")
+}
+
+model DecisionScenarioTest {
+  id              String      @id @default(uuid())
+  decisionId      String
+  environment     Environment @default(DEV)
+  version         Int?
+  name            String
+  required        Boolean     @default(true)
+  enabled         Boolean     @default(true)
+  profileJson     Json
+  expectedJson    Json
+  lastStatus      String      @default("pending")
+  lastDetail      String?
+  lastResultJson  Json?
+  lastRunAt       DateTime?
+  createdByUserId String?
+  createdByEmail  String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  decision        Decision    @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([decisionId, enabled, updatedAt])
+  @@index([environment, lastStatus, updatedAt])
+  @@map("decision_scenario_tests")
 }
 
 model Conversion {
@@ -689,6 +735,43 @@ model InAppAuditLog {
   @@index([environment, userId, createdAt])
   @@index([action, createdAt])
   @@map("inapp_audit_logs")
+}
+
+model CampaignCalendarSavedView {
+  id          String      @id @default(uuid())
+  environment Environment @default(DEV)
+  userId      String
+  name        String
+  view        String
+  swimlane    String
+  filtersJson Json
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([environment, userId, name])
+  @@index([environment, userId, updatedAt])
+  @@map("campaign_calendar_saved_views")
+}
+
+model CampaignCalendarReviewPack {
+  id              String      @id @default(uuid())
+  environment     Environment @default(DEV)
+  name            String
+  createdByUserId String
+  view            String
+  swimlane        String
+  from            DateTime
+  to              DateTime
+  filtersJson     Json
+  summaryJson     Json
+  snapshotJson    Json
+  campaignIdsJson Json
+  createdAt       DateTime    @default(now())
+
+  @@index([environment, createdAt])
+  @@index([environment, createdByUserId, createdAt])
+  @@index([environment, from, to])
+  @@map("campaign_calendar_review_packs")
 }
 
 model PrecomputeRun {

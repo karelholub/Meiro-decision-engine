@@ -8,6 +8,10 @@ node_modules
 **/coverage
 **/.turbo
 **/.cache
+**/*.tsbuildinfo
+**/test-results
+**/playwright-report
+**/.pytest_cache
 **/.DS_Store
 .env
 .env.local

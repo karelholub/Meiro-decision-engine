@@ -2,6 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { Button } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 
@@ -152,143 +161,145 @@ export default function PrecomputeRunsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Precompute Runs</h2>
-        <p className="text-sm text-stone-700">Batch decision result generation for high-volume activations. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Precompute Runs"
+        description={`Batch decision result generation for high-volume activations. Environment: ${environment}.`}
+      />
 
-      <div className="panel grid gap-3 p-4 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
+      <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
+        <FieldLabel className="flex flex-col gap-1">
           Mode
-          <select value={mode} onChange={(event) => setMode(event.target.value as "decision" | "stack")} className="rounded-md border border-stone-300 px-2 py-1">
+          <select value={mode} onChange={(event) => setMode(event.target.value as "decision" | "stack")} className={inputClassName}>
             <option value="decision">decision</option>
             <option value="stack">stack</option>
           </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1">
           Key (decisionKey or stackKey)
-          <input value={key} onChange={(event) => setKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <input value={key} onChange={(event) => setKey(event.target.value)} className={inputClassName} />
+        </FieldLabel>
+        <FieldLabel className="flex flex-col gap-1 md:col-span-2">
           Run Key (optional)
           <input
             value={runKey}
             onChange={(event) => setRunKey(event.target.value)}
             placeholder={suggestedRunKey}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
+        </FieldLabel>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <FieldLabel className="flex flex-col gap-1">
           Cohort Type
           <select
             value={cohortType}
             onChange={(event) => setCohortType(event.target.value as "profiles" | "lookups" | "segment")}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           >
             <option value="profiles">profiles</option>
             <option value="lookups">lookups</option>
             <option value="segment">segment</option>
           </select>
-        </label>
+        </FieldLabel>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <FieldLabel className="flex flex-col gap-1">
           TTL default (seconds)
           <input
             type="number"
             min={1}
             value={ttlSecondsDefault}
             onChange={(event) => setTtlSecondsDefault(event.target.value)}
-            className="rounded-md border border-stone-300 px-2 py-1"
+            className={inputClassName}
           />
-        </label>
+        </FieldLabel>
 
         {cohortType === "profiles" ? (
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <FieldLabel className="flex flex-col gap-1 md:col-span-2">
             Profiles (newline/comma separated)
             <textarea className="h-28 rounded-md border border-stone-300 px-2 py-1" value={profilesText} onChange={(event) => setProfilesText(event.target.value)} />
-          </label>
+          </FieldLabel>
         ) : null}
 
         {cohortType === "lookups" ? (
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <FieldLabel className="flex flex-col gap-1 md:col-span-2">
             Lookups (`attribute:value` per line)
             <textarea className="h-28 rounded-md border border-stone-300 px-2 py-1" value={lookupsText} onChange={(event) => setLookupsText(event.target.value)} />
-          </label>
+          </FieldLabel>
         ) : null}
 
         {cohortType === "segment" ? (
           <>
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel className="flex flex-col gap-1">
               Segment attribute
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={segmentAttribute} onChange={(event) => setSegmentAttribute(event.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+              <input className={inputClassName} value={segmentAttribute} onChange={(event) => setSegmentAttribute(event.target.value)} />
+            </FieldLabel>
+            <FieldLabel className="flex flex-col gap-1">
               Segment value
-              <input className="rounded-md border border-stone-300 px-2 py-1" value={segmentValue} onChange={(event) => setSegmentValue(event.target.value)} />
-            </label>
+              <input className={inputClassName} value={segmentValue} onChange={(event) => setSegmentValue(event.target.value)} />
+            </FieldLabel>
           </>
         ) : null}
 
-        <label className="flex flex-col gap-1 text-sm md:col-span-2">
+        <FieldLabel className="flex flex-col gap-1 md:col-span-2">
           Context JSON
           <textarea className="h-24 rounded-md border border-stone-300 px-2 py-1" value={contextText} onChange={(event) => setContextText(event.target.value)} />
-        </label>
+        </FieldLabel>
 
         <label className="flex items-center gap-2 text-sm md:col-span-2">
           <input type="checkbox" checked={overwrite} onChange={(event) => setOverwrite(event.target.checked)} />
           Overwrite existing non-expired results
         </label>
-      </div>
+      </PagePanel>
 
       <div className="flex gap-2">
-        <button className="rounded-md bg-ink px-4 py-2 text-sm text-white disabled:opacity-60" onClick={() => void createRun()} disabled={creatingRun}>
+        <Button size="sm" onClick={() => void createRun()} disabled={creatingRun}>
           Create Run
-        </button>
-        <button
-          className="rounded-md border border-stone-300 px-4 py-2 text-sm disabled:opacity-60"
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
           onClick={() => void loadRuns(true)}
           disabled={loadingRuns}
         >
           Reload Runs
-        </button>
+        </Button>
       </div>
 
       {message ? <p className="text-sm text-stone-800">{message}</p> : null}
       {lastRefreshedAt ? <p className="text-xs text-stone-600">Last refreshed: {new Date(lastRefreshedAt).toLocaleString()}</p> : null}
 
-      <div className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Run Key</th>
-              <th className="border-b border-stone-200 px-3 py-2">Mode</th>
-              <th className="border-b border-stone-200 px-3 py-2">Target</th>
-              <th className="border-b border-stone-200 px-3 py-2">Status</th>
-              <th className="border-b border-stone-200 px-3 py-2">Progress</th>
-              <th className="border-b border-stone-200 px-3 py-2">Created</th>
+      <OperationalTableShell tableMinWidth="920px">
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
+            <tr>
+              <th className={operationalTableHeaderCellClassName}>Run Key</th>
+              <th className={operationalTableHeaderCellClassName}>Mode</th>
+              <th className={operationalTableHeaderCellClassName}>Target</th>
+              <th className={operationalTableHeaderCellClassName}>Status</th>
+              <th className={operationalTableHeaderCellClassName}>Progress</th>
+              <th className={operationalTableHeaderCellClassName}>Created</th>
             </tr>
           </thead>
           <tbody>
             {runs.map((run) => (
               <tr key={run.runKey}>
-                <td className="border-b border-stone-100 px-3 py-2">
+                <td className={operationalTableCellClassName}>
                   <Link className="text-ink underline" href={`/execution/precompute/${encodeURIComponent(run.runKey)}`}>
                     {run.runKey}
                   </Link>
                 </td>
-                <td className="border-b border-stone-100 px-3 py-2">{run.mode}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{run.key}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{run.status}</td>
-                <td className="border-b border-stone-100 px-3 py-2">
+                <td className={operationalTableCellClassName}>{run.mode}</td>
+                <td className={operationalTableCellClassName}>{run.key}</td>
+                <td className={operationalTableCellClassName}>{run.status}</td>
+                <td className={operationalTableCellClassName}>
                   {run.processed}/{run.total} (ok {run.succeeded}, sup {run.suppressed}, noop {run.noop}, err {run.errors})
                 </td>
-                <td className="border-b border-stone-100 px-3 py-2">{new Date(run.createdAt).toLocaleString()}</td>
+                <td className={operationalTableCellClassName}>{new Date(run.createdAt).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
+      </OperationalTableShell>
     </section>
   );
 }

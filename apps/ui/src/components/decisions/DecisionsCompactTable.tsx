@@ -2,6 +2,14 @@
 
 import React from "react";
 import { useMemo, useState } from "react";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../ui/operational-table";
+import { SignalBadge } from "../ui/status-badges";
 import { DecisionRowActions } from "./DecisionRowActions";
 import { getVirtualWindow, shouldVirtualizeDecisions, type DecisionSummary } from "./utils";
 
@@ -24,10 +32,10 @@ const formatDate = (value?: string | null) => (value ? new Date(value).toLocaleS
 function StatusBadges({ summary }: { summary: DecisionSummary }) {
   return (
     <div className="flex flex-wrap gap-1">
-      {summary.activeVersion ? <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">ACTIVE</span> : null}
-      {summary.draftVersion ? <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-800">DRAFT</span> : null}
+      {summary.activeVersion ? <SignalBadge status="ACTIVE" /> : null}
+      {summary.draftVersion ? <SignalBadge status="DRAFT" /> : null}
       {!summary.activeVersion && !summary.draftVersion ? (
-        <span className="rounded bg-stone-200 px-2 py-0.5 text-xs text-stone-700">ARCHIVED ONLY</span>
+        <SignalBadge status="ARCHIVED">Archived only</SignalBadge>
       ) : null}
     </div>
   );
@@ -56,26 +64,26 @@ function DecisionRow({
 }) {
   return (
     <tr className="h-16 align-top">
-      <td className="border-b border-stone-100 py-2 pr-2">
+      <td className={operationalTableCellClassName}>
         <p className="font-medium">{summary.name}</p>
         <p className="text-xs text-stone-500">{summary.key}</p>
       </td>
-      <td className="border-b border-stone-100 py-2 pr-2">
+      <td className={operationalTableCellClassName}>
         <StatusBadges summary={summary} />
       </td>
-      <td className="border-b border-stone-100 py-2 pr-2 text-xs text-stone-700">
+      <td className={`${operationalTableCellClassName} text-xs text-stone-700`}>
         {summary.activeVersion ? `v${summary.activeVersion.version}` : "-"}
         <br />
         {formatDate(summary.activeVersion?.activatedAt)}
       </td>
-      <td className="border-b border-stone-100 py-2 pr-2 text-xs text-stone-700">
+      <td className={`${operationalTableCellClassName} text-xs text-stone-700`}>
         {summary.draftVersion ? `v${summary.draftVersion.version}` : "-"}
         <br />
         {formatDate(summary.draftVersion?.updatedAt)}
       </td>
-      <td className="border-b border-stone-100 py-2 pr-2 text-xs text-stone-700">{formatDate(summary.latestUpdatedAt)}</td>
-      {showOwner ? <td className="border-b border-stone-100 py-2 pr-2 text-xs text-stone-700">{summary.owner ?? "-"}</td> : null}
-      <td className="border-b border-stone-100 py-2">
+      <td className={`${operationalTableCellClassName} text-xs text-stone-700`}>{formatDate(summary.latestUpdatedAt)}</td>
+      {showOwner ? <td className={`${operationalTableCellClassName} text-xs text-stone-700`}>{summary.owner ?? "-"}</td> : null}
+      <td className={operationalTableCellClassName}>
         <DecisionRowActions
           summary={summary}
           canWrite={canWrite}
@@ -125,16 +133,16 @@ export function DecisionsCompactTable({
   }, [summaries, scrollTop, virtualized]);
 
   const body = (
-    <table className="w-full border-collapse text-sm" data-virtualized={virtualized ? "true" : "false"}>
-      <thead className="sticky top-0 z-10 bg-white">
+    <table className={operationalTableClassName} data-virtualized={virtualized ? "true" : "false"}>
+      <thead className={`sticky top-0 z-10 ${operationalTableHeadClassName}`}>
         <tr className="text-left text-stone-600">
-          <th className="border-b border-stone-200 py-2">Name</th>
-          <th className="border-b border-stone-200 py-2">Status</th>
-          <th className="border-b border-stone-200 py-2">Active</th>
-          <th className="border-b border-stone-200 py-2">Draft</th>
-          <th className="border-b border-stone-200 py-2">Updated</th>
-          {showOwner ? <th className="border-b border-stone-200 py-2">Owner</th> : null}
-          <th className="border-b border-stone-200 py-2">Actions</th>
+          <th className={operationalTableHeaderCellClassName}>Name</th>
+          <th className={operationalTableHeaderCellClassName}>Status</th>
+          <th className={operationalTableHeaderCellClassName}>Active</th>
+          <th className={operationalTableHeaderCellClassName}>Draft</th>
+          <th className={operationalTableHeaderCellClassName}>Updated</th>
+          {showOwner ? <th className={operationalTableHeaderCellClassName}>Owner</th> : null}
+          <th className={operationalTableHeaderCellClassName}>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -169,14 +177,14 @@ export function DecisionsCompactTable({
   );
 
   if (!virtualized) {
-    return <div className="panel overflow-auto p-4">{body}</div>;
+    return <OperationalTableShell>{body}</OperationalTableShell>;
   }
 
   return (
-    <div className="panel p-4">
+    <OperationalTableShell>
       <div className="overflow-auto" style={{ maxHeight: `${viewportHeight}px` }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
         {body}
       </div>
-    </div>
+    </OperationalTableShell>
   );
 }

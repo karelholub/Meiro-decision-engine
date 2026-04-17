@@ -1,13 +1,9 @@
 import { useMemo, useState } from "react";
-import type { AttributePredicate, FlowRule } from "@decisioning/dsl";
+import type { FlowRule } from "@decisioning/dsl";
 import { ActionTemplatePicker } from "./ActionTemplatePicker";
-import { ConditionBuilder } from "./ConditionBuilder";
+import { ConditionTreeBuilder } from "./ConditionTreeBuilder";
 import type { FieldRegistryItem } from "./types";
 import {
-  attributesToConditionNode,
-  attributesToConditionRows,
-  conditionNodeToAttributes,
-  conditionRowsToAttributes,
   createDefaultRule,
   normalizeRulePriorities,
   reorderRules
@@ -48,12 +44,6 @@ export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPa
     applyRules(reorderRules(normalized, index, next));
   };
 
-  const updateWhenAttributes = (index: number, attributes: AttributePredicate[]) => {
-    updateRule(index, {
-      when: attributesToConditionNode(attributes)
-    });
-  };
-
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
@@ -76,8 +66,6 @@ export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPa
       <div className="space-y-3">
         {normalized.map((rule, index) => {
           const ruleErrors = Object.entries(errorByPath ?? {}).filter(([path]) => path.startsWith(`flow.rules.${index}`));
-          const whenDecoded = conditionNodeToAttributes(rule.when);
-          const whenRows = attributesToConditionRows(whenDecoded.attributes, registry);
 
           return (
             <article
@@ -166,19 +154,13 @@ export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPa
 
               <div className="space-y-3 rounded-md border border-stone-200 p-3">
                 <h4 className="text-sm font-semibold">IF (optional)</h4>
-                {!whenDecoded.supported ? (
-                  <p className="text-xs text-amber-700">This rule has advanced conditions. Edit in Advanced JSON.</p>
-                ) : null}
-                <ConditionBuilder
-                  rows={whenRows}
-                  onChange={(rows) => {
-                    const attributes = conditionRowsToAttributes(rows, registry);
-                    updateWhenAttributes(index, attributes);
-                  }}
+                <ConditionTreeBuilder
+                  value={rule.when}
+                  onChange={(when) => updateRule(index, { when })}
                   registry={registry}
-                  readOnly={readOnly || !whenDecoded.supported}
+                  readOnly={readOnly}
                   errorByPath={errorByPath}
-                  pathPrefix={`flow.rules.${index}.when.conditions`}
+                  pathPrefix={`flow.rules.${index}.when`}
                 />
               </div>
 
@@ -191,6 +173,43 @@ export function RuleListBuilder({ rules, onChange, registry, readOnly, errorByPa
                   errorByPath={errorByPath}
                   pathPrefix={`flow.rules.${index}.then`}
                 />
+              </div>
+
+              <div className="mt-3 space-y-3 rounded-md border border-stone-200 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-sm font-semibold">ELSE (optional)</h4>
+                    <p className="text-xs text-stone-600">Runs when the IF condition is false for this rule.</p>
+                  </div>
+                  {rule.else ? (
+                    <button
+                      type="button"
+                      onClick={() => updateRule(index, { else: undefined })}
+                      disabled={readOnly}
+                      className="rounded-md border border-stone-300 px-2 py-1 text-xs"
+                    >
+                      Remove ELSE
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => updateRule(index, { else: { actionType: "noop", payload: { reason: "else_no_match" } } })}
+                      disabled={readOnly}
+                      className="rounded-md border border-stone-300 px-2 py-1 text-xs"
+                    >
+                      Add ELSE
+                    </button>
+                  )}
+                </div>
+                {rule.else ? (
+                  <ActionTemplatePicker
+                    value={rule.else}
+                    onChange={(elseOutput) => updateRule(index, { else: elseOutput })}
+                    readOnly={readOnly}
+                    errorByPath={errorByPath}
+                    pathPrefix={`flow.rules.${index}.else`}
+                  />
+                ) : null}
               </div>
 
               {ruleErrors.length > 0 ? (

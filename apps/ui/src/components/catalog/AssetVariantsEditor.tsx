@@ -198,7 +198,7 @@ export function AssetVariantsEditor({ rows, onChange, readOnly, fallbackPayload 
   const now = Date.now();
 
   return (
-    <section className="panel space-y-3 p-4">
+    <section className="panel space-y-3 p-3">
       <div>
         <h3 className="font-semibold">Runtime Variants</h3>
         <p className="text-sm text-stone-700">Variants are matched by locale, channel, and placement, then fall back to defaults.</p>

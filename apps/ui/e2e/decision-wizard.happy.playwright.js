@@ -6,12 +6,27 @@ const apiKey = process.env.E2E_API_KEY || "local-write-key";
 test("decision wizard happy path", async ({ page, request }) => {
   const suffix = Date.now();
   const decisionKey = `wizard_decision_${suffix}`;
-  await page.addInitScript(() => {
+  const userEmail = `publisher.${suffix}@decisioning.local`;
+
+  const loginResponse = await request.post(`${apiBase}/v1/auth/dev-login`, {
+    headers: {
+      "x-env": "DEV",
+      "x-api-key": apiKey
+    },
+    data: {
+      email: userEmail,
+      profile: "publisher"
+    }
+  });
+  expect(loginResponse.ok()).toBeTruthy();
+
+  await page.addInitScript((email) => {
     window.localStorage.setItem(
       "decisioning_app_settings_v1",
       JSON.stringify({ decisionWizardMode: "enabled" })
     );
-  });
+    window.localStorage.setItem("decisioning_user_email", email);
+  }, userEmail);
 
   const createResponse = await request.post(`${apiBase}/v1/decisions`, {
     headers: {
@@ -55,7 +70,10 @@ test("decision wizard happy path", async ({ page, request }) => {
   await page.getByLabel(`I confirmed the target environment (DEV)`).check();
   await page.getByLabel(new RegExp(`I confirmed the key/version \\(${decisionKey} v1\\)`)).check();
 
-  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /^Activate$/ }).nth(1).click();
+  await page.getByLabel("Activation note").fill("E2E activation note");
+  await page.getByLabel("Use emergency approval override").check();
+  await page.getByLabel("Override reason").fill("E2E activation override for draft-only happy path");
+  await page.getByRole("button", { name: "Activate draft" }).click();
   await expect(page.getByText("Draft activated.")).toBeVisible();
 });

@@ -21,11 +21,27 @@ public struct Tracking: Codable, Sendable {
     public let campaign_id: String
     public let message_id: String
     public let variant_id: String
+    public let experiment_id: String?
+    public let experiment_version: Int?
+    public let is_holdout: Bool?
+    public let allocation_id: String?
 
-    public init(campaign_id: String, message_id: String, variant_id: String) {
+    public init(
+        campaign_id: String,
+        message_id: String,
+        variant_id: String,
+        experiment_id: String? = nil,
+        experiment_version: Int? = nil,
+        is_holdout: Bool? = nil,
+        allocation_id: String? = nil
+    ) {
         self.campaign_id = campaign_id
         self.message_id = message_id
         self.variant_id = variant_id
+        self.experiment_id = experiment_id
+        self.experiment_version = experiment_version
+        self.is_holdout = is_holdout
+        self.allocation_id = allocation_id
     }
 }
 
@@ -416,7 +432,8 @@ public actor DecisioningClient {
             placement: params.placement,
             decisionKey: params.decisionKey,
             stackKey: params.stackKey,
-            profileId: profileId ?? anonymousId,
+            profileId: profileId,
+            anonymousId: anonymousId,
             lookup: lookup,
             context: mergedContext
         )
@@ -507,6 +524,7 @@ private struct DecideRequestPayload: Encodable {
     let decisionKey: String?
     let stackKey: String?
     let profileId: String?
+    let anonymousId: String?
     let lookup: IdentityLookup?
     let context: [String: JSONValue]?
 }

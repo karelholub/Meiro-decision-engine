@@ -1,15 +1,21 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import type {
   ActivationPreviewResponse,
+  DecisionAuthoringEvidenceItem,
+  DecisionAuthoringRequirementsResponse,
+  DecisionDependenciesResponse,
   DecisionDetailsResponse,
+  DecisionReadinessResponse,
+  DecisionScenarioTestItem,
   DecisionReportResponse,
   DecisionValidationResponse
 } from "@decisioning/shared";
 import { Badge } from "../../../components/ui/badge";
+import { Button, ButtonLink } from "../../../components/ui/button";
+import { FilterPanel, PagePanel, inputClassName } from "../../../components/ui/page";
 import {
   DecisionActionBar,
   DecisionWizard,
@@ -55,6 +61,326 @@ const sameDefinition = (left: DecisionDefinition | null, right: DecisionDefiniti
   return JSON.stringify(left) === JSON.stringify(right);
 };
 
+type ScenarioResult = {
+  id: string;
+  name: string;
+  status: "pending" | "pass" | "fail";
+  required?: boolean;
+  detail?: string;
+};
+
+type ScenarioSuiteSaveItem = {
+  name: string;
+  required?: boolean;
+  enabled?: boolean;
+  profile: Record<string, unknown>;
+  expected?: Record<string, unknown>;
+  lastStatus?: "pending" | "pass" | "fail";
+  lastDetail?: string | null;
+  lastResult?: Record<string, unknown> | null;
+  lastRunAt?: string | null;
+};
+
+function ActivationReviewDialog({
+  preview,
+  readiness,
+  note,
+  approvalOverride,
+  approvalOverrideReason,
+  onNoteChange,
+  onApprovalOverrideChange,
+  onApprovalOverrideReasonChange,
+  onCancel,
+  onConfirm,
+  activating
+}: {
+  preview: ActivationPreviewResponse;
+  readiness: DecisionReadinessResponse | null;
+  note: string;
+  approvalOverride: boolean;
+  approvalOverrideReason: string;
+  onNoteChange: (note: string) => void;
+  onApprovalOverrideChange: (enabled: boolean) => void;
+  onApprovalOverrideReasonChange: (reason: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+  activating: boolean;
+}) {
+  const blocked = readiness?.readiness.status === "blocked";
+  const approvalBlocked = preview.approval.status !== "approved";
+  const overrideReasonValid = approvalOverrideReason.trim().length >= 10;
+  const activationDisabled = blocked || (approvalBlocked && (!approvalOverride || !overrideReasonValid));
+  return (
+    <section className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-md border border-stone-300 bg-white p-4 shadow-xl">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold">Review activation</h3>
+            <p className="text-sm text-stone-700">
+              Draft v{preview.draftVersion ?? "-"} to active v{preview.activeVersion ?? "new"} in {preview.environment}
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} className="rounded-md border border-stone-300 px-2 py-1 text-sm">
+            Close
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <article className="rounded-md border border-stone-200 p-3 text-sm">
+            <h4 className="font-semibold">Diff</h4>
+            <p>Changed fields: {preview.diffSummary.changedFields.join(", ") || "none"}</p>
+            <p>
+              Rules: +{preview.diffSummary.rulesAdded} / -{preview.diffSummary.rulesRemoved} / changed{" "}
+              {preview.diffSummary.rulesChanged}
+            </p>
+            {preview.warnings.length > 0 ? (
+              <ul className="mt-2 list-disc pl-4 text-xs text-amber-800">
+                {preview.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-emerald-700">No activation warnings.</p>
+            )}
+          </article>
+
+          <article className="rounded-md border border-stone-200 p-3 text-sm">
+            <h4 className="font-semibold">Readiness</h4>
+            {readiness ? (
+              <>
+                <p>
+                  Status: <strong>{readiness.readiness.status.replace(/_/g, " ")}</strong> · Risk:{" "}
+                  <strong>{readiness.readiness.riskLevel}</strong>
+                </p>
+                <ul className="mt-2 space-y-1 text-xs">
+                  {readiness.diagnostics.slice(0, 8).map((diagnostic, index) => (
+                    <li
+                      key={`${diagnostic.code}-${diagnostic.path ?? index}`}
+                      className={
+                        diagnostic.severity === "blocking"
+                          ? "text-red-700"
+                          : diagnostic.severity === "warning"
+                            ? "text-amber-800"
+                            : "text-stone-600"
+                      }
+                    >
+                      <strong>{diagnostic.severity}</strong>: {diagnostic.message}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="text-xs text-stone-600">Readiness unavailable.</p>
+            )}
+          </article>
+
+          <article className="rounded-md border border-stone-200 p-3 text-sm">
+            <h4 className="font-semibold">Approval</h4>
+            <p>
+              Status: <strong>{preview.approval.status}</strong>
+            </p>
+            {preview.approval.summary ? <p className="mt-1 text-xs text-stone-700">{preview.approval.summary}</p> : null}
+            {preview.approval.reviewedAt ? (
+              <p className="mt-1 text-xs text-stone-600">
+                Reviewed {new Date(preview.approval.reviewedAt).toLocaleString()} by {preview.approval.reviewedByEmail ?? "system"}
+              </p>
+            ) : preview.approval.createdAt ? (
+              <p className="mt-1 text-xs text-stone-600">Requested {new Date(preview.approval.createdAt).toLocaleString()}</p>
+            ) : (
+              <p className="mt-1 text-xs text-stone-600">Request and approve this draft before activation.</p>
+            )}
+            {approvalBlocked ? (
+              <div className="mt-3 space-y-2 rounded-md border border-amber-300 bg-amber-50 p-2">
+                <label className="flex items-center gap-2 text-xs font-medium text-amber-900">
+                  <input
+                    type="checkbox"
+                    checked={approvalOverride}
+                    onChange={(event) => onApprovalOverrideChange(event.target.checked)}
+                  />
+                  Use emergency approval override
+                </label>
+                {approvalOverride ? (
+                  <label className="flex flex-col gap-1 text-xs text-amber-950">
+                    Override reason
+                    <textarea
+                      value={approvalOverrideReason}
+                      onChange={(event) => onApprovalOverrideReasonChange(event.target.value)}
+                      className="min-h-20 rounded-md border border-amber-300 bg-white px-2 py-1"
+                      placeholder="Incident, rollback, or urgent operational reason"
+                    />
+                    {!overrideReasonValid ? <span>Enter at least 10 characters.</span> : null}
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+          </article>
+        </div>
+
+        {preview.policyImpact?.actions?.length ? (
+          <article className="mt-3 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+            <h4 className="font-semibold">Policy impact</h4>
+            <div className="mt-2 grid gap-2">
+              {preview.policyImpact.actions.map((action) => (
+                <div key={`${action.ruleId}:${action.actionType}`} className="rounded border border-stone-200 bg-white p-2 text-xs">
+                  <p>
+                    <strong>{action.ruleId}</strong> {"->"} {action.actionType} [{action.allowed ? "allowed" : "blocked"}]
+                  </p>
+                  <p>Tags: {action.effectiveTags.join(", ") || "none"}</p>
+                  {action.blockedBy ? <p>Blocked by {action.blockedBy.policyKey}/{action.blockedBy.ruleId}</p> : null}
+                </div>
+              ))}
+            </div>
+          </article>
+        ) : null}
+
+        <label className="mt-3 flex flex-col gap-1 text-sm">
+          Activation note
+          <textarea
+            value={note}
+            onChange={(event) => onNoteChange(event.target.value)}
+            className="min-h-24 rounded-md border border-stone-300 px-2 py-1"
+            placeholder="Rollout rationale, ticket, reviewer, or expected impact"
+          />
+        </label>
+
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onCancel} className="rounded-md border border-stone-300 px-3 py-2 text-sm">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={activating || activationDisabled}
+            className="rounded-md bg-ink px-3 py-2 text-sm text-white disabled:opacity-60"
+            title={
+              blocked
+                ? "Resolve blocking readiness issues before activation."
+                : approvalBlocked && !approvalOverride
+                  ? "Approve this draft or use an emergency override."
+                  : approvalBlocked && !overrideReasonValid
+                    ? "Add an override reason before activation."
+                    : undefined
+            }
+          >
+            {activating ? "Activating..." : "Activate draft"}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+type ApprovalReviewAction = "approve" | "reject";
+
+function AuthoringEvidencePanel({
+  items,
+  onReviewApproval
+}: {
+  items: DecisionAuthoringEvidenceItem[];
+  onReviewApproval?: (evidenceId: string, action: ApprovalReviewAction, note: string) => Promise<void>;
+}) {
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [submittingReviewId, setSubmittingReviewId] = useState<string | null>(null);
+  const pendingApprovalCount = items.filter((item) => item.evidenceType === "approval_request" && item.status === "pending").length;
+
+  const submitReview = async (item: DecisionAuthoringEvidenceItem, action: ApprovalReviewAction) => {
+    if (!onReviewApproval) {
+      return;
+    }
+    setSubmittingReviewId(`${item.id}:${action}`);
+    try {
+      await onReviewApproval(item.id, action, reviewNotes[item.id] ?? "");
+      setReviewNotes((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+    } finally {
+      setSubmittingReviewId(null);
+    }
+  };
+
+  return (
+    <section className="panel space-y-3 p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="font-semibold">Authoring evidence</h3>
+          <p className="text-xs text-stone-600">Saved test proofs and approval requests for this decision.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {pendingApprovalCount > 0 ? (
+            <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+              {pendingApprovalCount} pending approval
+            </span>
+          ) : null}
+          <span className="rounded-md border border-stone-200 px-2 py-1 text-xs text-stone-700">{items.length} records</span>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-stone-600">No evidence saved yet.</p>
+      ) : (
+        <div className="grid gap-2 md:grid-cols-2">
+          {items.slice(0, 6).map((item) => (
+            <article key={item.id} className="rounded-md border border-stone-200 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">{item.evidenceType.replace(/_/g, " ")}</p>
+                <span
+                  className={`rounded-md border px-2 py-0.5 text-xs ${
+                    item.status === "approved"
+                      ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                      : item.status === "rejected" || item.status === "failed"
+                        ? "border-red-300 bg-red-50 text-red-800"
+                        : item.status === "pending"
+                          ? "border-amber-300 bg-amber-50 text-amber-800"
+                          : "border-stone-200 text-stone-700"
+                  }`}
+                >
+                  {item.status}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-stone-700">{item.summary || "Evidence saved"}</p>
+              <p className="mt-2 text-xs text-stone-500">
+                v{item.version ?? "-"} · {new Date(item.createdAt).toLocaleString()} · {item.createdByEmail ?? "system"}
+              </p>
+              {item.evidenceType === "approval_request" && item.status === "pending" && onReviewApproval ? (
+                <div className="mt-3 space-y-2 border-t border-stone-200 pt-3">
+                  <label className="grid gap-1 text-xs">
+                    <span className="font-medium text-stone-700">Review note</span>
+                    <textarea
+                      className="min-h-16 rounded-md border border-stone-300 px-2 py-1"
+                      value={reviewNotes[item.id] ?? ""}
+                      onChange={(event) => setReviewNotes((current) => ({ ...current, [item.id]: event.target.value }))}
+                      placeholder="Decision, risk, ticket, or follow-up"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded-md bg-emerald-700 px-3 py-1 text-xs text-white disabled:opacity-60"
+                      disabled={Boolean(submittingReviewId)}
+                      onClick={() => void submitReview(item, "approve")}
+                    >
+                      {submittingReviewId === `${item.id}:approve` ? "Approving..." : "Approve"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-md border border-red-300 px-3 py-1 text-xs text-red-700 disabled:opacity-60"
+                      disabled={Boolean(submittingReviewId)}
+                      onClick={() => void submitReview(item, "reject")}
+                    >
+                      {submittingReviewId === `${item.id}:reject` ? "Rejecting..." : "Reject"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function DecisionEditorClient({
   decisionId,
   initialTab = "basic"
@@ -74,6 +400,17 @@ export default function DecisionEditorClient({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [validation, setValidation] = useState<DecisionValidationResponse | null>(null);
   const [activationPreview, setActivationPreview] = useState<ActivationPreviewResponse | null>(null);
+  const [requirements, setRequirements] = useState<DecisionAuthoringRequirementsResponse | null>(null);
+  const [dependencies, setDependencies] = useState<DecisionDependenciesResponse | null>(null);
+  const [readiness, setReadiness] = useState<DecisionReadinessResponse | null>(null);
+  const [authoringEvidence, setAuthoringEvidence] = useState<DecisionAuthoringEvidenceItem[]>([]);
+  const [scenarioTests, setScenarioTests] = useState<DecisionScenarioTestItem[]>([]);
+  const [scenarioResults, setScenarioResults] = useState<ScenarioResult[]>([]);
+  const [activationDialogOpen, setActivationDialogOpen] = useState(false);
+  const [activationNote, setActivationNote] = useState("");
+  const [activationApprovalOverride, setActivationApprovalOverride] = useState(false);
+  const [activationApprovalOverrideReason, setActivationApprovalOverrideReason] = useState("");
+  const [activating, setActivating] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [simulationError, setSimulationError] = useState<string | null>(null);
@@ -105,6 +442,9 @@ export default function DecisionEditorClient({
         setJsonDraft(pretty(normalized));
       }
       setActivationPreview(null);
+      setReadiness(null);
+      setRequirements(null);
+      setDependencies(null);
       return response;
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) {
@@ -115,9 +455,35 @@ export default function DecisionEditorClient({
     }
   }, [decisionId]);
 
+  const loadAuthoringEvidence = useCallback(async () => {
+    try {
+      const response = await apiClient.decisions.evidence(decisionId);
+      setAuthoringEvidence(response.items);
+    } catch {
+      setAuthoringEvidence([]);
+    }
+  }, [decisionId]);
+
+  const loadScenarioTests = useCallback(async () => {
+    try {
+      const response = await apiClient.decisions.scenarios(decisionId);
+      setScenarioTests(response.items);
+    } catch {
+      setScenarioTests([]);
+    }
+  }, [decisionId]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadAuthoringEvidence();
+  }, [loadAuthoringEvidence]);
+
+  useEffect(() => {
+    void loadScenarioTests();
+  }, [loadScenarioTests]);
 
   useEffect(() => {
     setWizardEnabled(getDecisionWizardEnabled());
@@ -261,6 +627,26 @@ export default function DecisionEditorClient({
     }
   }, [buildDefinitionFromEditor, decisionId]);
 
+  const loadAuthoringInsights = useCallback(async () => {
+    try {
+      const definition = buildDefinitionFromEditor();
+      const [requirementsResponse, dependenciesResponse, readinessResponse] = await Promise.all([
+        apiClient.decisions.requirements(decisionId, definition),
+        apiClient.decisions.dependencies(decisionId, definition),
+        apiClient.decisions.readiness(decisionId, {
+          definition,
+          testResults: scenarioResults
+        })
+      ]);
+      setRequirements(requirementsResponse);
+      setDependencies(dependenciesResponse);
+      setReadiness(readinessResponse);
+      setValidation(readinessResponse.validation);
+    } catch {
+      // Draft may be temporarily invalid while the user is typing.
+    }
+  }, [buildDefinitionFromEditor, decisionId, scenarioResults]);
+
   const previewActivation = async () => {
     try {
       const preview = await apiClient.decisions.previewActivation(decisionId);
@@ -272,9 +658,213 @@ export default function DecisionEditorClient({
     }
   };
 
-  const activate = async () => {
+  const scenarioEvidenceStatus = useCallback((): "passed" | "failed" | "pending" => {
+    const required = scenarioResults.filter((result) => result.required);
+    if (required.some((result) => result.status === "fail")) {
+      return "failed";
+    }
+    if (required.length === 0 || required.some((result) => result.status === "pending")) {
+      return "pending";
+    }
+    return "passed";
+  }, [scenarioResults]);
+
+  const saveScenarioSuite = useCallback(
+    async (definition: DecisionDefinition, items: ScenarioSuiteSaveItem[]) => {
+      try {
+        const ensured = await ensureDraftExists();
+        if (!ensured) {
+          return;
+        }
+        const normalized = ensureDecisionDefinitionDefaults(definition);
+        const updated = await apiClient.decisions.updateDraft(decisionId, normalized);
+        setWizardDraft(normalized);
+        setJsonDraft(pretty(normalized));
+        setLastSavedAt(new Date().toISOString());
+
+        const response = await apiClient.decisions.saveScenarios(decisionId, {
+          version: updated.version,
+          items
+        });
+        setScenarioTests(response.items);
+        setFeedback("Scenario suite saved.");
+        await loadAuthoringInsights();
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Failed to save scenario suite");
+      }
+    },
+    [decisionId, ensureDraftExists, loadAuthoringInsights]
+  );
+
+  const runScenarioSuite = useCallback(
+    async (definition: DecisionDefinition) => {
+      try {
+        const ensured = await ensureDraftExists();
+        if (!ensured) {
+          return;
+        }
+        const normalized = ensureDecisionDefinitionDefaults(definition);
+        const updated = await apiClient.decisions.updateDraft(decisionId, normalized);
+        setWizardDraft(normalized);
+        setJsonDraft(pretty(normalized));
+        setLastSavedAt(new Date().toISOString());
+
+        const response = await apiClient.decisions.runScenarios(decisionId, {
+          version: updated.version,
+          context: {
+            channel: "web"
+          }
+        });
+        setScenarioTests(response.items);
+        setScenarioResults(
+          response.items
+            .filter((item) => item.enabled)
+            .map((item) => ({
+              id: item.id,
+              name: item.name,
+              status: item.lastStatus,
+              required: item.required,
+              detail: item.lastDetail ?? undefined
+            }))
+        );
+        setFeedback(
+          response.summary.failed > 0
+            ? `Scenario suite finished with ${response.summary.failed} failing scenario(s).`
+            : `Scenario suite passed (${response.summary.passed}/${response.summary.total}).`
+        );
+        await loadAuthoringInsights();
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Failed to run scenario suite");
+      }
+    },
+    [decisionId, ensureDraftExists, loadAuthoringInsights]
+  );
+
+  const saveScenarioEvidence = useCallback(
+    async (definition: DecisionDefinition, note: string) => {
+      try {
+        const ensured = await ensureDraftExists();
+        if (!ensured) {
+          return;
+        }
+        const normalized = ensureDecisionDefinitionDefaults(definition);
+        const updated = await apiClient.decisions.updateDraft(decisionId, normalized);
+        setLastSavedAt(new Date().toISOString());
+
+        const readinessResponse = await apiClient.decisions.readiness(decisionId, {
+          definition: normalized,
+          testResults: scenarioResults
+        });
+        setReadiness(readinessResponse);
+        setValidation(readinessResponse.validation);
+
+        const status = readinessResponse.readiness.status === "blocked" ? "failed" : scenarioEvidenceStatus();
+        await apiClient.decisions.saveEvidence(decisionId, {
+          version: updated.version,
+          evidenceType: "scenario_test",
+          status,
+          summary: `Scenario evidence ${status} for ${normalized.key} v${updated.version}`,
+          payload: {
+            note: note.trim(),
+            readiness: readinessResponse.readiness,
+            diagnostics: readinessResponse.diagnostics,
+            testResults: scenarioResults,
+            requirements: readinessResponse.requirements
+          }
+        });
+        setFeedback("Scenario evidence saved.");
+        await loadAuthoringEvidence();
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Failed to save scenario evidence");
+      }
+    },
+    [decisionId, ensureDraftExists, loadAuthoringEvidence, scenarioEvidenceStatus, scenarioResults]
+  );
+
+  const submitApproval = useCallback(
+    async (definition: DecisionDefinition, note: string) => {
+      try {
+        const ensured = await ensureDraftExists();
+        if (!ensured) {
+          return;
+        }
+        const normalized = ensureDecisionDefinitionDefaults(definition);
+        const updated = await apiClient.decisions.updateDraft(decisionId, normalized);
+        setLastSavedAt(new Date().toISOString());
+
+        const readinessResponse = await apiClient.decisions.readiness(decisionId, {
+          definition: normalized,
+          testResults: scenarioResults
+        });
+        setReadiness(readinessResponse);
+        setValidation(readinessResponse.validation);
+        if (!readinessResponse.validation.valid || readinessResponse.readiness.status === "blocked") {
+          setFeedback("Approval request is blocked by readiness checks.");
+          return;
+        }
+
+        await apiClient.decisions.submitApproval(decisionId, {
+          note: note.trim(),
+          expectedDraftVersion: updated.version,
+          testResults: scenarioResults
+        });
+        setFeedback("Approval requested.");
+        await loadAuthoringEvidence();
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Failed to request approval");
+      }
+    },
+    [decisionId, ensureDraftExists, loadAuthoringEvidence, scenarioResults]
+  );
+
+  const reviewApproval = useCallback(
+    async (evidenceId: string, action: ApprovalReviewAction, note: string) => {
+      try {
+        await apiClient.decisions.reviewApproval(decisionId, evidenceId, {
+          action,
+          note: note.trim()
+        });
+        setFeedback(action === "approve" ? "Approval request approved." : "Approval request rejected.");
+        await loadAuthoringEvidence();
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Failed to review approval request");
+        throw error;
+      }
+    },
+    [decisionId, loadAuthoringEvidence]
+  );
+
+  const requestActivation = async (noteOverride?: string) => {
     const definition = currentDefinition;
     if (!definition) {
+      return;
+    }
+
+    try {
+      const ensured = await ensureDraftExists();
+      if (!ensured) {
+        return;
+      }
+      const latestDefinition = buildDefinitionFromEditor();
+      await apiClient.decisions.updateDraft(decisionId, latestDefinition);
+      setLastSavedAt(new Date().toISOString());
+
+      const readinessResponse = await apiClient.decisions.readiness(decisionId, {
+        definition: latestDefinition,
+        testResults: scenarioResults
+      });
+      setReadiness(readinessResponse);
+      setValidation(readinessResponse.validation);
+      if (!readinessResponse.validation.valid) {
+        setFeedback("Validation failed. Fix blocking issues before activation.");
+        return;
+      }
+      if (readinessResponse.readiness.status === "blocked") {
+        setFeedback("Activation is blocked by readiness checks.");
+        return;
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Could not prepare activation");
       return;
     }
 
@@ -283,18 +873,39 @@ export default function DecisionEditorClient({
       return;
     }
 
-    const summary = `Activate ${definition.key} draft v${preview.draftVersion ?? definition.version}?\nChanged fields: ${preview.diffSummary.changedFields.join(", ") || "none"}\nWarnings: ${preview.warnings.length}`;
-    if (!window.confirm(summary)) {
+    setActivationNote(noteOverride ?? activationNote);
+    setActivationApprovalOverride(false);
+    setActivationApprovalOverrideReason("");
+    setActivationDialogOpen(true);
+  };
+
+  const confirmActivation = async () => {
+    if (!activationPreview) {
       return;
     }
-
     try {
-      await apiClient.decisions.activate(decisionId);
+      setActivating(true);
+      await apiClient.decisions.activate(decisionId, {
+        activationNote,
+        expectedDraftVersion: activationPreview.draftVersion ?? undefined,
+        approvalOverride:
+          activationPreview.approval.status !== "approved" && activationApprovalOverride
+            ? { reason: activationApprovalOverrideReason.trim() }
+            : undefined
+      });
       setFeedback("Draft activated.");
       setActivationPreview(null);
+      setActivationDialogOpen(false);
+      setActivationNote("");
+      setActivationApprovalOverride(false);
+      setActivationApprovalOverrideReason("");
       await load();
+      await loadAuthoringEvidence();
+      await loadScenarioTests();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Activation failed");
+    } finally {
+      setActivating(false);
     }
   };
 
@@ -416,6 +1027,21 @@ export default function DecisionEditorClient({
       return;
     }
 
+    const timeout = window.setTimeout(() => {
+      void loadAuthoringInsights();
+    }, 1200);
+
+    return () => window.clearTimeout(timeout);
+  }, [draftVersion, editorDraftSignature, loadAuthoringInsights, tab, unsupported.supported]);
+
+  useEffect(() => {
+    if (!draftVersion) {
+      return;
+    }
+    if (tab === "basic" && !unsupported.supported) {
+      return;
+    }
+
     const timeout = window.setTimeout(async () => {
       try {
         setIsAutosaving(true);
@@ -461,22 +1087,25 @@ export default function DecisionEditorClient({
   const canActivate =
     hasPermission("decision.activate") &&
     Boolean(validation?.valid) &&
+    readiness?.readiness.status !== "blocked" &&
     (tab !== "basic" || !wizardEnabled || wizardActivationReady) &&
     !isAutosaving;
   const activateDisabledReason = !validation
     ? "Run Validate before activating."
     : !validation.valid
       ? "Validation must pass before activation."
+      : readiness?.readiness.status === "blocked"
+        ? "Resolve blocking readiness issues before activation."
       : tab === "basic" && wizardEnabled && !wizardActivationReady
         ? "Complete activation checklist and simulation (or skip simulation) in Test & Activate."
         : undefined;
 
   return (
     <section className="space-y-4">
-      <header className="panel sticky top-16 z-10 space-y-3 p-4">
+      <header className="panel sticky top-16 z-10 space-y-3 p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold">{selectedVersion.definition.name}</h2>
+            <h2 className="text-lg font-semibold">{selectedVersion.definition.name}</h2>
             <p className="text-sm text-stone-700">
               Key: {selectedVersion.definition.key} · Version: v{selectedVersion.version}
             </p>
@@ -500,7 +1129,7 @@ export default function DecisionEditorClient({
           activateDisabledReason={activateDisabledReason}
           onSave={() => void saveDraft()}
           onValidate={() => void validateDraft()}
-          onActivate={() => void activate()}
+          onActivate={() => void requestActivation()}
           onFormatJson={formatJson}
           onArchive={() => void archive()}
           onCreateDraftFromActive={() => void ensureDraftExists()}
@@ -509,7 +1138,7 @@ export default function DecisionEditorClient({
         />
       </header>
 
-      <div className="panel flex flex-wrap gap-2 p-4 text-sm">
+      <div className="panel flex flex-wrap gap-2 p-3 text-sm">
         <button
           className={`rounded-md border px-3 py-1 ${tab === "basic" ? "bg-ink text-white" : "border-stone-300"}`}
           onClick={() => switchTab("basic")}
@@ -543,8 +1172,24 @@ export default function DecisionEditorClient({
       {feedback ? <p className="text-sm text-stone-800">{feedback}</p> : null}
       {simulationError ? <p className="text-sm text-red-700">{simulationError}</p> : null}
 
+      {activationDialogOpen && activationPreview ? (
+        <ActivationReviewDialog
+          preview={activationPreview}
+          readiness={readiness}
+          note={activationNote}
+          approvalOverride={activationApprovalOverride}
+          approvalOverrideReason={activationApprovalOverrideReason}
+          onNoteChange={setActivationNote}
+          onApprovalOverrideChange={setActivationApprovalOverride}
+          onApprovalOverrideReasonChange={setActivationApprovalOverrideReason}
+          onCancel={() => setActivationDialogOpen(false)}
+          onConfirm={() => void confirmActivation()}
+          activating={activating}
+        />
+      ) : null}
+
       {activationPreview ? (
-        <section className="panel space-y-2 p-4 text-sm">
+        <section className="panel space-y-2 p-3 text-sm">
           <h3 className="font-semibold">Activation impact preview</h3>
           <p>
             Draft v{activationPreview.draftVersion ?? "-"} vs active v{activationPreview.activeVersion ?? "-"}
@@ -586,6 +1231,8 @@ export default function DecisionEditorClient({
         </section>
       ) : null}
 
+      <AuthoringEvidencePanel items={authoringEvidence} onReviewApproval={hasPermission("decision.activate") ? reviewApproval : undefined} />
+
       {tab === "basic" ? (
         wizardEnabled && wizardDraft ? (
           <DecisionWizard
@@ -606,35 +1253,42 @@ export default function DecisionEditorClient({
                 throw error;
               }
             }}
-            onActivate={async () => {
-              await activate();
+            onActivate={async (note) => {
+              await requestActivation(note);
             }}
+            onSaveScenarioEvidence={saveScenarioEvidence}
+            onSaveScenarioSuite={saveScenarioSuite}
+            onRunScenarioSuite={runScenarioSuite}
+            onSubmitApproval={submitApproval}
+            scenarioTests={scenarioTests}
+            requirements={requirements}
+            dependencies={dependencies}
+            readiness={readiness}
+            onScenarioResultsChange={setScenarioResults}
           />
         ) : (
-          <article className="panel p-4 text-sm">
+          <PagePanel density="compact" className="text-sm">
             <p className="font-semibold">Decision Wizard is currently disabled.</p>
             <p className="mt-1 text-xs text-stone-600">Enable it from App Settings or continue in Advanced JSON mode.</p>
             <div className="mt-2 flex gap-2">
-              <Link className="rounded-md border border-stone-300 px-3 py-1" href="/settings/app">
-                Open App Settings
-              </Link>
-              <button className="rounded-md border border-stone-300 px-3 py-1" onClick={() => switchTab("advanced")}>
+              <ButtonLink href="/settings/app" size="xs" variant="outline">Open App Settings</ButtonLink>
+              <Button size="xs" variant="outline" onClick={() => switchTab("advanced")}>
                 Open Advanced JSON
-              </button>
+              </Button>
             </div>
-          </article>
+          </PagePanel>
         )
       ) : null}
 
       {tab === "advanced" ? (
-        <div className="panel space-y-3 p-4">
+        <PagePanel density="compact" className="space-y-3">
           <div className="flex gap-2">
-            <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" onClick={formatJson}>
+            <Button size="sm" variant="outline" onClick={formatJson}>
               Format JSON
-            </button>
-            <button className="rounded-md border border-stone-300 px-3 py-1 text-sm" onClick={() => void validateDraft()}>
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void validateDraft()}>
               Validate Draft
-            </button>
+            </Button>
           </div>
           {!unsupported.supported ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
@@ -651,19 +1305,19 @@ export default function DecisionEditorClient({
             onChange={(event) => setJsonDraft(event.target.value)}
             className="min-h-[30rem] w-full rounded-md border border-stone-300 px-3 py-2 font-mono text-sm"
           />
-        </div>
+        </PagePanel>
       ) : null}
 
       {tab === "report" ? (
         <div className="space-y-4">
-          <div className="panel grid gap-3 p-4 md:grid-cols-3">
+          <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm">
               From
               <input
                 type="datetime-local"
                 value={reportFrom}
                 onChange={(event) => setReportFrom(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
               />
             </label>
             <label className="flex flex-col gap-1 text-sm">
@@ -672,21 +1326,21 @@ export default function DecisionEditorClient({
                 type="datetime-local"
                 value={reportTo}
                 onChange={(event) => setReportTo(event.target.value)}
-                className="rounded-md border border-stone-300 px-2 py-1"
+                className={inputClassName}
               />
             </label>
             <div className="flex items-end">
-              <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void loadReport()}>
+              <Button size="sm" variant="outline" onClick={() => void loadReport()}>
                 Refresh Report
-              </button>
+              </Button>
             </div>
-          </div>
+          </FilterPanel>
 
           {reportLoading ? <p className="text-sm">Loading report...</p> : null}
 
           {report ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <article className="panel space-y-2 p-4 text-sm">
+              <PagePanel density="compact" className="space-y-2 text-sm">
                 <h3 className="font-semibold">Evaluation Summary</h3>
                 <p>
                   <strong>Total evaluations:</strong> {report.totalEvaluations}
@@ -697,9 +1351,9 @@ export default function DecisionEditorClient({
                 <p>
                   <strong>Treatment:</strong> {report.treatmentCount}
                 </p>
-              </article>
+              </PagePanel>
 
-              <article className="panel space-y-2 p-4 text-sm">
+              <PagePanel density="compact" className="space-y-2 text-sm">
                 <h3 className="font-semibold">Conversion Proxy</h3>
                 <p>
                   <strong>Holdout conversions:</strong> {report.conversionsHoldout}
@@ -716,9 +1370,9 @@ export default function DecisionEditorClient({
                 <p>
                   <strong>Uplift (treatment - holdout):</strong> {(report.uplift * 100).toFixed(2)}%
                 </p>
-              </article>
+              </PagePanel>
 
-              <article className="panel p-4 text-sm">
+              <PagePanel density="compact" className="text-sm">
                 <h3 className="mb-2 font-semibold">By Outcome</h3>
                 <ul className="space-y-1">
                   {Object.entries(report.byOutcome).map(([outcome, count]) => (
@@ -727,9 +1381,9 @@ export default function DecisionEditorClient({
                     </li>
                   ))}
                 </ul>
-              </article>
+              </PagePanel>
 
-              <article className="panel p-4 text-sm">
+              <PagePanel density="compact" className="text-sm">
                 <h3 className="mb-2 font-semibold">By Action Type</h3>
                 <ul className="space-y-1">
                   {Object.entries(report.byActionType).map(([actionType, count]) => (
@@ -738,15 +1392,15 @@ export default function DecisionEditorClient({
                     </li>
                   ))}
                 </ul>
-              </article>
+              </PagePanel>
             </div>
           ) : (
-            <article className="panel p-4 text-sm text-stone-700">No report data available for this range.</article>
+            <PagePanel density="compact" className="text-sm text-stone-700">No report data available for this range.</PagePanel>
           )}
         </div>
       ) : null}
 
-      <section className="panel space-y-2 p-4 text-sm">
+      <PagePanel density="compact" className="space-y-2 text-sm">
         <h3 className="font-semibold">Reason Codes Catalog</h3>
         <div className="grid gap-2 md:grid-cols-2">
           {reasonCatalog.map((entry) => (
@@ -756,10 +1410,10 @@ export default function DecisionEditorClient({
             </div>
           ))}
         </div>
-      </section>
+      </PagePanel>
 
       {validation ? (
-        <section className="panel space-y-2 p-4 text-sm">
+        <PagePanel density="compact" className="space-y-2 text-sm">
           <h3 className="font-semibold">Validation</h3>
           <p>
             Metrics: {validation.metrics.ruleCount} rules · hasElse={String(validation.metrics.hasElse)} · usesHoldout=
@@ -783,7 +1437,7 @@ export default function DecisionEditorClient({
               ))}
             </ul>
           </div>
-        </section>
+        </PagePanel>
       ) : null}
     </section>
   );

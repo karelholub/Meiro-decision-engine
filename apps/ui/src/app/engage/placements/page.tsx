@@ -4,6 +4,16 @@ import { useEffect, useState } from "react";
 import type { InAppPlacement } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 
 export default function InAppPlacementsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -63,99 +73,93 @@ export default function InAppPlacementsPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Placement Inventory</h2>
-        <p className="text-sm text-stone-700">Configure placement keys, template allow-lists, and TTL defaults. Environment: {environment}</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Placement Inventory"
+        description="Configure placement keys, template allow-lists, and TTL defaults."
+        meta={`Environment: ${environment}`}
+      />
 
-      <div className="rounded-lg border border-stone-200 bg-white p-3">
-        <div className="flex items-center gap-2">
-        <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => setShowCreate((prev) => !prev)}>
+      <FilterPanel density="compact" className="!space-y-0 flex items-center gap-2">
+        <Button size="sm" onClick={() => setShowCreate((prev) => !prev)}>
           {showCreate ? "Close" : "Create Placement"}
-        </button>
-        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => void load()}>
           Refresh
-        </button>
-        </div>
-      </div>
+        </Button>
+      </FilterPanel>
 
       {showCreate ? (
-        <article className="panel grid gap-3 p-4 md:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
+        <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
+          <FieldLabel>
             Key
-            <input value={key} onChange={(event) => setKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
+            <input value={key} onChange={(event) => setKey(event.target.value)} className={inputClassName} />
+          </FieldLabel>
+          <FieldLabel>
             Name
-            <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-          </label>
-          <label className="flex flex-col gap-1 text-sm md:col-span-2">
+            <input value={name} onChange={(event) => setName(event.target.value)} className={inputClassName} />
+          </FieldLabel>
+          <FieldLabel className="md:col-span-2">
             Description
             <input
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Allowed template keys
             <input
               value={allowedTemplateKeys}
               onChange={(event) => setAllowedTemplateKeys(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
+          </FieldLabel>
+          <FieldLabel>
             Default TTL seconds
             <input
               value={defaultTtlSeconds}
               onChange={(event) => setDefaultTtlSeconds(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
+              className={inputClassName}
             />
-          </label>
+          </FieldLabel>
           <div className="md:col-span-2">
-            <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void create()}>
+            <Button size="sm" onClick={() => void create()}>
               Save
-            </button>
+            </Button>
           </div>
-        </article>
+        </PagePanel>
       ) : null}
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Placements unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
       {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
 
-      <div className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
+      <OperationalTableShell>
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
             <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Key</th>
-              <th className="border-b border-stone-200 px-3 py-2">Name</th>
-              <th className="border-b border-stone-200 px-3 py-2">Allowed templates</th>
-              <th className="border-b border-stone-200 px-3 py-2">Default TTL</th>
-              <th className="border-b border-stone-200 px-3 py-2">Updated</th>
+              <th className={operationalTableHeaderCellClassName}>Key</th>
+              <th className={operationalTableHeaderCellClassName}>Name</th>
+              <th className={operationalTableHeaderCellClassName}>Allowed templates</th>
+              <th className={operationalTableHeaderCellClassName}>Default TTL</th>
+              <th className={operationalTableHeaderCellClassName}>Updated</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td className="border-b border-stone-100 px-3 py-2 font-medium">{item.key}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.name}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.allowedTemplateKeys.join(", ") || "-"}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.defaultTtlSeconds ?? "-"}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{new Date(item.updatedAt).toLocaleString()}</td>
+                <td className={`${operationalTableCellClassName} font-medium`}>{item.key}</td>
+                <td className={operationalTableCellClassName}>{item.name}</td>
+                <td className={operationalTableCellClassName}>{item.allowedTemplateKeys.join(", ") || "-"}</td>
+                <td className={operationalTableCellClassName}>{item.defaultTtlSeconds ?? "-"}</td>
+                <td className={operationalTableCellClassName}>{new Date(item.updatedAt).toLocaleString()}</td>
               </tr>
             ))}
-            {items.length === 0 ? (
-              <tr>
-                <td className="px-3 py-4 text-stone-600" colSpan={5}>
-                  No placements found.
-                </td>
-              </tr>
-            ) : null}
           </tbody>
         </table>
-      </div>
+        {items.length === 0 ? <EmptyState title="No placements found" className="p-4" /> : null}
+      </OperationalTableShell>
     </section>
   );
 }

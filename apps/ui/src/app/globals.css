@@ -33,7 +33,7 @@ body {
     var(--bg);
   color: var(--ink);
   font-family: Inter, "IBM Plex Sans", "Avenir Next", Arial, sans-serif;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 a {
@@ -99,21 +99,6 @@ h6 {
   box-shadow: var(--shadow-card);
 }
 
-main > section > header.panel {
-  padding: 30px !important;
-}
-
-main > section > header.panel > h2:first-child {
-  font-size: 2.25rem !important;
-  line-height: 1.15;
-  font-weight: 700;
-}
-
-main > section > header.panel > h2:first-child + p {
-  margin-top: 8px;
-  font-size: 1.05rem;
-}
-
 .rounded-md,
 .rounded-lg,
 .rounded-xl,
@@ -131,28 +116,6 @@ main > section > header.panel > h2:first-child + p {
 
 .border-ink {
   border-color: var(--accent) !important;
-}
-
-.text-stone-500,
-.text-stone-600,
-.text-stone-700 {
-  color: var(--muted) !important;
-}
-
-.border-stone-100,
-.border-stone-200,
-.border-stone-300 {
-  border-color: var(--stroke) !important;
-}
-
-.bg-stone-50,
-.bg-stone-100 {
-  background-color: var(--panel-soft) !important;
-}
-
-.hover\:bg-stone-100:hover,
-.hover\:bg-stone-50:hover {
-  background-color: var(--accent-soft) !important;
 }
 
 .shadow-sm {
@@ -198,7 +161,7 @@ main > section > header.panel > h2:first-child + p {
 
 .nav-group-button,
 .nav-link {
-  min-height: 48px;
+  min-height: 42px;
   color: var(--ink);
 }
 
@@ -267,13 +230,5 @@ main > section > header.panel > h2:first-child + p {
 
   .content-shell {
     padding: 16px;
-  }
-
-  main > section > header.panel {
-    padding: 20px !important;
-  }
-
-  main > section > header.panel > h2:first-child {
-    font-size: 1.8rem !important;
   }
 }

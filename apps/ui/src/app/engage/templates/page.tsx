@@ -4,6 +4,16 @@ import { useEffect, useState } from "react";
 import type { InAppTemplate } from "@decisioning/shared";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { EmptyState, InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 
 const defaultSchema = {
   type: "object",
@@ -88,51 +98,50 @@ export default function InAppTemplatesPage() {
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <h2 className="text-xl font-semibold">Template Inventory</h2>
-        <p className="text-sm text-stone-700">Define template schemas and validate required fields before campaign activation.</p>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Template Inventory"
+        description="Define template schemas and validate required fields before campaign activation."
+      />
 
-      <div className="rounded-lg border border-stone-200 bg-white p-3">
-        <div className="flex items-center gap-2">
-        <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => setShowCreate((prev) => !prev)}>
+      <FilterPanel density="compact" className="!space-y-0 flex items-center gap-2">
+        <Button size="sm" onClick={() => setShowCreate((prev) => !prev)}>
           {showCreate ? "Close" : "Create Template"}
-        </button>
-        <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void load()}>
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => void load()}>
           Refresh
-        </button>
-        </div>
-      </div>
+        </Button>
+      </FilterPanel>
 
       {showCreate ? (
-        <article className="panel grid gap-3 p-4">
+        <PagePanel density="compact" className="grid gap-3">
           <div className="grid gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm">
+            <FieldLabel>
               Key
-              <input value={key} onChange={(event) => setKey(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
+              <input value={key} onChange={(event) => setKey(event.target.value)} className={inputClassName} />
+            </FieldLabel>
+            <FieldLabel>
               Name
-              <input value={name} onChange={(event) => setName(event.target.value)} className="rounded-md border border-stone-300 px-2 py-1" />
-            </label>
+              <input value={name} onChange={(event) => setName(event.target.value)} className={inputClassName} />
+            </FieldLabel>
           </div>
 
-          <label className="flex flex-col gap-1 text-sm">
+          <FieldLabel className="block">
             Schema JSON
             <textarea
               value={schemaText}
               onChange={(event) => setSchemaText(event.target.value)}
-              className="min-h-64 rounded-md border border-stone-300 px-2 py-1 font-mono text-xs"
+              className={`${inputClassName} min-h-64 font-mono text-xs`}
             />
-          </label>
+          </FieldLabel>
 
           <div className="flex items-center gap-2">
-            <button className="rounded-md border border-stone-300 px-3 py-2 text-sm" onClick={() => void validateSchema()}>
+            <Button size="sm" variant="outline" onClick={() => void validateSchema()}>
               Validate
-            </button>
-            <button className="rounded-md bg-ink px-3 py-2 text-sm text-white" onClick={() => void create()}>
+            </Button>
+            <Button size="sm" onClick={() => void create()}>
               Save
-            </button>
+            </Button>
           </div>
 
           {validation ? (
@@ -148,29 +157,29 @@ export default function InAppTemplatesPage() {
               </p>
             </div>
           ) : null}
-        </article>
+        </PagePanel>
       ) : null}
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Templates unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
       {loading ? <p className="text-sm text-stone-600">Loading...</p> : null}
 
-      <div className="panel overflow-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
+      <OperationalTableShell>
+        <table className={operationalTableClassName}>
+          <thead className={operationalTableHeadClassName}>
             <tr className="text-left text-stone-600">
-              <th className="border-b border-stone-200 px-3 py-2">Key</th>
-              <th className="border-b border-stone-200 px-3 py-2">Name</th>
-              <th className="border-b border-stone-200 px-3 py-2">Schema</th>
-              <th className="border-b border-stone-200 px-3 py-2">Updated</th>
+              <th className={operationalTableHeaderCellClassName}>Key</th>
+              <th className={operationalTableHeaderCellClassName}>Name</th>
+              <th className={operationalTableHeaderCellClassName}>Schema</th>
+              <th className={operationalTableHeaderCellClassName}>Updated</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td className="border-b border-stone-100 px-3 py-2 font-medium">{item.key}</td>
-                <td className="border-b border-stone-100 px-3 py-2">{item.name}</td>
-                <td className="border-b border-stone-100 px-3 py-2">
+                <td className={`${operationalTableCellClassName} font-medium`}>{item.key}</td>
+                <td className={operationalTableCellClassName}>{item.name}</td>
+                <td className={operationalTableCellClassName}>
                   <details>
                     <summary className="cursor-pointer text-xs text-indigo-700">View schema JSON</summary>
                     <pre className="mt-2 max-h-56 overflow-auto rounded border border-stone-200 bg-stone-50 p-2 text-xs">
@@ -178,19 +187,13 @@ export default function InAppTemplatesPage() {
                     </pre>
                   </details>
                 </td>
-                <td className="border-b border-stone-100 px-3 py-2">{new Date(item.updatedAt).toLocaleString()}</td>
+                <td className={operationalTableCellClassName}>{new Date(item.updatedAt).toLocaleString()}</td>
               </tr>
             ))}
-            {items.length === 0 ? (
-              <tr>
-                <td className="px-3 py-4 text-stone-600" colSpan={4}>
-                  No templates found.
-                </td>
-              </tr>
-            ) : null}
           </tbody>
         </table>
-      </div>
+        {items.length === 0 ? <EmptyState title="No templates found" className="p-4" /> : null}
+      </OperationalTableShell>
     </section>
   );
 }

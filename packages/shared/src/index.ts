@@ -1,5 +1,8 @@
 import type { DecisionDefinition, DecisionStackDefinition, DecisionStatus, Outcome, Reason } from "@decisioning/dsl";
 import type { EngineContext, EngineProfile } from "@decisioning/engine";
+import type { Ref } from "./references";
+
+export * from "./activationAssets";
 
 export type DecisionEnvironment = "DEV" | "STAGE" | "PROD";
 
@@ -70,6 +73,14 @@ export interface ActivationPreviewResponse {
   environment: DecisionEnvironment;
   draftVersion: number | null;
   activeVersion: number | null;
+  approval: {
+    status: "approved" | "pending" | "rejected" | "missing";
+    evidenceId: string | null;
+    summary: string | null;
+    createdAt: string | null;
+    reviewedAt: string | null;
+    reviewedByEmail: string | null;
+  };
   diffSummary: {
     changedFields: string[];
     rulesAdded: number;
@@ -102,6 +113,187 @@ export interface ActivationPreviewResponse {
       warning?: string;
     }>;
   };
+}
+
+export interface DecisionAuthoringDiagnostic {
+  code: string;
+  severity: "info" | "warning" | "blocking";
+  message: string;
+  step: "basics" | "eligibility" | "rules" | "guardrails" | "fallback" | "test_activate";
+  path?: string;
+  nextAction?: string;
+}
+
+export interface DecisionAuthoringRequirementsResponse {
+  decisionId: string;
+  key: string;
+  type: "decision";
+  version: number;
+  source: "provided_definition" | "draft" | "active";
+  required: {
+    attributes: string[];
+    audiences: string[];
+    contextKeys: string[];
+  };
+  optional: {
+    attributes: string[];
+    contextKeys: string[];
+  };
+  notes: string[];
+  schema: {
+    operators: string[];
+  };
+}
+
+export interface DecisionReadinessResponse {
+  decisionId: string;
+  environment: DecisionEnvironment;
+  draftVersion: number | null;
+  activeVersion: number | null;
+  source: "provided_definition" | "draft" | "active";
+  readiness: {
+    status: "ready" | "ready_with_warnings" | "blocked";
+    riskLevel: "low" | "medium" | "high" | "blocking";
+    blockingCount: number;
+    warningCount: number;
+  };
+  diagnostics: DecisionAuthoringDiagnostic[];
+  validation: DecisionValidationResponse;
+  requirements: {
+    required: {
+      attributes: string[];
+      audiences: string[];
+      contextKeys: string[];
+    };
+    optional: {
+      attributes: string[];
+      contextKeys: string[];
+    };
+    notes: string[];
+  };
+}
+
+export interface DecisionAuthoringEvidenceItem {
+  id: string;
+  decisionId: string;
+  environment: DecisionEnvironment;
+  version: number | null;
+  evidenceType: "scenario_test" | "approval_request" | string;
+  status: "passed" | "failed" | "pending" | "approved" | "rejected" | string;
+  summary: string;
+  payload: Record<string, unknown>;
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  createdAt: string;
+}
+
+export interface DecisionAuthoringEvidenceResponse {
+  decisionId: string;
+  items: DecisionAuthoringEvidenceItem[];
+}
+
+export interface DecisionApprovalRequestResponse {
+  decisionId: string;
+  evidence: DecisionAuthoringEvidenceItem;
+  readiness: DecisionReadinessResponse["readiness"];
+}
+
+export interface DecisionApprovalReviewResponse {
+  decisionId: string;
+  evidence: DecisionAuthoringEvidenceItem;
+}
+
+export interface DecisionApprovalQueueItem extends DecisionAuthoringEvidenceItem {
+  decisionKey: string;
+  decisionName: string;
+  decisionDescription: string;
+}
+
+export interface DecisionApprovalQueueResponse {
+  items: DecisionApprovalQueueItem[];
+}
+
+export interface DecisionDependencyItem {
+  label: string;
+  ref: Ref;
+  status: "resolved_active" | "resolved_inactive" | "missing";
+  detail?: string;
+  sourcePath?: string;
+  resolved?: {
+    name?: string | null;
+    version?: number | null;
+    status?: string | null;
+    updatedAt?: string | null;
+  };
+  readiness?: {
+    status: "ready" | "ready_with_warnings" | "blocked";
+    riskLevel: "low" | "medium" | "high" | "blocking";
+    summary?: string;
+  };
+}
+
+export interface DecisionDependenciesResponse {
+  decisionId: string;
+  key: string;
+  environment: DecisionEnvironment;
+  draftVersion: number | null;
+  activeVersion: number | null;
+  source: "provided_definition" | "draft" | "active";
+  items: DecisionDependencyItem[];
+  summary: {
+    total: number;
+    missing: number;
+    inactive: number;
+    blocking: number;
+    warnings: number;
+  };
+}
+
+export interface DecisionScenarioTestItem {
+  id: string;
+  decisionId: string;
+  environment: DecisionEnvironment;
+  version: number | null;
+  name: string;
+  required: boolean;
+  enabled: boolean;
+  profile: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  lastStatus: "pending" | "pass" | "fail";
+  lastDetail: string | null;
+  lastResult: Record<string, unknown> | null;
+  lastRunAt: string | null;
+  createdByUserId: string | null;
+  createdByEmail: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DecisionScenarioTestsResponse {
+  decisionId: string;
+  items: DecisionScenarioTestItem[];
+}
+
+export interface DecisionScenarioRunResult {
+  scenarioId: string;
+  name: string;
+  status: "pass" | "fail";
+  detail: string;
+  result: Record<string, unknown>;
+  runAt: string;
+}
+
+export interface DecisionScenarioRunResponse {
+  decisionId: string;
+  version: number;
+  ranAt: string;
+  summary: {
+    total: number;
+    passed: number;
+    failed: number;
+  };
+  results: DecisionScenarioRunResult[];
+  items: DecisionScenarioTestItem[];
 }
 
 export interface SimulationRequest {

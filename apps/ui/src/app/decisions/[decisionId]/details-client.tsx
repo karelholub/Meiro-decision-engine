@@ -1,8 +1,17 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { DecisionDetailsResponse, DecisionReportResponse } from "@decisioning/shared";
+import { InlineError } from "../../../components/ui/app-state";
+import { Button, ButtonLink } from "../../../components/ui/button";
+import {
+  OperationalTableShell,
+  operationalTableCellClassName,
+  operationalTableClassName,
+  operationalTableHeadClassName,
+  operationalTableHeaderCellClassName
+} from "../../../components/ui/operational-table";
+import { PageHeader, PagePanel } from "../../../components/ui/page";
 import { HasDraftBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
@@ -74,33 +83,32 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
 
   return (
     <section className="space-y-4">
-      <header className="rounded-lg border border-stone-200 bg-white p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-xl font-semibold">{details.name}</h2>
-            <p className="text-sm text-stone-700">
-              Key: <span className="font-mono">{details.key}</span> ({details.environment})
-            </p>
-            <div className="mt-1 flex flex-wrap gap-1 text-xs">
-              <StatusBadge status={(draft?.status ?? active?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "ARCHIVED"} />
-              {draft ? <HasDraftBadge /> : null}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void copyText(details.key, "Key")}>Copy key</button>
-            <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void copyText(`/v1/decisions/${decisionId}`, "API ref")}>Copy API ref</button>
-            <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href="/decisions">Back to inventory</Link>
-            {canWrite ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href={`/decisions/${decisionId}/edit`}>Edit draft</Link> : null}
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        title={details.name}
+        description={<>Key: <span className="font-mono">{details.key}</span> ({details.environment})</>}
+        meta={
+          <span className="flex flex-wrap gap-1">
+            <StatusBadge status={(draft?.status ?? active?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "ARCHIVED"} />
+            {draft ? <HasDraftBadge /> : null}
+          </span>
+        }
+        actions={
+          <>
+            <Button size="sm" variant="outline" onClick={() => void copyText(details.key, "Key")}>Copy key</Button>
+            <Button size="sm" variant="outline" onClick={() => void copyText(`/v1/decisions/${decisionId}`, "API ref")}>Copy API ref</Button>
+            <ButtonLink size="sm" variant="outline" href="/decisions">Back to inventory</ButtonLink>
+            {canWrite ? <ButtonLink size="sm" variant="outline" href={`/decisions/${decisionId}/edit`}>Edit draft</ButtonLink> : null}
+          </>
+        }
+      />
 
-      {error ? <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div> : null}
+      {error ? <InlineError title="Decision unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
 
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-3">
-          <article className="rounded-lg border border-stone-200 bg-white p-4">
+          <PagePanel density="compact">
             <h3 className="font-semibold">Summary</h3>
             <div className="mt-2 grid gap-3 text-sm md:grid-cols-2">
               <div>
@@ -116,52 +124,52 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
                 <p><strong>Uplift:</strong> {(((report?.uplift ?? 0) as number) * 100).toFixed(2)}%</p>
               </div>
             </div>
-          </article>
+          </PagePanel>
 
-          <article className="rounded-lg border border-stone-200 bg-white p-4">
+          <PagePanel density="compact">
             <h3 className="font-semibold">Versions</h3>
-            <div className="mt-2 overflow-auto">
-              <table className="w-full border-collapse text-sm">
-                <thead>
+            <OperationalTableShell className="mt-2">
+              <table className={operationalTableClassName}>
+                <thead className={operationalTableHeadClassName}>
                   <tr className="text-left text-stone-600">
-                    <th className="border-b border-stone-200 py-2">Version</th>
-                    <th className="border-b border-stone-200 py-2">Status</th>
-                    <th className="border-b border-stone-200 py-2">Updated</th>
-                    <th className="border-b border-stone-200 py-2">Activated</th>
+                    <th className={operationalTableHeaderCellClassName}>Version</th>
+                    <th className={operationalTableHeaderCellClassName}>Status</th>
+                    <th className={operationalTableHeaderCellClassName}>Updated</th>
+                    <th className={operationalTableHeaderCellClassName}>Activated</th>
                   </tr>
                 </thead>
                 <tbody>
                   {details.versions.map((version) => (
                     <tr key={version.versionId}>
-                      <td className="border-b border-stone-100 py-2">v{version.version}</td>
-                      <td className="border-b border-stone-100 py-2">{version.status}</td>
-                      <td className="border-b border-stone-100 py-2">{new Date(version.updatedAt).toLocaleString()}</td>
-                      <td className="border-b border-stone-100 py-2">{version.activatedAt ? new Date(version.activatedAt).toLocaleString() : "-"}</td>
+                      <td className={operationalTableCellClassName}>v{version.version}</td>
+                      <td className={operationalTableCellClassName}>{version.status}</td>
+                      <td className={operationalTableCellClassName}>{new Date(version.updatedAt).toLocaleString()}</td>
+                      <td className={operationalTableCellClassName}>{version.activatedAt ? new Date(version.activatedAt).toLocaleString() : "-"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
-          </article>
+            </OperationalTableShell>
+          </PagePanel>
 
-          <article className="rounded-lg border border-stone-200 bg-white p-4">
+          <PagePanel density="compact">
             <h3 className="font-semibold">Preview</h3>
             <p className="mt-2 text-sm text-stone-700">Use simulator for step-by-step preview and evaluation traces.</p>
-            <Link className="mt-2 inline-flex rounded border border-stone-300 px-3 py-2 text-sm" href="/simulate">Open simulator</Link>
-          </article>
+            <ButtonLink className="mt-2" href="/simulate" size="sm" variant="outline">Open simulator</ButtonLink>
+          </PagePanel>
         </div>
 
         <aside className="space-y-3">
-          <article className="rounded-lg border border-stone-200 bg-white p-4">
+          <PagePanel density="compact">
             <h3 className="font-semibold">Actions</h3>
             <div className="mt-2 grid gap-2">
-              {canWrite ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm text-left" href={`/decisions/${decisionId}/edit`}>Edit draft</Link> : null}
-              {canActivate ? <button className="rounded border border-emerald-400 px-3 py-2 text-left text-sm text-emerald-700" onClick={() => void activate()} disabled={!draft} title={!draft ? "No draft available." : undefined}>Activate</button> : null}
-              {canArchive ? <button className="rounded border border-rose-300 px-3 py-2 text-left text-sm text-rose-700" onClick={() => void archive()} disabled={!active && !draft} title={!active && !draft ? "No active or draft version." : undefined}>Archive</button> : null}
-              {canPromote ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm text-left" href={`/releases?type=decision&key=${encodeURIComponent(details.key)}`}>Promote</Link> : null}
-              <button className="rounded border border-stone-300 px-3 py-2 text-sm text-left" onClick={() => void load()}>Refresh</button>
+              {canWrite ? <ButtonLink size="sm" variant="outline" href={`/decisions/${decisionId}/edit`}>Edit draft</ButtonLink> : null}
+              {canActivate ? <Button size="sm" variant="outline" className="border-emerald-400 text-emerald-700" onClick={() => void activate()} disabled={!draft} title={!draft ? "No draft available." : undefined}>Activate</Button> : null}
+              {canArchive ? <Button size="sm" variant="outline" className="border-rose-300 text-rose-700" onClick={() => void archive()} disabled={!active && !draft} title={!active && !draft ? "No active or draft version." : undefined}>Archive</Button> : null}
+              {canPromote ? <ButtonLink size="sm" variant="outline" href={`/releases?type=decision&key=${encodeURIComponent(details.key)}`}>Promote</ButtonLink> : null}
+              <Button size="sm" variant="outline" onClick={() => void load()}>Refresh</Button>
             </div>
-          </article>
+          </PagePanel>
         </aside>
       </section>
     </section>

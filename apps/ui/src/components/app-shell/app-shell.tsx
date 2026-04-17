@@ -8,6 +8,7 @@ import { cn } from "../../lib/cn";
 import { apiClient } from "../../lib/api";
 import { usePermissions } from "../../lib/permissions";
 import { RegistryHealthWidget } from "../registry/RegistryHealthWidget";
+import { ButtonLink } from "../ui/button";
 
 type NavItem = {
   href: string;
@@ -54,10 +55,10 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Catalog",
     hint: "Activation asset library",
     items: [
-      { href: "/catalog", label: "All Assets" },
+      { href: "/catalog", label: "Asset Library" },
       { href: "/catalog/offers", label: "Offers" },
-      { href: "/catalog/content", label: "Content Blocks" },
-      { href: "/catalog/bundles", label: "Asset Bundles" }
+      { href: "/catalog/content", label: "Reusable Assets" },
+      { href: "/catalog/bundles", label: "Bundles" }
     ]
   },
   {
@@ -65,8 +66,8 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Engage",
     hint: "In-app campaign lifecycle",
     items: [
-      { href: "/engage/campaigns", label: "Campaigns" },
       { href: "/engage/calendar", label: "Campaign Calendar" },
+      { href: "/engage/campaigns", label: "Campaign Inventory" },
       { href: "/engage/experiments", label: "Experiments" },
       { href: "/engage/apps", label: "Apps" },
       { href: "/engage/placements", label: "Placements" },
@@ -101,6 +102,7 @@ const defaultOpenState: Record<NavGroup["id"], boolean> = {
   configure: false
 };
 
+const isPathInSection = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
 const isItemActive = (pathname: string, href: string) => pathname === href || (href !== "/catalog" && pathname.startsWith(`${href}/`));
 
 const navPermissionByHref: Record<string, string> = {
@@ -158,6 +160,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [quickDecisions, setQuickDecisions] = useState<Array<{ id: string; key: string; name: string }>>([]);
   const [quickStacks, setQuickStacks] = useState<Array<{ id: string; key: string; name: string }>>([]);
   const [quickCampaigns, setQuickCampaigns] = useState<Array<{ id: string; key: string; name: string }>>([]);
+  const [quickAssets, setQuickAssets] = useState<Array<{ id: string; key: string; name: string; typeLabel: string; href: string }>>([]);
   const [quickActiveIndex, setQuickActiveIndex] = useState(0);
   const shouldFilterNav = !loading && Boolean(me);
   const visibleGroups = NAV_GROUPS.map((group) => ({
@@ -170,9 +173,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       return hasPermission(permission);
     })
   })).filter((group) => group.items.length > 0);
-  const activeGroup = visibleGroups.find((group) => group.items.some((item) => isItemActive(pathname, item.href)))?.id ?? "observe";
+  const activeGroup = visibleGroups.find((group) => group.items.some((item) => isPathInSection(pathname, item.href)))?.id ?? "observe";
   const activeGroupLabel = visibleGroups.find((group) => group.id === activeGroup)?.label ?? "Observe";
-  const activeItem = visibleGroups.flatMap((group) => group.items).find((item) => isItemActive(pathname, item.href));
+  const activeItem = visibleGroups
+    .flatMap((group) => group.items)
+    .filter((item) => isItemActive(pathname, item.href))
+    .sort((a, b) => b.href.length - a.href.length)[0];
   const [groupOpen, setGroupOpen] = useState<Record<NavGroup["id"], boolean>>(defaultOpenState);
 
   useEffect(() => {
@@ -219,7 +225,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const timeout = window.setTimeout(async () => {
       setQuickLoading(true);
       try {
-        const [decisionsResponse, stacksResponse, campaignsResponse] = await Promise.all([
+        const [decisionsResponse, stacksResponse, campaignsResponse, assetsResponse] = await Promise.all([
           hasPermission("decision.read")
             ? apiClient.decisions.list({ page: 1, limit: 50, q: quickQuery.trim() || undefined })
             : Promise.resolve({ items: [] }),
@@ -228,11 +234,28 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             : Promise.resolve({ items: [] }),
           hasPermission("engage.campaign.read")
             ? apiClient.inapp.campaigns.list({ limit: 50, q: quickQuery.trim() || undefined })
+            : Promise.resolve({ items: [] }),
+          hasPermission("catalog.content.read")
+            ? apiClient.catalog.library.list({ q: quickQuery.trim() || undefined, includeUnready: true })
             : Promise.resolve({ items: [] })
         ]);
         setQuickDecisions(decisionsResponse.items.map((item) => ({ id: item.decisionId, key: item.key, name: item.name })));
         setQuickStacks(stacksResponse.items.map((item) => ({ id: item.stackId, key: item.key, name: item.name })));
         setQuickCampaigns(campaignsResponse.items.map((item) => ({ id: item.id, key: item.key, name: item.name })));
+        setQuickAssets(
+          assetsResponse.items.slice(0, 50).map((item) => ({
+            id: item.id,
+            key: item.key,
+            name: item.name,
+            typeLabel: item.assetTypeLabel,
+            href:
+              item.entityType === "offer"
+                ? `/catalog/offers?key=${encodeURIComponent(item.key)}`
+                : item.entityType === "bundle"
+                  ? `/catalog/bundles?key=${encodeURIComponent(item.key)}`
+                  : `/catalog/content?key=${encodeURIComponent(item.key)}`
+          }))
+        );
         setQuickError(null);
       } catch (error) {
         setQuickError(error instanceof Error ? error.message : "Failed to load quick-jump options");
@@ -247,13 +270,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const filteredDecisions = useMemo(() => quickDecisions.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickDecisions]);
   const filteredStacks = useMemo(() => quickStacks.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickStacks]);
   const filteredCampaigns = useMemo(() => quickCampaigns.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickCampaigns]);
+  const filteredAssets = useMemo(() => quickAssets.filter((item) => !normalizedQuick || item.key.toLowerCase().includes(normalizedQuick) || item.name.toLowerCase().includes(normalizedQuick) || item.typeLabel.toLowerCase().includes(normalizedQuick)).slice(0, 8), [normalizedQuick, quickAssets]);
   const quickItems = useMemo(
     () => [
+      ...filteredAssets.map((item) => ({ type: "asset" as const, id: item.id, key: item.key, name: item.name, href: item.href })),
       ...filteredDecisions.map((item) => ({ type: "decision" as const, id: item.id, key: item.key, name: item.name, href: `/decisions/${item.id}` })),
       ...filteredStacks.map((item) => ({ type: "stack" as const, id: item.id, key: item.key, name: item.name, href: `/stacks/${item.id}` })),
       ...filteredCampaigns.map((item) => ({ type: "campaign" as const, id: item.id, key: item.key, name: item.name, href: `/engage/campaigns/${item.id}` }))
     ],
-    [filteredCampaigns, filteredDecisions, filteredStacks]
+    [filteredAssets, filteredCampaigns, filteredDecisions, filteredStacks]
   );
 
   useEffect(() => {
@@ -288,7 +313,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4 text-lg">
           {visibleGroups.map((group) => {
-            const currentGroupActive = group.items.some((item) => isItemActive(pathname, item.href));
+            const currentGroupActive = group.items.some((item) => isPathInSection(pathname, item.href));
             const open = groupOpen[group.id];
 
             return (
@@ -357,7 +382,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               Menu
             </button>
             <div>
-              <h1 className="text-sm font-semibold text-stone-700">Decision Engine</h1>
+              <h1 className="text-sm font-semibold text-stone-700">Governed Activation</h1>
               <p className="text-sm text-stone-600">
                 {activeItem?.label ? `${activeGroupLabel} / ${activeItem.label}` : "Operational workspace"}
               </p>
@@ -368,11 +393,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <button className="control-button rounded px-3 py-2 text-sm" onClick={() => setQuickOpen(true)}>
               Cmd/Ctrl+K
             </button>
-            <Link className="control-button hidden rounded-md px-3 py-2 text-sm lg:inline-flex" href="/simulate">
-              Run Simulation
-            </Link>
+            <ButtonLink className="hidden lg:inline-flex" href="/engage/calendar" variant="outline">
+              Campaign Calendar
+            </ButtonLink>
+            <ButtonLink href="/catalog?create=asset" variant="default">
+              Create Asset
+            </ButtonLink>
             {!shouldFilterNav || hasPermission("decision.write") ? (
-              <Link className="primary-button rounded-md px-4 py-2 text-sm" href="/decisions?create=wizard">
+              <Link className="control-button hidden rounded-md px-3 py-2 text-sm xl:inline-flex" href="/decisions?create=wizard">
                 New Decision
               </Link>
             ) : null}
@@ -388,13 +416,28 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <input
               autoFocus
               className="w-full rounded border border-stone-300 px-3 py-2 text-sm"
-              placeholder="Jump to decisions, stacks, campaigns..."
+              placeholder="Jump to assets, campaigns, decisions, stacks..."
               value={quickQuery}
               onChange={(event) => setQuickQuery(event.target.value)}
             />
             {quickError ? <p className="mt-2 text-sm text-rose-700">{quickError}</p> : null}
             {quickLoading ? <p className="mt-2 text-sm text-stone-600">Loading...</p> : null}
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-stone-500">Assets</p>
+                <div className="space-y-1">
+                  {filteredAssets.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={item.href}
+                      className={`block rounded px-2 py-1 text-sm hover:bg-stone-100 ${quickItems[quickActiveIndex]?.href === item.href ? "bg-stone-100" : ""}`}
+                      onClick={() => setQuickOpen(false)}
+                    >
+                      {item.name} <span className="text-xs text-stone-500">({item.typeLabel} · {item.key})</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
               <div>
                 <p className="mb-1 text-xs font-semibold uppercase text-stone-500">Decisions</p>
                 <div className="space-y-1">

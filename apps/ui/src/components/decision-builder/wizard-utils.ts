@@ -288,11 +288,6 @@ export const conditionNodeToAttributes = (
     return { supported: false, attributes: [], reasons: [...reasons] };
   }
 
-  if (when.operator !== "all") {
-    reasons.add("Uses OR groups");
-    return { supported: false, attributes: [], reasons: [...reasons] };
-  }
-
   const attributes: AttributePredicate[] = [];
   for (const child of when.conditions) {
     if (child.type !== "predicate") {
@@ -492,8 +487,8 @@ const inspectWhenNode = (when: unknown, reasons: Set<string>) => {
     return;
   }
 
-  if (when.operator !== "all") {
-    addReason(reasons, "Uses OR groups");
+  if (when.operator !== "all" && when.operator !== "any") {
+    addReason(reasons, "Uses unsupported boolean operator");
     return;
   }
 
@@ -503,11 +498,11 @@ const inspectWhenNode = (when: unknown, reasons: Set<string>) => {
   }
 
   for (const child of when.conditions) {
-    if (!isRecord(child) || child.type !== "predicate") {
-      addReason(reasons, "Uses nested boolean groups");
+    if (!isRecord(child)) {
+      addReason(reasons, "Contains invalid boolean groups");
       continue;
     }
-    ensurePredicateSupport(child.predicate, reasons);
+    inspectWhenNode(child, reasons);
   }
 };
 

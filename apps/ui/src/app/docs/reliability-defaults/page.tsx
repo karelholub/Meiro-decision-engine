@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { ButtonLink } from "../../../components/ui/button";
+import { PageHeader, PagePanel } from "../../../components/ui/page";
 
 const cacheModes = [
   {
@@ -31,22 +32,19 @@ const defaults = [
 export default function ReliabilityDefaultsDocsPage() {
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">Reliability & Defaults Guide</h2>
-        <p className="text-sm text-stone-700">
-          Configure resilient decision behavior when Meiro WBS is slow or intermittent, without changing core decision semantics.
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2 text-sm">
-          <Link className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100" href="/decisions">
-            Open Decisions
-          </Link>
-          <Link className="rounded-md border border-stone-300 px-3 py-1 hover:bg-stone-100" href="/docs">
-            Back to Docs
-          </Link>
-        </div>
-      </header>
+      <PageHeader
+        density="compact"
+        title="Reliability & Defaults Guide"
+        description="Configure resilient decision behavior when Meiro WBS is slow or intermittent, without changing core decision semantics."
+        actions={
+          <>
+            <ButtonLink href="/decisions" size="sm" variant="outline">Open Decisions</ButtonLink>
+            <ButtonLink href="/docs" size="sm" variant="outline">Back to Docs</ButtonLink>
+          </>
+        }
+      />
 
-      <article className="panel p-4 text-sm text-stone-700">
+      <PagePanel density="compact" className="text-sm text-stone-700">
         <h3 className="font-semibold">Where to Configure</h3>
         <ol className="mt-2 list-decimal space-y-1 pl-5">
           <li>Open a draft decision in the Wizard.</li>
@@ -54,33 +52,33 @@ export default function ReliabilityDefaultsDocsPage() {
           <li>Set timeout budgets, cache mode, and fallback behavior for timeout/error.</li>
           <li>Run Test & Activate to verify returned output and debug fields.</li>
         </ol>
-      </article>
+      </PagePanel>
 
-      <article className="panel p-4 text-sm text-stone-700">
+      <PagePanel density="compact" className="text-sm text-stone-700">
         <h3 className="font-semibold">Recommended Starting Defaults</h3>
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           {defaults.map((item) => (
-            <div key={item.label} className="rounded-md border border-stone-200 p-3">
+            <div key={item.label} className="rounded-md border border-stone-200 p-2">
               <p className="font-semibold">{item.label}</p>
               <p>{item.value}</p>
             </div>
           ))}
         </div>
-      </article>
+      </PagePanel>
 
-      <article className="panel p-4 text-sm text-stone-700">
+      <PagePanel density="compact" className="text-sm text-stone-700">
         <h3 className="font-semibold">Cache Modes</h3>
         <div className="mt-2 space-y-2">
           {cacheModes.map((item) => (
-            <div key={item.mode} className="rounded-md border border-stone-200 p-3">
+            <div key={item.mode} className="rounded-md border border-stone-200 p-2">
               <p className="font-semibold">{item.mode}</p>
               <p>{item.description}</p>
             </div>
           ))}
         </div>
-      </article>
+      </PagePanel>
 
-      <article className="panel p-4 text-sm text-stone-700">
+      <PagePanel density="compact" className="text-sm text-stone-700">
         <h3 className="font-semibold">Fallback Strategy</h3>
         <p>
           For fail-open behavior, configure `onTimeout` and `onError` custom actions and enable `preferStaleCache`. For fail-closed behavior, use
@@ -90,7 +88,7 @@ export default function ReliabilityDefaultsDocsPage() {
           Runtime debug fields include `cache.hit`, `servedStale`, `fallbackReason`, `wbsLatencyMs`, and `timeoutBudgetMs` so operators can validate why
           a fallback was used.
         </p>
-      </article>
+      </PagePanel>
     </section>
   );
 }

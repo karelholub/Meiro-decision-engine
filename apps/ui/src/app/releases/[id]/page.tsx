@@ -5,6 +5,9 @@ import { useParams } from "next/navigation";
 import { apiClient, type ReleasePlanItem, type ReleaseRecord } from "../../../lib/api";
 import PermissionDenied from "../../../components/permission-denied";
 import { usePermissions } from "../../../lib/permissions";
+import { InlineError } from "../../../components/ui/app-state";
+import { Button } from "../../../components/ui/button";
+import { PageHeader, PagePanel } from "../../../components/ui/page";
 
 export default function ReleaseDetailPage() {
   const params = useParams<{ id: string }>();
@@ -59,47 +62,42 @@ export default function ReleaseDetailPage() {
 
   return (
     <section className="space-y-4">
-      <header className="panel p-4">
-        <h2 className="text-xl font-semibold">{item.key}</h2>
-        <p className="text-sm text-stone-600">
-          {item.sourceEnv} -&gt; {item.targetEnv} · {item.status}
-        </p>
-      </header>
+      <PageHeader density="compact" title={item.key} description={`${item.sourceEnv} -> ${item.targetEnv} · ${item.status}`} />
 
-      <div className="panel flex flex-wrap gap-2 p-4">
+      <PagePanel density="compact" className="flex flex-wrap gap-2">
         {hasPermission("promotion.approve") ? (
-          <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void approve()}>
+          <Button size="sm" variant="outline" onClick={() => void approve()}>
             Approve
-          </button>
+          </Button>
         ) : null}
         {hasPermission("promotion.apply") ? (
-          <button className="rounded bg-ink px-3 py-2 text-sm text-white" onClick={() => void apply()}>
+          <Button size="sm" onClick={() => void apply()}>
             Apply
-          </button>
+          </Button>
         ) : null}
-      </div>
+      </PagePanel>
 
-      {error ? <p className="text-sm text-red-700">{error}</p> : null}
+      {error ? <InlineError title="Release action failed" description={error} /> : null}
 
       {item.planJson.riskSummary ? (
-        <article className="panel p-4">
+        <PagePanel density="compact">
           <h3 className="font-semibold">Release Risk</h3>
           <p className="text-sm">
             Level: <span className="font-medium">{item.planJson.riskSummary.riskLevel}</span> · blocking {item.planJson.riskSummary.blockingCount} · high {item.planJson.riskSummary.highCount} · medium {item.planJson.riskSummary.mediumCount}
           </p>
           {item.planJson.riskSummary.notes.length > 0 ? <p className="mt-2 text-sm text-stone-700">Notes: {item.planJson.riskSummary.notes.join(" | ")}</p> : null}
           {item.planJson.riskSummary.remediationHints.length > 0 ? <p className="mt-1 text-sm text-stone-700">Remediation: {item.planJson.riskSummary.remediationHints.join(" | ")}</p> : null}
-        </article>
+        </PagePanel>
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
-        <article className="panel p-4">
+        <PagePanel density="compact">
           <h3 className="mb-2 font-semibold">Plan Items</h3>
           <div className="space-y-2 text-sm">
             {item.planJson.items.map((planItem) => (
               <button
                 key={`${planItem.type}:${planItem.key}:${planItem.version}`}
-                className="block w-full rounded border border-stone-200 px-3 py-2 text-left hover:bg-stone-50"
+                className="block w-full rounded-md border border-stone-200 px-3 py-2 text-left hover:bg-stone-50"
                 onClick={() => setSelected(planItem)}
               >
                 <p className="font-medium">
@@ -109,9 +107,9 @@ export default function ReleaseDetailPage() {
               </button>
             ))}
           </div>
-        </article>
+        </PagePanel>
 
-        <article className="panel p-4">
+        <PagePanel density="compact">
           <h3 className="mb-2 font-semibold">Diff + Risk</h3>
           {selected ? (
             <div className="space-y-2 text-sm">
@@ -128,7 +126,7 @@ export default function ReleaseDetailPage() {
           ) : (
             <p className="text-sm text-stone-600">Select a plan item to review details.</p>
           )}
-        </article>
+        </PagePanel>
       </div>
     </section>
   );
