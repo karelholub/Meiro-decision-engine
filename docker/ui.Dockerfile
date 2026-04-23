@@ -17,6 +17,9 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm fetch --filter @decisioning/ui... \
     && pnpm install --frozen-lockfile --offline --filter @decisioning/ui...
 
+FROM deps AS e2e-deps
+RUN pnpm --filter @decisioning/ui exec playwright install --with-deps chromium
+
 FROM base AS build
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
 ARG NEXT_PUBLIC_API_KEY=
@@ -33,11 +36,13 @@ COPY packages/engine packages/engine
 COPY packages/meiro packages/meiro
 RUN pnpm --filter @decisioning/ui build
 
-FROM node:20-bookworm-slim AS runtime
+FROM e2e-deps AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=build /app/apps/ui/.next/standalone ./
 COPY --from=build /app/apps/ui/.next/static ./apps/ui/.next/static
+COPY apps/ui/playwright.config.js apps/ui/playwright.config.js
+COPY apps/ui/e2e apps/ui/e2e
 EXPOSE 3000
-CMD ["node", "apps/ui/server.js"]
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 node apps/ui/server.js"]

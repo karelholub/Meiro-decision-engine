@@ -130,6 +130,11 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `POST /v1/results/cleanup`
   - `GET /v1/maintenance/retention/status`
   - `POST /v1/maintenance/retention/run`
+  - `GET /v1/meiro/campaigns`
+  - `GET/PATCH /v1/meiro/campaigns/:channel/:id`
+  - `PUT /v1/meiro/campaigns/:channel/:id/activation-settings`
+  - `POST /v1/meiro/campaigns/:channel/:id/manual-activation`
+  - `POST /v1/meiro/campaigns/:channel/:id/test-activation`
   - `GET/PUT /v1/settings/webhook-rules`
   - `POST /v1/webhooks/pipes`
   - `GET/PUT /v1/settings/pipes-callback`
@@ -151,6 +156,7 @@ TypeScript monorepo MVP for a rule-based decisioning extension designed to integ
   - `MeiroAdapter` interface
   - `MockMeiroAdapter` with seeded mock profiles
   - `RealMeiroAdapter` (`MEIRO_BASE_URL`, `MEIRO_TOKEN`, `MEIRO_TIMEOUT_MS`)
+  - Campaign control methods for `email`, `push`, and `whatsapp` channels
   - `writebackOutcome(...)` support (real adapter stub + mock in-memory recording)
 - Extensibility hooks included in API wiring:
   - pre/post policy hook
@@ -216,7 +222,7 @@ Important values:
 - CRUD endpoints also accept `?environment=DEV|STAGE|PROD` (header still supported)
 - `PROTECT_DECIDE` (`true` to protect `/v1/decide` and `/v2/inapp/decide` with API key)
 - `MEIRO_MODE` (`mock` or `real`)
-- `MEIRO_BASE_URL`, `MEIRO_TOKEN` (for real adapter)
+- `MEIRO_BASE_URL`, `MEIRO_TOKEN` (for real adapter; Meiro auth uses `X-Access-Token` with this token)
 - `MEIRO_TIMEOUT_MS` (default `1500`, profile fetch timeout in real mode)
 - `REDIS_URL` (Redis cache for realtime decisions/profile projection cache)
 - `REALTIME_CACHE_TTL_SECONDS` (default `60`)
@@ -321,6 +327,12 @@ Recommended incremental builds:
 ```bash
 docker compose build api ui
 docker compose up -d
+```
+
+Frontend Docker smoke test:
+
+```bash
+docker compose exec -T ui npm run test:e2e:smoke
 ```
 
 The Dockerfiles are multi-stage and use BuildKit cache mounts for the pnpm store. To verify layer reuse, rebuild after a source-only change and confirm `pnpm fetch` / `pnpm install` layers are reported as `CACHED`.
@@ -1203,6 +1215,7 @@ Smoke gate configuration:
 - `SMOKE_MAX_FALLBACK_RATE` (default `0.00`)
 
 Operational docs:
+- Engineering workflow: `docs/engineering-workflow.md`
 - DevOps deploy/run/monitor guide: `docs/devops-deployment-operations.md`
 - Golden signals: `docs/observability-golden-signals.md`
 - Orchestration policies guide: `docs/orchestration-policies.md`
@@ -1256,6 +1269,7 @@ Recommended promotion workflow:
 - UI logs: `apps/ui/src/app/logs/page.tsx`
 - UI docs home: `apps/ui/src/app/docs/page.tsx`
 - UI reliability docs: `apps/ui/src/app/docs/reliability-defaults/page.tsx`
+- Engineering workflow guide: `docs/engineering-workflow.md`
 - UI in-app apps: `apps/ui/src/app/engagement/inapp/apps/page.tsx`
 - UI in-app placements: `apps/ui/src/app/engagement/inapp/placements/page.tsx`
 - UI in-app templates: `apps/ui/src/app/engagement/inapp/templates/page.tsx`

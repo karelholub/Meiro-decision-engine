@@ -1,5 +1,6 @@
 import type { CampaignCalendarItem, CampaignCalendarRiskLevel } from "../../../lib/api";
 import { activationChannelLabel } from "@decisioning/shared";
+import { campaignTypeLabel } from "../../../lib/campaign-taxonomy";
 
 export type CalendarView = "month" | "week" | "list";
 export type CalendarSwimlane =
@@ -39,12 +40,14 @@ export type CalendarSavedView = {
   view: CalendarView;
   swimlane: CalendarSwimlane;
   filters: CalendarFilters;
+  segmentTarget: CalendarSegmentCoverageTarget;
 };
 
 export type CalendarPrefs = {
   activeViewId: string;
   views: CalendarSavedView[];
   swimlane: CalendarSwimlane;
+  segmentTarget: CalendarSegmentCoverageTarget;
 };
 
 export type CalendarScheduleDraft = {
@@ -131,6 +134,72 @@ export type CalendarPlanningInsights = {
   approvalQueue: CalendarApprovalQueueItem[];
 };
 
+export type CalendarSegmentCoverageStatus = "over" | "under" | "within" | "none";
+
+export type CalendarSegmentCoverageTarget = {
+  minWeeklyTouches: number;
+  maxWeeklyTouches: number;
+  maxDailyTouches: number;
+};
+
+export type CalendarSegmentMetadata = {
+  id: string;
+  name?: string | null;
+  customerCount?: number | null;
+};
+
+export type CalendarSegmentCoverageCampaign = {
+  campaignId: string;
+  campaignKey: string;
+  name: string;
+  sourceType: CampaignCalendarItem["sourceType"];
+  channel: CampaignCalendarItem["channel"];
+  status: CampaignCalendarItem["status"];
+  readiness: CampaignCalendarItem["planningReadiness"]["status"];
+  startAt: string | null;
+  endAt: string | null;
+  campaignTypeTags: string[];
+  pressureRiskLevel: CampaignCalendarRiskLevel;
+  overlapRiskLevel: CampaignCalendarRiskLevel;
+  detailHref: string;
+};
+
+export type CalendarSegmentCoverageBreakdown = {
+  key: string;
+  label: string;
+  count: number;
+};
+
+export type CalendarSegmentCoverageItem = {
+  id: string;
+  audienceKey: string;
+  name: string;
+  customerCount: number | null;
+  plannedCampaigns: number;
+  activeCampaigns: number;
+  maxSameDayTouches: number;
+  maxSameWeekTouches: number;
+  unscheduledCampaigns: number;
+  campaignKeys: string[];
+  campaigns: CalendarSegmentCoverageCampaign[];
+  channelBreakdown: CalendarSegmentCoverageBreakdown[];
+  campaignTypeBreakdown: CalendarSegmentCoverageBreakdown[];
+  status: CalendarSegmentCoverageStatus;
+  detail: string;
+  riskLevel: CalendarLoadLevel;
+};
+
+export type CalendarSegmentCoverageSummary = {
+  totalSegments: number;
+  withPlannedActivity: number;
+  overTarget: number;
+  underTarget: number;
+  withinTarget: number;
+  noPlannedActivity: number;
+  unknownReferencedSegments: number;
+  items: CalendarSegmentCoverageItem[];
+};
+
 export type CalendarExportSummary = {
   total: number;
   scheduled: number;
@@ -195,63 +264,105 @@ export const defaultCalendarFilters = (): CalendarFilters => ({
   includeArchived: false
 });
 
+export const defaultCalendarSegmentTarget = (): CalendarSegmentCoverageTarget => ({
+  minWeeklyTouches: 1,
+  maxWeeklyTouches: 3,
+  maxDailyTouches: 1
+});
+
 export const defaultCalendarViews = (): CalendarSavedView[] => [
   {
     id: "planning_risks",
     name: "Planning risks",
     view: "month",
     swimlane: "readiness",
-    filters: defaultCalendarFilters()
+    filters: defaultCalendarFilters(),
+    segmentTarget: defaultCalendarSegmentTarget()
   },
   {
     id: "pending_approval",
     name: "Pending approval",
     view: "week",
     swimlane: "planning_state",
-    filters: { ...defaultCalendarFilters(), status: "PENDING_APPROVAL" }
+    filters: { ...defaultCalendarFilters(), status: "PENDING_APPROVAL" },
+    segmentTarget: defaultCalendarSegmentTarget()
   },
   {
     id: "placement_plan",
     name: "Placement plan",
     view: "month",
     swimlane: "placement",
-    filters: defaultCalendarFilters()
+    filters: defaultCalendarFilters(),
+    segmentTarget: defaultCalendarSegmentTarget()
   },
   {
     id: "asset_pressure",
     name: "Asset pressure",
     view: "month",
     swimlane: "asset",
-    filters: defaultCalendarFilters()
+    filters: defaultCalendarFilters(),
+    segmentTarget: defaultCalendarSegmentTarget()
   },
   {
     id: "channel_plan",
     name: "Channel plan",
     view: "week",
     swimlane: "channel",
-    filters: defaultCalendarFilters()
+    filters: defaultCalendarFilters(),
+    segmentTarget: defaultCalendarSegmentTarget()
   },
   {
     id: "audience_overlaps",
     name: "Audience overlaps",
     view: "month",
     swimlane: "audience",
-    filters: defaultCalendarFilters()
+    filters: defaultCalendarFilters(),
+    segmentTarget: defaultCalendarSegmentTarget()
   },
   {
     id: "pressure_hotspots",
     name: "Pressure hotspots",
     view: "week",
     swimlane: "pressure_risk",
-    filters: { ...defaultCalendarFilters(), needsAttentionOnly: true }
+    filters: { ...defaultCalendarFilters(), needsAttentionOnly: true },
+    segmentTarget: defaultCalendarSegmentTarget()
   }
 ];
 
 export const defaultCalendarPrefs = (): CalendarPrefs => ({
   activeViewId: "planning_risks",
   views: defaultCalendarViews(),
-  swimlane: "readiness"
+  swimlane: "readiness",
+  segmentTarget: defaultCalendarSegmentTarget()
 });
+
+const normalizeCalendarSegmentTarget = (value: unknown): CalendarSegmentCoverageTarget => {
+  const defaults = defaultCalendarSegmentTarget();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return defaults;
+  }
+  const record = value as Partial<Record<keyof CalendarSegmentCoverageTarget, unknown>>;
+  const minWeeklyTouches = typeof record.minWeeklyTouches === "number" && Number.isFinite(record.minWeeklyTouches) ? record.minWeeklyTouches : defaults.minWeeklyTouches;
+  const maxWeeklyTouches = typeof record.maxWeeklyTouches === "number" && Number.isFinite(record.maxWeeklyTouches) ? record.maxWeeklyTouches : defaults.maxWeeklyTouches;
+  const maxDailyTouches = typeof record.maxDailyTouches === "number" && Number.isFinite(record.maxDailyTouches) ? record.maxDailyTouches : defaults.maxDailyTouches;
+  return {
+    minWeeklyTouches: Math.max(0, Math.floor(minWeeklyTouches)),
+    maxWeeklyTouches: Math.max(1, Math.floor(maxWeeklyTouches)),
+    maxDailyTouches: Math.max(1, Math.floor(maxDailyTouches))
+  };
+};
+
+const normalizeCalendarSavedViews = (value: unknown): CalendarSavedView[] => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return defaultCalendarViews();
+  }
+  return value
+    .filter((entry): entry is CalendarSavedView => Boolean(entry) && typeof entry === "object")
+    .map((entry) => ({
+      ...entry,
+      segmentTarget: normalizeCalendarSegmentTarget((entry as Partial<CalendarSavedView>).segmentTarget)
+    }));
+};
 
 export const loadCalendarPrefs = (): CalendarPrefs => {
   if (typeof window === "undefined") {
@@ -263,8 +374,9 @@ export const loadCalendarPrefs = (): CalendarPrefs => {
     const parsed = JSON.parse(raw) as Partial<CalendarPrefs>;
     return {
       activeViewId: typeof parsed.activeViewId === "string" ? parsed.activeViewId : "planning_risks",
-      views: Array.isArray(parsed.views) && parsed.views.length > 0 ? parsed.views : defaultCalendarViews(),
-      swimlane: isCalendarSwimlane(parsed.swimlane) ? parsed.swimlane : "readiness"
+      views: normalizeCalendarSavedViews(parsed.views),
+      swimlane: isCalendarSwimlane(parsed.swimlane) ? parsed.swimlane : "readiness",
+      segmentTarget: normalizeCalendarSegmentTarget(parsed.segmentTarget)
     };
   } catch {
     return defaultCalendarPrefs();
@@ -313,6 +425,7 @@ export const calendarChannelLabel = (channel: CampaignCalendarItem["channel"]) =
 
 export const calendarSourceTypeLabel = (sourceType: CampaignCalendarItem["sourceType"]) => {
   if (sourceType === "in_app_campaign") return "In-app campaign";
+  if (sourceType === "meiro_campaign") return "Meiro campaign";
   return sourceType;
 };
 
@@ -344,7 +457,8 @@ export const calendarPressureSignalLabel = (signal: string) => {
     same_placement: "Same placement",
     asset_reuse: "Asset reuse",
     cap_pressure: "Cap pressure",
-    channel_density: "Channel density"
+    channel_density: "Channel density",
+    priority_arbitration: "Priority arbitration"
   };
   return labels[signal] ?? warningLabel(signal);
 };
@@ -487,10 +601,13 @@ export const calendarCampaignActionLabel = (action: CalendarCampaignAction) => {
 };
 
 export const calendarCampaignActionOptions = (
-  item: Pick<CampaignCalendarItem, "status" | "planningReadiness">,
+  item: Pick<CampaignCalendarItem, "status" | "planningReadiness" | "sourceType">,
   permissions: CalendarCampaignActionPermission
 ): CalendarCampaignActionOption[] => {
   const options: CalendarCampaignActionOption[] = [];
+  if (item.sourceType !== "in_app_campaign") {
+    return options;
+  }
 
   if (permissions.canWrite && (item.status === "DRAFT" || item.status === "ACTIVE")) {
     options.push({
@@ -576,6 +693,178 @@ const itemOverlapsDay = (item: Pick<CampaignCalendarItem, "startAt" | "endAt">, 
   const target = startOfUtcDay(day).getTime();
   if (Number.isNaN(start) || Number.isNaN(end)) return false;
   return start <= target && target <= end;
+};
+
+const itemOverlapsRange = (item: Pick<CampaignCalendarItem, "startAt" | "endAt">, from: Date, to: Date) => {
+  if (!item.startAt || !item.endAt) return false;
+  const start = new Date(item.startAt).getTime();
+  const end = new Date(item.endAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return false;
+  return start <= to.getTime() && from.getTime() <= end;
+};
+
+const weekKeyForDate = (date: Date) => formatDateInput(startOfWeek(date));
+
+const normalizeSegmentAudienceKey = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed.startsWith("meiro_segment:") ? trimmed.slice("meiro_segment:".length) : trimmed;
+};
+
+const campaignTypeTagsForItem = (item: CampaignCalendarItem) =>
+  item.orchestrationMarkers.filter((marker) => marker.startsWith("campaign_type:")).sort((left, right) => left.localeCompare(right));
+
+const buildBreakdown = <T,>(items: T[], getEntries: (item: T) => CalendarSegmentCoverageBreakdown[]) => {
+  const counts = new Map<string, CalendarSegmentCoverageBreakdown>();
+  for (const item of items) {
+    for (const entry of getEntries(item)) {
+      const current = counts.get(entry.key);
+      counts.set(entry.key, {
+        ...entry,
+        count: (current?.count ?? 0) + entry.count
+      });
+    }
+  }
+  return [...counts.values()].sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+};
+
+export const buildCalendarSegmentCoverage = (input: {
+  items: CampaignCalendarItem[];
+  segments: CalendarSegmentMetadata[];
+  days: Date[];
+  target: CalendarSegmentCoverageTarget;
+}): CalendarSegmentCoverageSummary => {
+  const segmentById = new Map<string, CalendarSegmentMetadata>();
+  for (const segment of input.segments) {
+    segmentById.set(normalizeSegmentAudienceKey(segment.id), segment);
+  }
+
+  const referencedIds = new Set<string>();
+  for (const item of input.items) {
+    for (const audience of item.audienceKeys) {
+      referencedIds.add(normalizeSegmentAudienceKey(audience));
+    }
+  }
+
+  const allIds = new Set([...segmentById.keys(), ...referencedIds]);
+  const days = input.days.length > 0 ? input.days : [];
+  const windowFrom = days[0] ?? null;
+  const windowTo = days[days.length - 1] ? endOfUtcDay(days[days.length - 1]!) : null;
+
+  const coverageItems = [...allIds].map<CalendarSegmentCoverageItem>((id) => {
+    const metadata = segmentById.get(id);
+    const audienceKeys = new Set([id, `meiro_segment:${id}`]);
+    const matchingItems = input.items.filter((item) => item.audienceKeys.some((audience) => audienceKeys.has(audience)));
+    const scheduledItems = windowFrom && windowTo ? matchingItems.filter((item) => itemOverlapsRange(item, windowFrom, windowTo)) : [];
+    const unscheduledCampaigns = matchingItems.filter((item) => !item.startAt || !item.endAt).length;
+
+    const dayCounts = days.map((day) => scheduledItems.filter((item) => itemOverlapsDay(item, day)).length);
+    const weekCounts = new Map<string, number>();
+    for (const day of days) {
+      const weekKey = weekKeyForDate(day);
+      if (weekCounts.has(weekKey)) {
+        continue;
+      }
+      const weekStart = startOfWeek(day);
+      const weekEnd = endOfWeek(day);
+      const count = scheduledItems.filter((item) => itemOverlapsRange(item, weekStart, weekEnd)).length;
+      weekCounts.set(weekKey, count);
+    }
+
+    const maxSameDayTouches = Math.max(0, ...dayCounts);
+    const maxSameWeekTouches = Math.max(0, ...weekCounts.values());
+    const plannedCampaigns = scheduledItems.length;
+    const activeCampaigns = scheduledItems.filter((item) => item.status === "ACTIVE").length;
+    const campaigns = matchingItems
+      .map<CalendarSegmentCoverageCampaign>((item) => ({
+        campaignId: item.campaignId,
+        campaignKey: item.campaignKey,
+        name: item.name,
+        sourceType: item.sourceType,
+        channel: item.channel,
+        status: item.status,
+        readiness: item.planningReadiness.status,
+        startAt: item.startAt,
+        endAt: item.endAt,
+        campaignTypeTags: campaignTypeTagsForItem(item),
+        pressureRiskLevel: item.pressureRiskLevel,
+        overlapRiskLevel: item.overlapRiskLevel,
+        detailHref:
+          item.drilldownTargets.find((target) => target.type === "campaign" || target.type === "meiro_campaign")?.href ??
+          `/engage/campaigns/${item.campaignId}`
+      }))
+      .sort((left, right) => {
+        const leftTime = left.startAt ? new Date(left.startAt).getTime() : Number.POSITIVE_INFINITY;
+        const rightTime = right.startAt ? new Date(right.startAt).getTime() : Number.POSITIVE_INFINITY;
+        return leftTime - rightTime || left.campaignKey.localeCompare(right.campaignKey);
+      });
+    const channelBreakdown = buildBreakdown(scheduledItems, (item) => [
+      { key: item.channel, label: calendarChannelLabel(item.channel), count: 1 }
+    ]);
+    const campaignTypeBreakdown = buildBreakdown(scheduledItems, (item) => {
+      const tags = campaignTypeTagsForItem(item);
+      if (tags.length === 0) {
+        return [{ key: "unclassified", label: "Unclassified", count: 1 }];
+      }
+      return tags.map((tag) => ({
+        key: tag,
+        label: campaignTypeLabel(tag.replace(/^campaign_type:/, "")),
+        count: 1
+      }));
+    });
+
+    let status: CalendarSegmentCoverageStatus = "within";
+    let riskLevel: CalendarLoadLevel = "low";
+    let detail = `${plannedCampaigns} planned campaign${plannedCampaigns === 1 ? "" : "s"} in this window.`;
+
+    if (plannedCampaigns === 0) {
+      status = "none";
+      riskLevel = "medium";
+      detail = "No planned campaigns with this exact segment reference in the visible window.";
+    } else if (maxSameDayTouches > input.target.maxDailyTouches || maxSameWeekTouches > input.target.maxWeeklyTouches) {
+      status = "over";
+      riskLevel = maxSameDayTouches > input.target.maxDailyTouches + 1 || maxSameWeekTouches > input.target.maxWeeklyTouches + 1 ? "critical" : "high";
+      detail = `Above target: max ${maxSameDayTouches}/day and ${maxSameWeekTouches}/week.`;
+    } else if (maxSameWeekTouches < input.target.minWeeklyTouches) {
+      status = "under";
+      riskLevel = "medium";
+      detail = `Below target: max ${maxSameWeekTouches}/week, target minimum is ${input.target.minWeeklyTouches}/week.`;
+    }
+
+    return {
+      id,
+      audienceKey: `meiro_segment:${id}`,
+      name: metadata?.name ?? id,
+      customerCount: metadata?.customerCount ?? null,
+      plannedCampaigns,
+      activeCampaigns,
+      maxSameDayTouches,
+      maxSameWeekTouches,
+      unscheduledCampaigns,
+      campaignKeys: [...new Set(matchingItems.map((item) => item.campaignKey))].sort((a, b) => a.localeCompare(b)).slice(0, 8),
+      campaigns,
+      channelBreakdown,
+      campaignTypeBreakdown,
+      status,
+      detail,
+      riskLevel
+    };
+  });
+
+  const sortedItems = coverageItems.sort((a, b) => {
+    const order: Record<CalendarSegmentCoverageStatus, number> = { over: 0, under: 1, none: 2, within: 3 };
+    return order[a.status] - order[b.status] || b.maxSameWeekTouches - a.maxSameWeekTouches || b.plannedCampaigns - a.plannedCampaigns || a.name.localeCompare(b.name);
+  });
+
+  return {
+    totalSegments: allIds.size,
+    withPlannedActivity: coverageItems.filter((item) => item.plannedCampaigns > 0).length,
+    overTarget: coverageItems.filter((item) => item.status === "over").length,
+    underTarget: coverageItems.filter((item) => item.status === "under").length,
+    withinTarget: coverageItems.filter((item) => item.status === "within").length,
+    noPlannedActivity: coverageItems.filter((item) => item.status === "none").length,
+    unknownReferencedSegments: [...referencedIds].filter((id) => !segmentById.has(id)).length,
+    items: sortedItems
+  };
 };
 
 const daysUntil = (value: string | null, now: Date) => {
@@ -861,8 +1150,10 @@ export const calendarShareParams = (input: {
   swimlane: CalendarSwimlane;
   from: Date;
   filters: CalendarFilters;
+  segmentTarget?: CalendarSegmentCoverageTarget;
 }) => {
   const params = new URLSearchParams();
+  const defaultTarget = defaultCalendarSegmentTarget();
   params.set("view", input.view);
   params.set("from", formatDateInput(input.from));
   if (input.swimlane !== "none") params.set("swimlane", input.swimlane);
@@ -880,6 +1171,9 @@ export const calendarShareParams = (input: {
   if (input.filters.pressureSignal.trim()) params.set("pressureSignal", input.filters.pressureSignal.trim());
   if (input.filters.needsAttentionOnly) params.set("needsAttentionOnly", "true");
   if (input.filters.includeArchived) params.set("includeArchived", "true");
+  if (input.segmentTarget && input.segmentTarget.minWeeklyTouches !== defaultTarget.minWeeklyTouches) params.set("segmentMinWeekly", String(input.segmentTarget.minWeeklyTouches));
+  if (input.segmentTarget && input.segmentTarget.maxWeeklyTouches !== defaultTarget.maxWeeklyTouches) params.set("segmentMaxWeekly", String(input.segmentTarget.maxWeeklyTouches));
+  if (input.segmentTarget && input.segmentTarget.maxDailyTouches !== defaultTarget.maxDailyTouches) params.set("segmentMaxDaily", String(input.segmentTarget.maxDailyTouches));
   return params;
 };
 

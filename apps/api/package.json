@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "bench:decide": "tsx scripts/bench-decide.ts",
+    "validate:meiro-campaigns": "node --import tsx scripts/validate-meiro-campaign-control.ts",
     "smoke:inapp": "node --import tsx scripts/load-smoke-inapp-v2.ts",
     "drill:dependency": "node --import tsx scripts/incident-drill-dependency.ts",
     "prisma:generate": "prisma generate",

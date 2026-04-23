@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
     "test": "vitest run --passWithNoTests",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test e2e/docker.smoke.playwright.js"
   },
   "dependencies": {
     "@decisioning/dsl": "workspace:*",

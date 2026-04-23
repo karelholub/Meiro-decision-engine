@@ -13,6 +13,7 @@ export interface ActionDescriptorV1 {
   offerKey?: string;
   contentKey?: string;
   campaignKey?: string;
+  audienceKeys?: string[];
   tags: string[];
   metadata?: Record<string, unknown>;
 }

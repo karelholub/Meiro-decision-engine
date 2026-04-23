@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { Button } from "../../../components/ui/button";
 import {
   OperationalTableShell,
@@ -59,8 +60,9 @@ export default function PrecomputeRunsPage() {
   const [cohortType, setCohortType] = useState<"profiles" | "lookups" | "segment">("profiles");
   const [profilesText, setProfilesText] = useState("p-1001\np-1002");
   const [lookupsText, setLookupsText] = useState("email:alex@example.com");
+  const [segmentSource, setSegmentSource] = useState<"meiro" | "manual">("meiro");
   const [segmentAttribute, setSegmentAttribute] = useState("audience");
-  const [segmentValue, setSegmentValue] = useState("winback");
+  const [segmentValue, setSegmentValue] = useState("");
   const [contextText, setContextText] = useState("{\"appKey\":\"meiro_store\",\"placement\":\"home_top\"}");
   const [ttlSecondsDefault, setTtlSecondsDefault] = useState("86400");
   const [overwrite, setOverwrite] = useState(false);
@@ -77,6 +79,36 @@ export default function PrecomputeRunsPage() {
   useEffect(() => {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const segment = params.get("segment") ?? params.get("segmentId") ?? params.get("audienceKey") ?? params.get("audience");
+    if (segment) {
+      const normalized = segment.startsWith("meiro_segment:") ? segment.slice("meiro_segment:".length) : segment;
+      setCohortType("segment");
+      setSegmentSource("meiro");
+      setSegmentAttribute("audience");
+      setSegmentValue(normalized);
+      setMessage(`Prepared Meiro segment precompute for meiro_segment:${normalized}.`);
+    }
+    const contextAppKey = params.get("appKey");
+    const contextPlacement = params.get("placement") ?? params.get("placementKey");
+    if (contextAppKey || contextPlacement) {
+      setContextText(
+        JSON.stringify(
+          {
+            ...(contextAppKey ? { appKey: contextAppKey } : {}),
+            ...(contextPlacement ? { placement: contextPlacement } : {})
+          },
+          null,
+          2
+        )
+      );
+    }
   }, []);
 
   const loadRuns = async (manual = false, preserveMessage = false) => {
@@ -105,13 +137,30 @@ export default function PrecomputeRunsPage() {
   const createRun = async () => {
     setCreatingRun(true);
     try {
+      if (!key.trim()) {
+        setMessage("Key is required.");
+        return;
+      }
       const parsedContext = contextText.trim() ? (JSON.parse(contextText) as Record<string, unknown>) : {};
+      const normalizedSegmentAttribute = segmentSource === "meiro" ? "audience" : segmentAttribute.trim();
+      const normalizedSegmentValue =
+        segmentSource === "meiro"
+          ? segmentValue.trim().startsWith("meiro_segment:")
+            ? segmentValue.trim()
+            : `meiro_segment:${segmentValue.trim()}`
+          : segmentValue.trim();
+
+      if (cohortType === "segment" && (!normalizedSegmentAttribute || !segmentValue.trim())) {
+        setMessage(segmentSource === "meiro" ? "Select a Meiro segment before creating the run." : "Segment attribute and value are required.");
+        return;
+      }
+
       const payload =
         cohortType === "profiles"
           ? {
               runKey: runKey.trim() || suggestedRunKey,
               mode,
-              key,
+              key: key.trim(),
               cohort: {
                 type: "profiles" as const,
                 profiles: parseProfiles(profilesText)
@@ -124,7 +173,7 @@ export default function PrecomputeRunsPage() {
             ? {
                 runKey: runKey.trim() || suggestedRunKey,
                 mode,
-                key,
+                key: key.trim(),
                 cohort: {
                   type: "lookups" as const,
                   lookups: parseLookups(lookupsText)
@@ -136,12 +185,12 @@ export default function PrecomputeRunsPage() {
             : {
                 runKey: runKey.trim() || suggestedRunKey,
                 mode,
-                key,
+                key: key.trim(),
                 cohort: {
                   type: "segment" as const,
                   segment: {
-                    attribute: segmentAttribute,
-                    value: segmentValue
+                    attribute: normalizedSegmentAttribute,
+                    value: normalizedSegmentValue
                   }
                 },
                 context: parsedContext,
@@ -229,14 +278,45 @@ export default function PrecomputeRunsPage() {
 
         {cohortType === "segment" ? (
           <>
-            <FieldLabel className="flex flex-col gap-1">
-              Segment attribute
-              <input className={inputClassName} value={segmentAttribute} onChange={(event) => setSegmentAttribute(event.target.value)} />
+            <FieldLabel className="flex flex-col gap-1 md:col-span-2">
+              Segment source
+              <select
+                className={inputClassName}
+                value={segmentSource}
+                onChange={(event) => {
+                  const next = event.target.value as "meiro" | "manual";
+                  setSegmentSource(next);
+                  if (next === "meiro") {
+                    setSegmentAttribute("audience");
+                  }
+                }}
+              >
+                <option value="meiro">Meiro segment</option>
+                <option value="manual">Manual cached segment reference</option>
+              </select>
             </FieldLabel>
-            <FieldLabel className="flex flex-col gap-1">
-              Segment value
-              <input className={inputClassName} value={segmentValue} onChange={(event) => setSegmentValue(event.target.value)} />
-            </FieldLabel>
+            {segmentSource === "meiro" ? (
+              <div className="md:col-span-2">
+                <FieldLabel className="flex flex-col gap-1">
+                  Meiro segment
+                  <MeiroSegmentPicker value={segmentValue} onChange={setSegmentValue} placeholder="Search or select a Meiro segment" />
+                </FieldLabel>
+                <p className="mt-1 text-xs text-stone-600">
+                  Runs resolve this segment against profiles already cached or upserted locally with matching Meiro audience membership.
+                </p>
+              </div>
+            ) : (
+              <>
+                <FieldLabel className="flex flex-col gap-1">
+                  Segment attribute
+                  <input className={inputClassName} value={segmentAttribute} onChange={(event) => setSegmentAttribute(event.target.value)} />
+                </FieldLabel>
+                <FieldLabel className="flex flex-col gap-1">
+                  Segment value
+                  <input className={inputClassName} value={segmentValue} onChange={(event) => setSegmentValue(event.target.value)} />
+                </FieldLabel>
+              </>
+            )}
           </>
         ) : null}
 

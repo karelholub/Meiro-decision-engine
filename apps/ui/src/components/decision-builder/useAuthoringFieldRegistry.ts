@@ -23,6 +23,20 @@ const inferType = (mapping: WbsMappingAttributeRule): FieldDataType => {
   return "string";
 };
 
+const inferMeiroType = (dataType: string): FieldDataType => {
+  const normalized = dataType.toLowerCase();
+  if (normalized === "int" || normalized === "float" || normalized === "number") {
+    return "number";
+  }
+  if (normalized === "bool" || normalized === "boolean") {
+    return "boolean";
+  }
+  if (normalized === "compound" || normalized.includes("array")) {
+    return "array";
+  }
+  return "string";
+};
+
 const humanize = (value: string) =>
   value
     .replace(/_/g, " ")
@@ -46,6 +60,7 @@ const mergeRegistries = (base: FieldRegistryItem[], mapped: FieldRegistryItem[])
 
 export function useAuthoringFieldRegistry() {
   const [mappedFields, setMappedFields] = useState<FieldRegistryItem[]>([]);
+  const [meiroFields, setMeiroFields] = useState<FieldRegistryItem[]>([]);
   const [sourceLabel, setSourceLabel] = useState("Built-in profile fields");
 
   useEffect(() => {
@@ -90,11 +105,42 @@ export function useAuthoringFieldRegistry() {
     };
   }, []);
 
-  const registry = useMemo(() => mergeRegistries(fallbackFieldRegistry, mappedFields), [mappedFields]);
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const response = await apiClient.meiro.mcp.attributes();
+        if (cancelled) {
+          return;
+        }
+        setMeiroFields(
+          response.items.map((attribute) => ({
+            field: attribute.id,
+            label: attribute.name,
+            dataType: inferMeiroType(attribute.dataType),
+            description: attribute.description ?? undefined,
+            common: false
+          }))
+        );
+      } catch {
+        if (!cancelled) {
+          setMeiroFields([]);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const registry = useMemo(() => mergeRegistries(mergeRegistries(fallbackFieldRegistry, mappedFields), meiroFields), [mappedFields, meiroFields]);
 
   return {
     registry,
-    sourceLabel,
-    mappedFieldCount: mappedFields.length
+    sourceLabel: meiroFields.length > 0 ? `${sourceLabel} + Meiro CDP attributes` : sourceLabel,
+    mappedFieldCount: mappedFields.length + meiroFields.length
   };
 }

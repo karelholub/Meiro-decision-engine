@@ -37,6 +37,12 @@ services:
       PROTECT_DECIDE: "false"
       API_RUNTIME_ROLE: all
       MEIRO_MODE: mock
+      MEIRO_MCP_ENABLED: ${MEIRO_MCP_ENABLED:-false}
+      MEIRO_MCP_COMMAND: ${MEIRO_MCP_COMMAND:-uvx}
+      MEIRO_MCP_ARGS: ${MEIRO_MCP_ARGS:-meiro-mcp}
+      MEIRO_DOMAIN: ${MEIRO_DOMAIN:-https://cdp.store.demo.meiro.io}
+      MEIRO_USERNAME: ${MEIRO_USERNAME:-}
+      MEIRO_PASSWORD: ${MEIRO_PASSWORD:-}
       REDIS_URL: redis://redis:6379
       REALTIME_CACHE_TTL_SECONDS: 60
       PROFILE_CACHE_TTL_SECONDS: 30
@@ -94,6 +100,10 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
       NEXT_PUBLIC_API_KEY: local-write-key
+      E2E_UI_BASE_URL: http://localhost:3000
+      E2E_BROWSER_API_BASE_URL: http://localhost:3001
+      E2E_API_BASE_URL: http://api:3001
+      E2E_API_KEY: local-write-key
       PORT: 3000
     depends_on:
       api:

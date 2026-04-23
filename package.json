@@ -13,6 +13,7 @@
     "db:seed": "pnpm --filter @decisioning/api prisma:seed",
     "bench:decide": "pnpm --filter @decisioning/api bench:decide",
     "smoke:inapp": "pnpm --filter @decisioning/api smoke:inapp",
+    "test:e2e:smoke": "pnpm --filter @decisioning/ui test:e2e:smoke",
     "drill:dependency": "pnpm --filter @decisioning/api drill:dependency",
     "release:gates": "pnpm --filter @decisioning/api prisma:generate && pnpm --filter @decisioning/api build && pnpm --filter @decisioning/api test && pnpm --filter @decisioning/api smoke:inapp",
     "docker:build": "DOCKER_BUILDKIT=1 docker buildx build -f docker/api.Dockerfile -t decisioning-api:local . --load && DOCKER_BUILDKIT=1 docker buildx build -f docker/ui.Dockerfile -t decisioning-ui:local . --load",

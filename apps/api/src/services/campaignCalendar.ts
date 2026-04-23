@@ -7,7 +7,7 @@ import {
   type ActivationAssetType
 } from "./activationAssetLibrary";
 
-export type CampaignCalendarSourceType = "in_app_campaign";
+export type CampaignCalendarSourceType = "in_app_campaign" | "meiro_campaign";
 export type CampaignCalendarApprovalState = "draft" | "pending_approval" | "approved_or_active" | "archived";
 export type CampaignCalendarPlanningState =
   | "briefing"
@@ -105,9 +105,20 @@ export interface CampaignCalendarInput {
   name: string;
   description?: string | null;
   status: InAppCampaignStatus;
+  sourceType?: CampaignCalendarSourceType;
   appKey: string;
   placementKey: string;
   templateKey: string;
+  owner?: string | null;
+  channel?: ActivationAssetChannel | "unknown";
+  channels?: ActivationAssetChannel[];
+  placementSummary?: string | null;
+  templateSummary?: string | null;
+  assetSummary?: string | null;
+  approvalSummary?: string | null;
+  orchestrationSummary?: string | null;
+  orchestrationMarkers?: string[];
+  drilldownTargets?: CampaignCalendarItem["drilldownTargets"];
   contentKey?: string | null;
   offerKey?: string | null;
   experimentKey?: string | null;
@@ -183,7 +194,7 @@ export interface CampaignCalendarItem {
   orchestrationSummary: string | null;
   orchestrationMarkers: string[];
   drilldownTargets: Array<{
-    type: "campaign" | "campaign_editor" | "content" | "offer";
+    type: "campaign" | "campaign_editor" | "content" | "offer" | "meiro_campaign";
     label: string;
     href: string;
   }>;
@@ -513,6 +524,9 @@ const campaignChannel = (channels: ActivationAssetChannel[]): CampaignCalendarIt
 
 const assetRefsForItem = (item: Pick<CampaignCalendarItem, "linkedAssets">) => item.linkedAssets.map((asset) => `${asset.kind}:${asset.key}`);
 
+const hasGroundedPlacementRef = (item: Pick<CampaignCalendarItem, "sourceType" | "placementKey">) =>
+  item.sourceType !== "meiro_campaign" || (item.placementKey !== "unplaced" && item.placementKey.trim().length > 0);
+
 const emptyOverlapSummary = (): CampaignCalendarOverlapSummary => ({
   riskLevel: "none",
   overlapCount: 0,
@@ -549,6 +563,7 @@ const campaignAudienceSummary = (audienceKeys: string[]) => {
 };
 
 const campaignApprovalSummary = (campaign: CampaignCalendarInput) => {
+  if (campaign.approvalSummary) return campaign.approvalSummary;
   if (campaign.status === InAppCampaignStatus.ACTIVE) return campaign.activatedAt ? `Activated ${toIso(campaign.activatedAt)}` : "Active";
   if (campaign.status === InAppCampaignStatus.PENDING_APPROVAL) {
     return campaign.submittedAt ? `Pending approval since ${toIso(campaign.submittedAt)}` : "Pending approval";
@@ -558,6 +573,7 @@ const campaignApprovalSummary = (campaign: CampaignCalendarInput) => {
 };
 
 const campaignOrchestrationMarkers = (campaign: CampaignCalendarInput) => {
+  if (campaign.orchestrationMarkers) return campaign.orchestrationMarkers;
   const markers: string[] = [`priority:${campaign.priority}`];
   if (campaign.capsPerProfilePerDay) markers.push(`cap_day:${campaign.capsPerProfilePerDay}`);
   if (campaign.capsPerProfilePerWeek) markers.push(`cap_week:${campaign.capsPerProfilePerWeek}`);
@@ -565,6 +581,7 @@ const campaignOrchestrationMarkers = (campaign: CampaignCalendarInput) => {
 };
 
 const campaignOrchestrationSummary = (campaign: CampaignCalendarInput) => {
+  if (campaign.orchestrationSummary !== undefined) return campaign.orchestrationSummary;
   const caps = [
     campaign.capsPerProfilePerDay ? `${campaign.capsPerProfilePerDay}/profile/day` : null,
     campaign.capsPerProfilePerWeek ? `${campaign.capsPerProfilePerWeek}/profile/week` : null
@@ -573,8 +590,10 @@ const campaignOrchestrationSummary = (campaign: CampaignCalendarInput) => {
 };
 
 const campaignDrilldownTargets = (campaign: CampaignCalendarInput, linkedAssets: CampaignCalendarLinkedAsset[]): CampaignCalendarItem["drilldownTargets"] => [
-  { type: "campaign", label: "Open campaign", href: `/engage/campaigns/${campaign.id}` },
-  { type: "campaign_editor", label: "Open editor", href: `/engage/campaigns/${campaign.id}/edit` },
+  ...(campaign.drilldownTargets ?? [
+    { type: "campaign" as const, label: "Open campaign", href: `/engage/campaigns/${campaign.id}` },
+    { type: "campaign_editor" as const, label: "Open editor", href: `/engage/campaigns/${campaign.id}/edit` }
+  ]),
   ...linkedAssets.map<CampaignCalendarItem["drilldownTargets"][number]>((asset) => ({
     type: asset.kind,
     label: `Open ${asset.assetTypeLabel}`,
@@ -776,19 +795,24 @@ const buildReadiness = (input: {
     addCheck("approval", startsSoon ? "blocking" : "warning", startsSoon ? "Draft campaign starts within 7 days." : "Campaign still needs review or activation.");
   }
 
-  const expectedAssets = [input.campaign.contentKey, input.campaign.offerKey].filter(Boolean).length;
-  addCheck(
-    "assets_linked",
-    expectedAssets === input.linkedAssets.length && input.linkedAssets.length > 0 ? "passed" : expectedAssets > 0 ? "blocking" : "warning",
-    input.linkedAssets.length > 0 ? `${input.linkedAssets.length} governed asset${input.linkedAssets.length === 1 ? "" : "s"} linked.` : "No governed assets are linked yet."
-  );
+  if (input.campaign.sourceType === "meiro_campaign") {
+    addCheck("assets_linked", "passed", "Native Meiro campaign content is managed in Meiro CDP.");
+    addCheck("assets_active", "passed", "Native Meiro campaign content is governed by Meiro CDP.");
+  } else {
+    const expectedAssets = [input.campaign.contentKey, input.campaign.offerKey].filter(Boolean).length;
+    addCheck(
+      "assets_linked",
+      expectedAssets === input.linkedAssets.length && input.linkedAssets.length > 0 ? "passed" : expectedAssets > 0 ? "blocking" : "warning",
+      input.linkedAssets.length > 0 ? `${input.linkedAssets.length} governed asset${input.linkedAssets.length === 1 ? "" : "s"} linked.` : "No governed assets are linked yet."
+    );
 
-  const inactiveAssets = input.linkedAssets.filter((asset) => asset.status !== "ACTIVE");
-  addCheck(
-    "assets_active",
-    inactiveAssets.length === 0 ? "passed" : "blocking",
-    inactiveAssets.length === 0 ? "Linked assets are active." : `Inactive assets: ${inactiveAssets.map((asset) => asset.key).join(", ")}.`
-  );
+    const inactiveAssets = input.linkedAssets.filter((asset) => asset.status !== "ACTIVE");
+    addCheck(
+      "assets_active",
+      inactiveAssets.length === 0 ? "passed" : "blocking",
+      inactiveAssets.length === 0 ? "Linked assets are active." : `Inactive assets: ${inactiveAssets.map((asset) => asset.key).join(", ")}.`
+    );
+  }
 
   const assetValidityWarnings = input.warnings.filter((warning) => warning.endsWith("_ASSET_ENDS_BEFORE_CAMPAIGN"));
   addCheck(
@@ -921,7 +945,9 @@ const buildPressureIntelligence = (items: CampaignCalendarItem[]) => {
     const placementRef = `${item.appKey}:${item.placementKey}`;
 
     const channelDensity = densityFor(item, plannedItems, (candidate) => item.channels.some((channel) => candidate.channels.includes(channel)));
-    const placementDensity = densityFor(item, plannedItems, (candidate) => candidate.appKey === item.appKey && candidate.placementKey === item.placementKey);
+    const placementDensity = hasGroundedPlacementRef(item)
+      ? densityFor(item, plannedItems, (candidate) => hasGroundedPlacementRef(candidate) && candidate.appKey === item.appKey && candidate.placementKey === item.placementKey)
+      : emptyDensity();
     const assetDensity =
       itemAssets.length > 0
         ? densityFor(item, plannedItems, (candidate) => sharedStrings(itemAssets, assetRefsForItem(candidate)).length > 0)
@@ -939,6 +965,9 @@ const buildPressureIntelligence = (items: CampaignCalendarItem[]) => {
     const sharedPlacementRefs = new Set<string>();
     const sharedAssetRefs = new Set<string>();
     const overlapRisks: CampaignCalendarRiskLevel[] = [];
+    const higherPriorityOverlapRefs = new Set<string>();
+    const lowerPriorityOverlapRefs = new Set<string>();
+    const equalPriorityOverlapRefs = new Set<string>();
 
     for (const other of plannedItems) {
       if (other.campaignId === item.campaignId) continue;
@@ -954,11 +983,25 @@ const buildPressureIntelligence = (items: CampaignCalendarItem[]) => {
       const audiences = sharedStrings(item.audienceKeys, other.audienceKeys);
       const assets = sharedStrings(itemAssets, assetRefsForItem(other));
       const sharedChannel = item.channels.some((channel) => other.channels.includes(channel));
-      const sharedPlacement = item.appKey === other.appKey && item.placementKey === other.placementKey;
+      const sharedPlacement =
+        hasGroundedPlacementRef(item) &&
+        hasGroundedPlacementRef(other) &&
+        item.appKey === other.appKey &&
+        item.placementKey === other.placementKey;
 
       if (overlaps && sharedPlacement) {
         sharedPlacementRefs.add(placementRef);
         reasons.push(`Same placement overlaps: ${item.appKey} / ${item.placementKey}.`);
+        if (item.priority < other.priority) {
+          higherPriorityOverlapRefs.add(other.campaignKey);
+          reasons.push(`Higher-priority overlap on same placement: ${other.campaignKey} (${other.priority} > ${item.priority}).`);
+        } else if (item.priority > other.priority) {
+          lowerPriorityOverlapRefs.add(other.campaignKey);
+          reasons.push(`Lower-priority overlap on same placement: ${other.campaignKey} (${other.priority} < ${item.priority}).`);
+        } else {
+          equalPriorityOverlapRefs.add(other.campaignKey);
+          reasons.push(`Same-priority overlap on same placement: ${other.campaignKey} (${other.priority}).`);
+        }
         otherRisk = maxRisk([otherRisk, "critical"]);
         overlapRisks.push("critical");
       }
@@ -995,6 +1038,68 @@ const buildPressureIntelligence = (items: CampaignCalendarItem[]) => {
       }
     }
 
+    const higherPriorityOverlapCount = higherPriorityOverlapRefs.size;
+    const lowerPriorityOverlapCount = lowerPriorityOverlapRefs.size;
+    const equalPriorityOverlapCount = equalPriorityOverlapRefs.size;
+    const priorityArbitrationCount = higherPriorityOverlapCount + lowerPriorityOverlapCount + equalPriorityOverlapCount;
+
+    if (priorityArbitrationCount > 0) {
+      const arbitrationRisk: CampaignCalendarRiskLevel =
+        higherPriorityOverlapCount > 0
+          ? higherPriorityOverlapCount >= 2 || equalPriorityOverlapCount > 0
+            ? "critical"
+            : "high"
+          : equalPriorityOverlapCount > 0
+            ? "high"
+            : "low";
+      const arbitrationParts: string[] = [];
+      if (higherPriorityOverlapCount > 0) {
+        arbitrationParts.push(
+          `${higherPriorityOverlapCount} higher-priority overlap${higherPriorityOverlapCount === 1 ? "" : "s"} may suppress delivery`
+        );
+      }
+      if (equalPriorityOverlapCount > 0) {
+        arbitrationParts.push(`${equalPriorityOverlapCount} same-priority overlap${equalPriorityOverlapCount === 1 ? "" : "s"} need tie-break rules`);
+      }
+      if (lowerPriorityOverlapCount > 0) {
+        arbitrationParts.push(
+          `${lowerPriorityOverlapCount} lower-priority overlap${lowerPriorityOverlapCount === 1 ? "" : "s"} likely lose against this campaign`
+        );
+      }
+      pressureSignals.push(
+        pressureSignal({
+          code: "priority_arbitration",
+          label: "Priority arbitration cue",
+          riskLevel: arbitrationRisk,
+          detail: `${arbitrationParts.join("; ")} on ${item.appKey} / ${item.placementKey}.`,
+          refs: uniqueStrings([
+            placementRef,
+            ...[...higherPriorityOverlapRefs].sort(),
+            ...[...equalPriorityOverlapRefs].sort(),
+            ...[...lowerPriorityOverlapRefs].sort()
+          ]).slice(0, 12),
+          count: priorityArbitrationCount
+        })
+      );
+      if (higherPriorityOverlapCount > 0) {
+        warningCodes.push("ARBITRATION_SUPPRESSION_RISK");
+        reachabilityNotes.push(
+          "Higher-priority same-placement overlaps may suppress this campaign under priority-based arbitration. This is an operational cue, not a guaranteed runtime outcome."
+        );
+      }
+      if (equalPriorityOverlapCount > 0) {
+        warningCodes.push("ARBITRATION_TIE_RISK");
+        reachabilityNotes.push(
+          "Same-priority same-placement overlaps require explicit tie-break or mutex rules. This calendar cue does not evaluate runtime policy configuration."
+        );
+      }
+      if (higherPriorityOverlapCount === 0 && equalPriorityOverlapCount === 0) {
+        reachabilityNotes.push(
+          "This campaign likely outranks overlapping lower-priority campaigns on the same placement, but runtime outcomes still depend on orchestration rules."
+        );
+      }
+    }
+
     const channelRisk = concentrationRisk(channelDensity.sameDay, channelDensity.sameWeek, { dayMedium: 3, dayHigh: 5, weekMedium: 5, weekHigh: 8 });
     if (channelRisk !== "none") {
       pressureSignals.push(
@@ -1027,7 +1132,7 @@ const buildPressureIntelligence = (items: CampaignCalendarItem[]) => {
     }
 
     const placementRisk = concentrationRisk(placementDensity.sameDay, placementDensity.sameWeek, { dayMedium: 2, dayHigh: 3, weekMedium: 3, weekHigh: 5 });
-    if (placementRisk !== "none") {
+    if (placementRisk !== "none" && hasGroundedPlacementRef(item)) {
       pressureSignals.push(
         pressureSignal({
           code: "placement_concentration",
@@ -1189,11 +1294,13 @@ const buildHotspots = (items: CampaignCalendarItem[]): CampaignCalendarHotspot[]
         audienceCurrent.refs.add(item.campaignKey);
         audienceWeekMap.set(key, audienceCurrent);
       }
-      const placementKey = `${week}:${item.appKey}:${item.placementKey}`;
-      const placementCurrent = placementWeekMap.get(placementKey) ?? { count: 0, refs: new Set<string>() };
-      placementCurrent.count += 1;
-      placementCurrent.refs.add(item.campaignKey);
-      placementWeekMap.set(placementKey, placementCurrent);
+      if (hasGroundedPlacementRef(item)) {
+        const placementKey = `${week}:${item.appKey}:${item.placementKey}`;
+        const placementCurrent = placementWeekMap.get(placementKey) ?? { count: 0, refs: new Set<string>() };
+        placementCurrent.count += 1;
+        placementCurrent.refs.add(item.campaignKey);
+        placementWeekMap.set(placementKey, placementCurrent);
+      }
       for (const asset of assetRefsForItem(item)) {
         const key = `${week}:${asset}`;
         const assetCurrent = assetWeekMap.get(key) ?? { count: 0, refs: new Set<string>() };
@@ -1358,12 +1465,13 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
   const offerAssetsByKey = input.offerAssetsByKey ?? new Map<string, CampaignCalendarLinkedAsset>();
 
   const items = input.campaigns.map<CampaignCalendarItem>((campaign) => {
+    const sourceType = campaign.sourceType ?? "in_app_campaign";
     const linkedAssets = [
       campaign.contentKey ? contentAssetsByKey.get(campaign.contentKey) : null,
       campaign.offerKey ? offerAssetsByKey.get(campaign.offerKey) : null
     ].filter((asset): asset is CampaignCalendarLinkedAsset => Boolean(asset));
     const warnings: string[] = [];
-    const channels = channelsForCampaign(campaign, linkedAssets);
+    const channels = campaign.channels && campaign.channels.length > 0 ? uniqueChannels(campaign.channels) : channelsForCampaign(campaign, linkedAssets);
     const audienceKeys = normalizeAudienceKeys(campaign.eligibilityAudiencesAny);
     const orchestrationMarkers = campaignOrchestrationMarkers(campaign);
 
@@ -1391,8 +1499,8 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
     }
 
     return {
-      id: `campaign:${campaign.id}`,
-      sourceType: "in_app_campaign",
+      id: `${sourceType}:${campaign.id}`,
+      sourceType,
       sourceId: campaign.id,
       sourceKey: campaign.key,
       campaignId: campaign.id,
@@ -1401,8 +1509,8 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
       description: campaign.description ?? null,
       status: campaign.status,
       approvalState: approvalStateFor(campaign.status),
-      owner: null,
-      channel: campaignChannel(channels),
+      owner: campaign.owner ?? null,
+      channel: campaign.channel ?? campaignChannel(channels),
       channels,
       appKey: campaign.appKey,
       placementKey: campaign.placementKey,
@@ -1412,9 +1520,9 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
       capsPerProfilePerWeek: campaign.capsPerProfilePerWeek ?? null,
       audienceKeys,
       audienceSummary: campaignAudienceSummary(audienceKeys),
-      placementSummary: `${campaign.appKey} / ${campaign.placementKey}`,
-      templateSummary: campaign.templateKey,
-      assetSummary: linkedAssets.length > 0 ? linkedAssets.map((asset) => `${asset.assetTypeLabel}: ${asset.key}`).join(", ") : null,
+      placementSummary: campaign.placementSummary ?? `${campaign.appKey} / ${campaign.placementKey}`,
+      templateSummary: campaign.templateSummary ?? campaign.templateKey,
+      assetSummary: campaign.assetSummary ?? (linkedAssets.length > 0 ? linkedAssets.map((asset) => `${asset.assetTypeLabel}: ${asset.key}`).join(", ") : null),
       approvalSummary: campaignApprovalSummary(campaign),
       orchestrationSummary: campaignOrchestrationSummary(campaign),
       orchestrationMarkers,
@@ -1462,7 +1570,7 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
       if (!item || !other) continue;
       if (item.status === InAppCampaignStatus.ARCHIVED || other.status === InAppCampaignStatus.ARCHIVED) continue;
       if (!scheduledOverlap(item, other)) continue;
-      if (item.appKey === other.appKey && item.placementKey === other.placementKey) {
+      if (hasGroundedPlacementRef(item) && hasGroundedPlacementRef(other) && item.appKey === other.appKey && item.placementKey === other.placementKey) {
         const reason = "Same app and placement overlap in the selected window.";
         item.conflicts.push({ campaignId: other.campaignId, campaignKey: other.campaignKey, type: "placement_overlap", severity: "blocking", reason });
         other.conflicts.push({ campaignId: item.campaignId, campaignKey: item.campaignKey, type: "placement_overlap", severity: "blocking", reason });
@@ -1471,7 +1579,7 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
       }
 
       const sharedChannels = item.channels.filter((channel) => other.channels.includes(channel));
-      if (sharedChannels.length > 0 && !(item.appKey === other.appKey && item.placementKey === other.placementKey)) {
+      if (sharedChannels.length > 0 && !(hasGroundedPlacementRef(item) && hasGroundedPlacementRef(other) && item.appKey === other.appKey && item.placementKey === other.placementKey)) {
         const reason = `Same channel overlaps in the selected window: ${sharedChannels.join(", ")}.`;
         item.conflicts.push({ campaignId: other.campaignId, campaignKey: other.campaignKey, type: "channel_overlap", severity: "warning", reason });
         other.conflicts.push({ campaignId: item.campaignId, campaignKey: item.campaignKey, type: "channel_overlap", severity: "warning", reason });
@@ -1524,7 +1632,11 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
     if (input.sourceType && item.sourceType !== input.sourceType) return false;
     if (input.channel && !item.channels.includes(input.channel)) return false;
     if (input.readiness && item.planningReadiness.status !== input.readiness) return false;
-    if (input.audienceKey?.trim() && !item.audienceKeys.includes(input.audienceKey.trim())) return false;
+    if (input.audienceKey?.trim()) {
+      const audienceFilter = input.audienceKey.trim();
+      const acceptedAudienceFilters = new Set([audienceFilter, audienceFilter.startsWith("meiro_segment:") ? audienceFilter.slice("meiro_segment:".length) : `meiro_segment:${audienceFilter}`]);
+      if (!item.audienceKeys.some((audience) => acceptedAudienceFilters.has(audience))) return false;
+    }
     if (input.overlapRisk && item.overlapRiskLevel !== input.overlapRisk) return false;
     if (input.pressureRisk && item.pressureRiskLevel !== input.pressureRisk) return false;
     if (input.needsAttentionOnly) {
@@ -1539,6 +1651,7 @@ export const buildCampaignCalendar = (input: CampaignCalendarBuildInput): Campai
       if (signal === "asset_reuse" && item.sharedAssetRefs.length === 0 && !item.pressureSignals.some((entry) => entry.code === "asset_reuse_concentration")) return false;
       if (signal === "cap_pressure" && item.capSignals.length === 0) return false;
       if (signal === "channel_density" && !item.pressureSignals.some((entry) => entry.code === "channel_density")) return false;
+      if (signal === "priority_arbitration" && !item.pressureSignals.some((entry) => entry.code === "priority_arbitration")) return false;
     }
     if (!input.assetKey?.trim() && !input.assetType) return true;
     return item.linkedAssets.some((asset) => assetMatches(asset, input));

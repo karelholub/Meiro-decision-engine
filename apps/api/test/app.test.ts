@@ -1263,6 +1263,31 @@ describe("API", () => {
     await app.close();
   });
 
+  it("keeps critical bootstrap endpoints registered", async () => {
+    const { prisma } = makePrisma();
+
+    const app = await buildApp({
+      prisma,
+      meiroAdapter: makeMeiro(),
+      config: {
+        apiPort: 3001,
+        apiWriteKey: "write-key",
+        protectDecide: false,
+        meiroMode: "mock"
+      }
+    });
+
+    const healthResponse = await app.inject({ method: "GET", url: "/health" });
+    const decideResponse = await app.inject({ method: "POST", url: "/v1/decide", payload: {} });
+    const inappV2DecideResponse = await app.inject({ method: "POST", url: "/v2/inapp/decide", payload: {} });
+
+    expect(healthResponse.statusCode).toBe(200);
+    expect(decideResponse.statusCode).not.toBe(404);
+    expect(inappV2DecideResponse.statusCode).not.toBe(404);
+
+    await app.close();
+  });
+
   it("exposes retention maintenance status and supports manual run", async () => {
     const { prisma } = makePrisma();
 

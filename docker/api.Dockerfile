@@ -35,6 +35,8 @@ RUN pnpm --filter @decisioning/api build
 
 FROM base AS runtime
 WORKDIR /app
+RUN apk add --no-cache python3 py3-pip \
+    && pip3 install --break-system-packages --no-cache-dir uv
 COPY --from=build /app /app
 EXPOSE 3001
 CMD ["pnpm", "--filter", "@decisioning/api", "start:docker"]

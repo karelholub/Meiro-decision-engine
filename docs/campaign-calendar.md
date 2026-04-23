@@ -2,6 +2,10 @@
 
 The Campaign Calendar is an additive planning view over existing governed campaigns and activation assets. It does not introduce a new workflow engine or runtime resolver.
 
+Related UX handoff:
+
+- `docs/campaign-calendar-arbitration-ux.md` for arbitration/pressure visibility hierarchy, wireframes, and acceptance criteria.
+
 ## Repo Verification Note
 
 This MVP was implemented after verifying the existing product model and reusing the current in-app, catalog, governance, and orchestration concepts.
@@ -264,6 +268,7 @@ Computed truthfully now:
 - Same placement concentration.
 - Same content/offer reuse concentration.
 - Same derived channel density.
+- Priority arbitration cues for overlapping campaigns on the exact same app and placement.
 - Cap pressure cues when exact audience keys and campaign caps are both present.
 
 Deferred:
@@ -304,6 +309,7 @@ The logic is deterministic and explainable:
 - Placement pressure uses exact `appKey` plus `placementKey`.
 - Asset pressure uses exact linked `contentKey` or `offerKey`.
 - Channel pressure uses derived calendar channels from linked asset compatibility and app/placement aliases.
+- Priority arbitration uses existing in-app `priority` values only when campaign windows overlap on the exact same `appKey` and `placementKey`; higher-priority overlaps create suppression-risk cues, equal-priority overlaps create tie-risk cues, and lower-priority overlaps are monitor-level context.
 - Cap pressure is emitted only when a campaign has exact audience keys plus `capsPerProfilePerDay` or `capsPerProfilePerWeek`.
 
 Risk labels are guidance:
@@ -311,7 +317,7 @@ Risk labels are guidance:
 - `low`: minor shared channel, asset, or week context.
 - `medium`: repeated exact references or moderate placement/asset/channel concentration.
 - `high`: strong exact audience pressure, cap exceedance, or high concentration.
-- `critical`: overlapping same-placement blockers or larger cap exceedance.
+- `critical`: overlapping same-placement blockers, larger cap exceedance, or multiple higher-priority same-placement arbitration cues.
 
 The calendar intentionally phrases reachability effects as likely or operational guidance. It does not claim exact unreachable users, exact suppression counts, or guaranteed runtime outcomes.
 

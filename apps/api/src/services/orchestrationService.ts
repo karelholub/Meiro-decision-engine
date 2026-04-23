@@ -243,12 +243,18 @@ const matchesRuleAppliesTo = (input: {
   action: ActionDescriptor;
   actionTypes?: string[];
   tagsAny?: string[];
+  audiencesAny?: string[];
 }): boolean => {
   if (!matchesActionTypes(input.actionTypes, input.action.actionType)) {
     return false;
   }
   if (Array.isArray(input.tagsAny) && input.tagsAny.length > 0) {
-    return intersects(toTags(input.action.tags), input.tagsAny);
+    if (!intersects(toTags(input.action.tags), input.tagsAny)) {
+      return false;
+    }
+  }
+  if (Array.isArray(input.audiencesAny) && input.audiencesAny.length > 0) {
+    return intersects(input.action.audienceKeys, input.audiencesAny);
   }
   return true;
 };
@@ -574,7 +580,8 @@ export const createOrchestrationService = (deps: {
             const applied = matchesRuleAppliesTo({
               action: input.action,
               actionTypes: rule.appliesTo.actionTypes,
-              tagsAny: rule.appliesTo.tagsAny
+              tagsAny: rule.appliesTo.tagsAny,
+              audiencesAny: rule.appliesTo.audiencesAny
             });
             if (!applied) {
               debugRules.push(
@@ -703,7 +710,8 @@ export const createOrchestrationService = (deps: {
             const applied = matchesRuleAppliesTo({
               action: input.action,
               actionTypes: rule.appliesTo.actionTypes,
-              tagsAny: rule.appliesTo.tagsAny
+              tagsAny: rule.appliesTo.tagsAny,
+              audiencesAny: rule.appliesTo.audiencesAny
             });
             if (!applied) {
               debugRules.push(
@@ -967,7 +975,8 @@ export const createOrchestrationService = (deps: {
             const applied = matchesRuleAppliesTo({
               action: input.action,
               actionTypes: rule.appliesTo.actionTypes,
-              tagsAny: rule.appliesTo.tagsAny
+              tagsAny: rule.appliesTo.tagsAny,
+              audiencesAny: rule.appliesTo.audiencesAny
             });
             if (!applied) {
               evaluatedRules.push({
@@ -1084,7 +1093,8 @@ export const createOrchestrationService = (deps: {
             const applied = matchesRuleAppliesTo({
               action: input.action,
               actionTypes: rule.appliesTo.actionTypes,
-              tagsAny: rule.appliesTo.tagsAny
+              tagsAny: rule.appliesTo.tagsAny,
+              audiencesAny: rule.appliesTo.audiencesAny
             });
             if (!applied) {
               evaluatedRules.push({

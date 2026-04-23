@@ -8,7 +8,7 @@ import {
   Prisma,
   type PrismaClient
 } from "@prisma/client";
-import type { MeiroAdapter, WbsLookupAdapter } from "@decisioning/meiro";
+import type { MeiroAdapter, MeiroCampaignChannel, MeiroCampaignRecord, WbsLookupAdapter } from "@decisioning/meiro";
 import { type WbsTransform } from "@decisioning/wbs-mapping";
 import { z } from "zod";
 import type { JsonCache } from "./lib/cache";
@@ -25,6 +25,7 @@ import {
   buildCampaignCalendarOfferAsset,
   buildCampaignSchedulePreview,
   latestByKey,
+  type CampaignCalendarInput,
   type CampaignCalendarLinkedAsset
 } from "./services/campaignCalendar";
 import type { ActivationAssetChannel, ActivationAssetType } from "./services/activationAssetLibrary";
@@ -53,6 +54,7 @@ export interface RegisterInAppRoutesDeps {
   prisma: PrismaClient;
   cache: JsonCache;
   meiro: MeiroAdapter;
+  meiroApi?: MeiroAdapter;
   wbsAdapter: WbsLookupAdapter;
   now: () => Date;
   requireWriteAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
@@ -115,6 +117,177 @@ const isObject = (value: unknown): value is Record<string, unknown> => {
 
 const isStringArray = (value: unknown): value is string[] => {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+};
+
+const meiroCalendarChannel = (channel: MeiroCampaignChannel): ActivationAssetChannel => {
+  if (channel === "push") return "mobile_push";
+  return channel;
+};
+
+const meiroCalendarStatus = (campaign: MeiroCampaignRecord): InAppCampaignStatus => {
+  return campaign.deleted ? InAppCampaignStatus.ARCHIVED : InAppCampaignStatus.ACTIVE;
+};
+
+const collectMeiroSegmentIds = (value: unknown): string[] => {
+  const ids = new Set<string>();
+  const visit = (entry: unknown) => {
+    if (Array.isArray(entry)) {
+      for (const item of entry) visit(item);
+      return;
+    }
+    if (!isObject(entry)) return;
+    for (const key of ["segment_id", "segmentId"]) {
+      const value = entry[key];
+      if ((typeof value === "string" || typeof value === "number") && String(value).trim()) {
+        ids.add(String(value).trim());
+      }
+    }
+    const segmentIds = entry.segment_ids ?? entry.segmentIds;
+    if (Array.isArray(segmentIds)) {
+      for (const segmentId of segmentIds) {
+        if ((typeof segmentId === "string" || typeof segmentId === "number") && String(segmentId).trim()) {
+          ids.add(String(segmentId).trim());
+        }
+      }
+    }
+    for (const value of Object.values(entry)) {
+      if (Array.isArray(value) || isObject(value)) visit(value);
+    }
+  };
+  visit(value);
+  return [...ids].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+};
+
+const MEIRO_SCHEDULE_START_KEYS = new Set(["start", "start_at", "startAt", "start_date", "startDate", "scheduled_at", "scheduledAt", "datetime", "date"]);
+const MEIRO_SCHEDULE_END_KEYS = new Set(["end", "end_at", "endAt", "end_date", "endDate", "until", "valid_until", "validUntil"]);
+
+const parseMeiroDate = (value: unknown): Date | null => {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const collectMeiroScheduleDates = (value: unknown) => {
+  const starts: Date[] = [];
+  const ends: Date[] = [];
+  const visit = (entry: unknown) => {
+    if (Array.isArray(entry)) {
+      for (const item of entry) visit(item);
+      return;
+    }
+    if (!isObject(entry)) return;
+    for (const [key, raw] of Object.entries(entry)) {
+      const parsed = parseMeiroDate(raw);
+      if (parsed && MEIRO_SCHEDULE_START_KEYS.has(key)) starts.push(parsed);
+      if (parsed && MEIRO_SCHEDULE_END_KEYS.has(key)) ends.push(parsed);
+      if (Array.isArray(raw) || isObject(raw)) visit(raw);
+    }
+  };
+  visit(value);
+  return { starts, ends };
+};
+
+const meiroCalendarScheduleWindow = (campaign: MeiroCampaignRecord, fallbackFrom: Date, fallbackTo: Date) => {
+  const { starts, ends } = collectMeiroScheduleDates(campaign.raw.schedules);
+  if (starts.length === 0 && ends.length === 0) {
+    return { startAt: null, endAt: null };
+  }
+  const startTime = starts.length > 0 ? Math.min(...starts.map((date) => date.getTime())) : Math.min(...ends.map((date) => date.getTime()));
+  const endTime = ends.length > 0 ? Math.max(...ends.map((date) => date.getTime())) : startTime + 60 * 60 * 1000;
+  const boundedStart = Math.max(startTime, fallbackFrom.getTime() - 366 * 24 * 60 * 60 * 1000);
+  const boundedEnd = Math.min(Math.max(endTime, boundedStart + 60 * 60 * 1000), fallbackTo.getTime() + 366 * 24 * 60 * 60 * 1000);
+  return {
+    startAt: new Date(boundedStart).toISOString(),
+    endAt: new Date(boundedEnd).toISOString()
+  };
+};
+
+const meiroFrequencyCaps = (raw: Record<string, unknown>) => {
+  const cap = isObject(raw.frequency_cap) ? raw.frequency_cap : null;
+  const maxCount = typeof cap?.max_count === "number" && Number.isFinite(cap.max_count) ? cap.max_count : null;
+  const period = isObject(cap?.period) ? cap.period : null;
+  const periodSize = typeof period?.size === "number" && Number.isFinite(period.size) ? period.size : null;
+  const periodType = typeof period?.type === "string" ? period.type.toUpperCase() : null;
+  if (!maxCount || !periodSize || !periodType) {
+    return { day: null as number | null, week: null as number | null };
+  }
+  if (periodType === "DAYS" && periodSize <= 1) return { day: maxCount, week: null as number | null };
+  if (periodType === "DAYS" && periodSize <= 7) return { day: null as number | null, week: maxCount };
+  if (periodType === "WEEKS" && periodSize <= 1) return { day: null as number | null, week: maxCount };
+  return { day: null as number | null, week: null as number | null };
+};
+
+const normalizeCampaignTypeTag = (value: unknown): string | null => {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+  const normalized = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized ? `campaign_type:${normalized}` : null;
+};
+
+const meiroCampaignToCalendarInput = (campaign: MeiroCampaignRecord, input: { from: Date; to: Date }): CampaignCalendarInput => {
+  const channel = meiroCalendarChannel(campaign.channel);
+  const window = meiroCalendarScheduleWindow(campaign, input.from, input.to);
+  const segmentRefs = collectMeiroSegmentIds(campaign.raw.schedules).map((segmentId) => `meiro_segment:${segmentId}`);
+  const caps = meiroFrequencyCaps(campaign.raw);
+  const campaignTypeTag = normalizeCampaignTypeTag(campaign.raw.campaign_type);
+  const channelLabel = campaign.channel === "push" ? "push" : campaign.channel;
+  const hasSchedules = Array.isArray(campaign.raw.schedules) && campaign.raw.schedules.length > 0;
+  const scheduleSummary = window.startAt
+    ? `Native Meiro ${channelLabel} schedule`
+    : hasSchedules
+      ? `Native Meiro ${channelLabel} schedule has no concrete datetime in the API payload`
+      : `Native Meiro ${channelLabel} campaign has no schedule payload`;
+  return {
+    id: `meiro:${campaign.channel}:${campaign.id}`,
+    key: `meiro_${campaign.channel}_${campaign.id}`,
+    name: campaign.name,
+    description: null,
+    sourceType: "meiro_campaign",
+    status: meiroCalendarStatus(campaign),
+    owner: null,
+    appKey: "meiro_cdp",
+    placementKey: "unplaced",
+    templateKey: `meiro_${campaign.channel}`,
+    channel,
+    channels: [channel],
+    contentKey: null,
+    offerKey: null,
+    priority: 0,
+    capsPerProfilePerDay: caps.day,
+    capsPerProfilePerWeek: caps.week,
+    eligibilityAudiencesAny: segmentRefs,
+    startAt: window.startAt,
+    endAt: window.endAt,
+    activatedAt: campaign.lastActivationAt,
+    updatedAt: campaign.modifiedAt ?? undefined,
+    placementSummary: "No placement reference in native Meiro campaign API payload",
+    templateSummary: `Native Meiro ${channelLabel}`,
+    assetSummary: null,
+    approvalSummary: campaign.deleted ? "Deleted in Meiro CDP" : scheduleSummary,
+    orchestrationSummary:
+      caps.day || caps.week
+        ? `Meiro frequency cap ${caps.day ? `${caps.day}/profile/day` : `${caps.week}/profile/week`}`
+        : "No Meiro frequency cap exposed",
+    orchestrationMarkers: [
+      `meiro_channel:${campaign.channel}`,
+      ...(campaignTypeTag ? [campaignTypeTag] : []),
+      ...(caps.day ? [`cap_day:${caps.day}`] : []),
+      ...(caps.week ? [`cap_week:${caps.week}`] : []),
+      ...(segmentRefs.length > 0 ? [`segments:${segmentRefs.length}`] : [])
+    ],
+    drilldownTargets: [
+      {
+        type: "meiro_campaign",
+        label: "Open Meiro campaign",
+        href: `/engage/meiro-campaigns?channel=${encodeURIComponent(campaign.channel)}&campaignId=${encodeURIComponent(campaign.id)}`
+      }
+    ]
+  };
 };
 
 const inAppApplicationCreateSchema = z.object({
@@ -243,7 +416,14 @@ const activationAssetChannelSchema = z.enum([
 ]);
 
 const campaignCalendarRiskLevelSchema = z.enum(["none", "low", "medium", "high", "critical"]);
-const campaignCalendarPressureSignalSchema = z.enum(["same_audience", "same_placement", "asset_reuse", "cap_pressure", "channel_density"]);
+const campaignCalendarPressureSignalSchema = z.enum([
+  "same_audience",
+  "same_placement",
+  "asset_reuse",
+  "cap_pressure",
+  "channel_density",
+  "priority_arbitration"
+]);
 const campaignCalendarQuerySchema = z.object({
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
@@ -254,7 +434,7 @@ const campaignCalendarQuerySchema = z.object({
   assetType: activationAssetTypeSchema.optional(),
   channel: activationAssetChannelSchema.optional(),
   readiness: z.enum(["ready", "at_risk", "blocked"]).optional(),
-  sourceType: z.enum(["in_app_campaign"]).optional(),
+  sourceType: z.enum(["in_app_campaign", "meiro_campaign"]).optional(),
   audienceKey: z.string().optional(),
   overlapRisk: campaignCalendarRiskLevelSchema.optional(),
   pressureRisk: campaignCalendarRiskLevelSchema.optional(),
@@ -286,7 +466,7 @@ const campaignCalendarFiltersSchema = z.object({
   assetType: z.union([activationAssetTypeSchema, z.literal("")]).optional().default(""),
   channel: z.union([activationAssetChannelSchema, z.literal("")]).optional().default(""),
   readiness: z.union([z.enum(["ready", "at_risk", "blocked"]), z.literal("")]).optional().default(""),
-  sourceType: z.union([z.enum(["in_app_campaign"]), z.literal("")]).optional().default(""),
+  sourceType: z.union([z.enum(["in_app_campaign", "meiro_campaign"]), z.literal("")]).optional().default(""),
   audienceKey: z.string().optional().default(""),
   overlapRisk: z.union([campaignCalendarRiskLevelSchema, z.literal("")]).optional().default(""),
   pressureRisk: z.union([campaignCalendarRiskLevelSchema, z.literal("")]).optional().default(""),
@@ -294,11 +474,17 @@ const campaignCalendarFiltersSchema = z.object({
   needsAttentionOnly: z.boolean().optional().default(false),
   includeArchived: z.boolean().optional().default(false)
 });
+const campaignCalendarSegmentTargetSchema = z.object({
+  minWeeklyTouches: z.number().int().nonnegative().optional().default(1),
+  maxWeeklyTouches: z.number().int().positive().optional().default(3),
+  maxDailyTouches: z.number().int().positive().optional().default(1)
+});
 const campaignCalendarSavedViewBodySchema = z.object({
   name: z.string().trim().min(1).max(80),
   view: campaignCalendarViewSchema,
   swimlane: campaignCalendarSwimlaneSchema,
-  filters: campaignCalendarFiltersSchema
+  filters: campaignCalendarFiltersSchema,
+  segmentTarget: campaignCalendarSegmentTargetSchema.optional().default({})
 });
 const campaignCalendarSavedViewParamsSchema = z.object({
   id: z.string().min(1)
@@ -1011,6 +1197,7 @@ interface CampaignActivationPreview {
       offerKey?: string;
       contentKey?: string;
       campaignKey?: string;
+      audienceKeys?: string[];
       tags: string[];
     };
     allowed: boolean;
@@ -1277,15 +1464,21 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     filtersJson: unknown;
     createdAt: Date;
     updatedAt: Date;
-  }) => ({
-    id: view.id,
-    name: view.name,
-    view: view.view,
-    swimlane: view.swimlane,
-    filters: campaignCalendarFiltersSchema.parse(view.filtersJson),
-    createdAt: view.createdAt.toISOString(),
-    updatedAt: view.updatedAt.toISOString()
-  });
+  }) => {
+    const payload = isObject(view.filtersJson) ? view.filtersJson : {};
+    const rawFilters = isObject(payload.filters) ? payload.filters : payload;
+    const rawSegmentTarget = isObject(payload.segmentTarget) ? payload.segmentTarget : {};
+    return {
+      id: view.id,
+      name: view.name,
+      view: view.view,
+      swimlane: view.swimlane,
+      filters: campaignCalendarFiltersSchema.parse(rawFilters),
+      segmentTarget: campaignCalendarSegmentTargetSchema.parse(rawSegmentTarget),
+      createdAt: view.createdAt.toISOString(),
+      updatedAt: view.updatedAt.toISOString()
+    };
+  };
 
   const serializeCampaignCalendarExportAudit = (entry: {
     id: string;
@@ -1353,40 +1546,72 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     const statuses = statusValues as InAppCampaignStatus[];
     const includeArchived = input.query.includeArchived === "true";
 
-    const campaigns = await prisma.inAppCampaign.findMany({
-      where: {
-        environment: input.environment,
-        ...(input.query.appKey ? { appKey: input.query.appKey } : {}),
-        ...(input.query.placementKey ? { placementKey: input.query.placementKey } : {}),
-        ...(statuses.length > 0 ? { status: { in: statuses } } : includeArchived ? {} : { status: { not: InAppCampaignStatus.ARCHIVED } }),
-        AND: [
-          {
-            OR: [
-              { startAt: null },
-              { startAt: { lte: to } }
-            ]
-          },
-          {
-            OR: [
-              { endAt: null },
-              { endAt: { gte: from } }
-            ]
-          },
-          ...(input.query.assetKey
-            ? [
-                {
-                  OR: [
-                    { contentKey: input.query.assetKey },
-                    { offerKey: input.query.assetKey }
+    const includeInAppSource = input.query.sourceType !== "meiro_campaign";
+    const includeMeiroSource = input.query.sourceType !== "in_app_campaign" && !input.query.appKey && !input.query.placementKey && !input.query.assetKey && !input.query.assetType;
+
+    const campaigns = includeInAppSource
+      ? await prisma.inAppCampaign.findMany({
+          where: {
+            environment: input.environment,
+            ...(input.query.appKey ? { appKey: input.query.appKey } : {}),
+            ...(input.query.placementKey ? { placementKey: input.query.placementKey } : {}),
+            ...(statuses.length > 0 ? { status: { in: statuses } } : includeArchived ? {} : { status: { not: InAppCampaignStatus.ARCHIVED } }),
+            AND: [
+              {
+                OR: [
+                  { startAt: null },
+                  { startAt: { lte: to } }
+                ]
+              },
+              {
+                OR: [
+                  { endAt: null },
+                  { endAt: { gte: from } }
+                ]
+              },
+              ...(input.query.assetKey
+                ? [
+                    {
+                      OR: [
+                        { contentKey: input.query.assetKey },
+                        { offerKey: input.query.assetKey }
+                      ]
+                    }
                   ]
-                }
-              ]
-            : [])
-        ]
-      },
-      orderBy: [{ startAt: "asc" }, { updatedAt: "desc" }],
-      take: 500
-    });
+                : [])
+            ]
+          },
+          orderBy: [{ startAt: "asc" }, { updatedAt: "desc" }],
+          take: 500
+        })
+      : [];
+
+    const meiroCampaigns: CampaignCalendarInput[] = [];
+    if (includeMeiroSource && deps.meiroApi?.listCampaigns) {
+      try {
+        const nativeChannels: MeiroCampaignChannel[] = ["email", "push", "whatsapp"];
+        const nativeResults = await Promise.all(
+          nativeChannels.map((channel) =>
+            deps.meiroApi?.listCampaigns?.({
+              channel,
+              includeDeleted: includeArchived,
+              limit: 200
+            })
+          )
+        );
+        for (const result of nativeResults) {
+          for (const campaign of result?.items ?? []) {
+            const mapped = meiroCampaignToCalendarInput(campaign, { from, to });
+            if (!includeArchived && mapped.status === InAppCampaignStatus.ARCHIVED) continue;
+            if (statuses.length > 0 && !statuses.includes(mapped.status)) continue;
+            if (input.query.channel && !mapped.channels?.includes(input.query.channel as ActivationAssetChannel)) continue;
+            meiroCampaigns.push(mapped);
+          }
+        }
+      } catch (error) {
+        app.log.warn({ err: error }, "Native Meiro campaigns could not be added to campaign calendar");
+      }
+    }
 
     const contentKeys = [...new Set(campaigns.map((campaign) => campaign.contentKey).filter((key): key is string => Boolean(key)))];
     const offerKeys = [...new Set(campaigns.map((campaign) => campaign.offerKey).filter((key): key is string => Boolean(key)))];
@@ -1436,7 +1661,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
 
     return {
       calendar: buildCampaignCalendar({
-        campaigns,
+        campaigns: [...campaigns, ...meiroCampaigns],
         contentAssetsByKey,
         offerAssetsByKey,
         from,
@@ -1740,7 +1965,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           name: parsed.data.name,
           view: parsed.data.view,
           swimlane: parsed.data.swimlane,
-          filtersJson: toInputJson(parsed.data.filters)
+          filtersJson: toInputJson({ filters: parsed.data.filters, segmentTarget: parsed.data.segmentTarget })
         }
       });
 
@@ -1801,7 +2026,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           name: parsed.data.name,
           view: parsed.data.view,
           swimlane: parsed.data.swimlane,
-          filtersJson: toInputJson(parsed.data.filters)
+          filtersJson: toInputJson({ filters: parsed.data.filters, segmentTarget: parsed.data.segmentTarget })
         }
       });
 
@@ -2360,6 +2585,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
         priority: true,
         startAt: true,
         endAt: true,
+        eligibilityAudiencesAny: true,
         variants: {
           select: {
             contentJson: true
@@ -2445,6 +2671,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           })
         )
       ].sort((left, right) => left.localeCompare(right));
+      const campaignAudienceKeys = collectTags(campaign.eligibilityAudiencesAny);
 
       const descriptor = await buildActionDescriptor(
         {
@@ -2452,12 +2679,14 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           offerKey: offerKey ?? undefined,
           contentKey: contentKey ?? undefined,
           campaignKey: campaign.key,
+          audienceKeys: campaignAudienceKeys,
           tags: campaignTags
         },
         {
           environment,
           appKey: campaign.appKey,
           placement: campaign.placementKey,
+          audienceKeys: campaignAudienceKeys,
           campaignTags,
           catalogResolver,
           metadata: {
@@ -2489,6 +2718,7 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
           ...(descriptor.offerKey ? { offerKey: descriptor.offerKey } : {}),
           ...(descriptor.contentKey ? { contentKey: descriptor.contentKey } : {}),
           ...(descriptor.campaignKey ? { campaignKey: descriptor.campaignKey } : {}),
+          ...(descriptor.audienceKeys?.length ? { audienceKeys: descriptor.audienceKeys } : {}),
           tags: descriptor.tags
         },
         allowed: previewResult.allowed,

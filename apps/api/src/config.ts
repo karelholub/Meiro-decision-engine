@@ -10,6 +10,13 @@ export interface AppConfig {
   meiroBaseUrl?: string;
   meiroToken?: string;
   meiroTimeoutMs?: number;
+  meiroMcpEnabled?: boolean;
+  meiroMcpCommand?: string;
+  meiroMcpArgs?: string[];
+  meiroMcpDomain?: string;
+  meiroMcpUsername?: string;
+  meiroMcpPassword?: string;
+  meiroMcpTimeoutMs?: number;
   redisUrl?: string;
   realtimeCacheTtlSeconds?: number;
   realtimeCacheLockTtlMs?: number;
@@ -94,6 +101,22 @@ const toCsvList = (value: string | undefined, fallback: string[]): string[] => {
   return parsed.length > 0 ? parsed : fallback;
 };
 
+const toJsonOrCsvList = (value: string | undefined, fallback: string[]): string[] => {
+  if (!value) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      const entries = parsed.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+      return entries.length > 0 ? entries : fallback;
+    }
+  } catch {
+    // Fall back to comma-separated env values.
+  }
+  return toCsvList(value, fallback);
+};
+
 const toRuntimeRole = (value: string | undefined, fallback: ApiRuntimeRole): ApiRuntimeRole => {
   if (!value) {
     return fallback;
@@ -114,6 +137,13 @@ export const readConfig = (): AppConfig => ({
   meiroBaseUrl: process.env.MEIRO_BASE_URL,
   meiroToken: process.env.MEIRO_TOKEN,
   meiroTimeoutMs: Number.parseInt(process.env.MEIRO_TIMEOUT_MS ?? "1500", 10),
+  meiroMcpEnabled: toBool(process.env.MEIRO_MCP_ENABLED, false),
+  meiroMcpCommand: process.env.MEIRO_MCP_COMMAND ?? "uvx",
+  meiroMcpArgs: toJsonOrCsvList(process.env.MEIRO_MCP_ARGS, ["meiro-mcp"]),
+  meiroMcpDomain: process.env.MEIRO_DOMAIN,
+  meiroMcpUsername: process.env.MEIRO_USERNAME,
+  meiroMcpPassword: process.env.MEIRO_PASSWORD,
+  meiroMcpTimeoutMs: toNumber(process.env.MEIRO_MCP_TIMEOUT_MS, 15000),
   redisUrl: process.env.REDIS_URL,
   realtimeCacheTtlSeconds: toNumber(process.env.REALTIME_CACHE_TTL_SECONDS, 60),
   realtimeCacheLockTtlMs: toNumber(process.env.REALTIME_CACHE_LOCK_TTL_MS, 3000),

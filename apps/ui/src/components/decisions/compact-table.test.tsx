@@ -44,8 +44,8 @@ describe("DecisionsCompactTable", () => {
     expect(html).toContain("Cart Recovery");
     expect(html).toContain("Open");
     expect(html).toContain("Edit draft");
-    expect(html).toContain("ACTIVE");
-    expect(html).toContain("DRAFT");
+    expect(html).toContain("Active");
+    expect(html).toContain("Draft");
   });
 
   it("marks table as virtualized for large sets", () => {

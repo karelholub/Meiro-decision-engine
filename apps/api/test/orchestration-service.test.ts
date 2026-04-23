@@ -114,6 +114,74 @@ describe("orchestration service", () => {
     expect(result.fallbackAction?.actionType).toBe("noop");
   });
 
+  it("applies frequency caps only to matching exact audience refs", async () => {
+    const cache = createCache();
+    cache.getString = async () => "1";
+    const prisma = {
+      orchestrationPolicy: {
+        findMany: vi.fn(async () => [
+          {
+            id: "p1",
+            key: "segment_orch",
+            version: 1,
+            appKey: null,
+            policyJson: {
+              schemaVersion: "orchestration_policy.v1",
+              defaults: { mode: "fail_open", fallbackAction: { actionType: "noop", payload: {} } },
+              rules: [
+                {
+                  id: "vip_caps",
+                  type: "frequency_cap",
+                  scope: "global",
+                  appliesTo: { actionTypes: ["message"], audiencesAny: ["meiro_segment:vip"] },
+                  limits: { perDay: 1 },
+                  reasonCode: "SEGMENT_PRESSURE_CAP"
+                }
+              ]
+            }
+          }
+        ])
+      },
+      orchestrationEvent: {
+        findMany: vi.fn(async () => []),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const service = createOrchestrationService({
+      prisma,
+      cache,
+      logger: createLogger(),
+      streamKey: "orchestr_events",
+      streamMaxLen: 1000
+    });
+
+    const unrelated = await service.evaluateAction({
+      environment: "DEV",
+      profileId: "p-1001",
+      action: {
+        actionType: "message",
+        audienceKeys: ["meiro_segment:lifecycle"],
+        tags: []
+      },
+      now
+    });
+    expect(unrelated.allowed).toBe(true);
+
+    const matching = await service.evaluateAction({
+      environment: "DEV",
+      profileId: "p-1001",
+      action: {
+        actionType: "message",
+        audienceKeys: ["meiro_segment:vip"],
+        tags: []
+      },
+      now
+    });
+    expect(matching.allowed).toBe(false);
+    expect(matching.reasons[0]?.code).toBe("SEGMENT_PRESSURE_CAP");
+  });
+
   it("blocks by mutex and cooldown markers from redis", async () => {
     const cache = createCache();
     cache.json.set("orch:mutex:DEV:p-1001:promo_any", { ts: now.getTime() });

@@ -10,7 +10,8 @@ export const orchestrationFallbackActionSchema = z.object({
 const ruleAppliesToSchema = z
   .object({
     actionTypes: stringArraySchema.optional(),
-    tagsAny: stringArraySchema.optional()
+    tagsAny: stringArraySchema.optional(),
+    audiencesAny: stringArraySchema.optional()
   })
   .default({});
 

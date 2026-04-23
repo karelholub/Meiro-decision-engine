@@ -19,12 +19,14 @@ describe("buildActionDescriptor", () => {
           tags: ["promo", "from_payload", "promo"]
         },
         tags: ["from_result", "promo"],
+        audienceKeys: ["meiro_segment:vip", "buyers"],
         campaignKey: "camp_override"
       },
       {
         environment: "DEV",
         explicitTags: ["explicit", "promo"],
         campaignTags: ["campaign_tag", "from_result"],
+        audienceKeys: ["buyers", "meiro_segment:lifecycle"],
         catalogResolver: {
           resolveOfferTags: vi.fn(async () => ["offer_tag", "promo"]),
           resolveContentTags: vi.fn(async () => ["content_tag", "offer_tag"])
@@ -38,6 +40,7 @@ describe("buildActionDescriptor", () => {
     expect(descriptor.campaignKey).toBe("camp_override");
     expect(descriptor.appKey).toBe("store_app");
     expect(descriptor.placement).toBe("home_top");
+    expect(descriptor.audienceKeys).toEqual(["buyers", "meiro_segment:lifecycle", "meiro_segment:vip"]);
     expect(descriptor.tags).toEqual([
       "campaign_tag",
       "content_tag",

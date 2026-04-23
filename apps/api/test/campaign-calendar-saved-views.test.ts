@@ -278,7 +278,8 @@ describe("campaign calendar saved views", () => {
     expect(listResponse.json().items[0]).toMatchObject({
       id: "view-1",
       name: "Approvals this week",
-      filters: { status: "PENDING_APPROVAL" }
+      filters: { status: "PENDING_APPROVAL" },
+      segmentTarget: { minWeeklyTouches: 1, maxWeeklyTouches: 3, maxDailyTouches: 1 }
     });
 
     const createResponse = await app.inject({
@@ -304,6 +305,11 @@ describe("campaign calendar saved views", () => {
           pressureSignal: "cap_pressure",
           needsAttentionOnly: true,
           includeArchived: false
+        },
+        segmentTarget: {
+          minWeeklyTouches: 2,
+          maxWeeklyTouches: 4,
+          maxDailyTouches: 1
         }
       }
     });
@@ -323,8 +329,23 @@ describe("campaign calendar saved views", () => {
         pressureRisk: "high",
         pressureSignal: "cap_pressure",
         needsAttentionOnly: true
+      },
+      segmentTarget: {
+        minWeeklyTouches: 2,
+        maxWeeklyTouches: 4,
+        maxDailyTouches: 1
       }
     });
+    expect(prisma.campaignCalendarSavedView.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          filtersJson: expect.objectContaining({
+            filters: expect.objectContaining({ appKey: "web" }),
+            segmentTarget: { minWeeklyTouches: 2, maxWeeklyTouches: 4, maxDailyTouches: 1 }
+          })
+        })
+      })
+    );
     expect(prisma.inAppAuditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

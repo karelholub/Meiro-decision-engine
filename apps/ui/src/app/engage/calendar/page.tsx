@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "../../../components/ui/status-badges";
+import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { EmptyState, InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import { MetricCard } from "../../../components/ui/card";
@@ -18,7 +19,8 @@ import {
   type CampaignCalendarResponse,
   type CampaignCalendarReviewPackRecord,
   type CampaignCalendarSavedViewRecord,
-  type CampaignSchedulePreviewResponse
+  type CampaignSchedulePreviewResponse,
+  type MeiroMcpSegment
 } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
 import { activationAssetTypeOptions, activationChannelFilterOptions, campaignCreationHref } from "../../../components/catalog/activationAssetConfig";
@@ -39,8 +41,10 @@ import {
   calendarRiskLabel,
   calendarShareParams,
   calendarSourceTypeLabel,
+  buildCalendarSegmentCoverage,
   buildCalendarPlanningInsights,
   daysBetweenInclusive,
+  defaultCalendarSegmentTarget,
   defaultCalendarViews,
   formatDateInput,
   fromDatetimeLocal,
@@ -61,6 +65,7 @@ import {
   type CalendarFilters,
   type CalendarCampaignAction,
   type CalendarSavedView,
+  type CalendarSegmentCoverageItem,
   type CalendarSwimlane,
   type CalendarView
 } from "./calendar-utils";
@@ -71,6 +76,9 @@ const assetHref = (asset: CampaignCalendarItem["linkedAssets"][number]) =>
   asset.kind === "offer" ? `/catalog/offers?key=${encodeURIComponent(asset.key)}` : `/catalog/content?key=${encodeURIComponent(asset.key)}`;
 
 const campaignDate = (value: string | null) => (value ? new Date(value).toLocaleDateString() : "-");
+
+const segmentPressurePolicyHref = (segment: CalendarSegmentCoverageItem, target: { maxDailyTouches: number; maxWeeklyTouches: number }) =>
+  `/execution/orchestration?recommendation=segment_pressure&audienceKey=${encodeURIComponent(segment.audienceKey)}&segmentName=${encodeURIComponent(segment.name)}&maxDay=${encodeURIComponent(String(target.maxDailyTouches))}&maxWeek=${encodeURIComponent(String(target.maxWeeklyTouches))}`;
 
 const checkClassName = (status: CampaignCalendarItem["planningReadiness"]["checks"][number]["status"]) => {
   if (status === "passed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
@@ -88,7 +96,7 @@ const toServerCalendarFilters = (
   assetType: filters.assetType ? (filters.assetType as ActivationAssetType) : "",
   channel: filters.channel ? (filters.channel as ActivationAssetChannel) : "",
   readiness: filters.readiness ? (filters.readiness as CampaignCalendarResponse["items"][number]["planningReadiness"]["status"]) : "",
-  sourceType: filters.sourceType === "in_app_campaign" ? "in_app_campaign" : "",
+  sourceType: filters.sourceType === "in_app_campaign" || filters.sourceType === "meiro_campaign" ? filters.sourceType : "",
   audienceKey: filters.audienceKey,
   overlapRisk: filters.overlapRisk ? filters.overlapRisk as ApiCampaignCalendarFilters["overlapRisk"] : "",
   pressureRisk: filters.pressureRisk ? filters.pressureRisk as ApiCampaignCalendarFilters["pressureRisk"] : "",
@@ -117,7 +125,8 @@ const fromServerSavedView = (record: CampaignCalendarSavedViewRecord): CalendarS
     pressureSignal: record.filters.pressureSignal ?? "",
     needsAttentionOnly: record.filters.needsAttentionOnly ?? false,
     includeArchived: record.filters.includeArchived ?? false
-  }
+  },
+  segmentTarget: record.segmentTarget ?? defaultCalendarSegmentTarget()
 });
 
 function CalendarCampaignCard({
@@ -148,13 +157,16 @@ function CalendarCampaignCard({
   const pressureSignalCount = item.pressureSignals.length + item.capSignals.length;
   const visibleAssets = compact ? item.linkedAssets.slice(0, 1) : item.linkedAssets;
   const visibleWarnings = item.warnings.slice(0, compact ? 1 : 4);
+  const canEditInAppCampaign = item.sourceType === "in_app_campaign";
+  const primaryTarget = item.drilldownTargets.find((target) => target.type === "campaign" || target.type === "meiro_campaign") ?? item.drilldownTargets[0];
+  const primaryHref = primaryTarget?.href ?? `/engage/campaigns/${item.campaignId}`;
 
   return (
     <article
       className={`rounded-md border ${compact ? "p-1.5 text-xs leading-tight" : "p-2.5 text-sm leading-snug"} ${draggable ? "cursor-grab active:cursor-grabbing" : ""} ${statusClassName(item.status)}`}
-      draggable={draggable}
+      draggable={draggable && canEditInAppCampaign}
       onDragStart={(event) => {
-        if (!draggable) return;
+        if (!draggable || !canEditInAppCampaign) return;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", item.campaignId);
         onDragStart?.(item);
@@ -174,7 +186,7 @@ function CalendarCampaignCard({
             />
           ) : null}
           <Link
-            href={`/engage/campaigns/${item.campaignId}`}
+            href={primaryHref}
             className={`${compact ? "text-[13px]" : "text-sm"} min-w-0 truncate font-semibold underline decoration-transparent hover:decoration-current`}
             title={item.name}
           >
@@ -262,7 +274,7 @@ function CalendarCampaignCard({
               View details
             </Button>
           ) : null}
-          {onEditSchedule ? (
+          {onEditSchedule && canEditInAppCampaign ? (
             <Button
               type="button"
               variant="outline"
@@ -273,7 +285,7 @@ function CalendarCampaignCard({
               Edit schedule
             </Button>
           ) : null}
-          {onQuickSchedule ? (
+          {onQuickSchedule && canEditInAppCampaign ? (
             <Button
               type="button"
               variant="outline"
@@ -284,8 +296,8 @@ function CalendarCampaignCard({
               Plan in view
             </Button>
           ) : null}
-          <ButtonLink className="border-current/20 bg-white/60 hover:bg-white" size="sm" href={`/engage/campaigns/${item.campaignId}/edit`}>
-            Open editor
+          <ButtonLink className="border-current/20 bg-white/60 hover:bg-white" size="sm" href={primaryHref}>
+            {item.sourceType === "meiro_campaign" ? "Open Meiro" : "Open editor"}
           </ButtonLink>
         </div>
       ) : null}
@@ -307,6 +319,8 @@ function CampaignCalendarDrawer({
   onStartAction: (item: CampaignCalendarItem, action: CalendarCampaignAction) => void;
 }) {
   const actionOptions = calendarCampaignActionOptions(item, actionPermissions);
+  const primaryTarget = item.drilldownTargets.find((target) => target.type === "campaign" || target.type === "meiro_campaign") ?? item.drilldownTargets[0];
+  const primaryHref = primaryTarget?.href ?? `/engage/campaigns/${item.campaignId}`;
 
   return (
     <Drawer
@@ -316,10 +330,10 @@ function CampaignCalendarDrawer({
       onClose={onClose}
       actions={
         <>
-          <ButtonLink href={`/engage/campaigns/${item.campaignId}/edit`}>
-            Open editor
+          <ButtonLink href={primaryHref}>
+            {item.sourceType === "meiro_campaign" ? "Open Meiro campaign" : "Open editor"}
           </ButtonLink>
-          {actionPermissions.canWrite ? (
+          {actionPermissions.canWrite && item.sourceType === "in_app_campaign" ? (
             <Button type="button" onClick={() => onEditSchedule(item)}>
               Edit schedule
             </Button>
@@ -595,6 +609,147 @@ function CampaignCalendarDrawer({
   );
 }
 
+function SegmentCoverageDrawer({
+  segment,
+  target,
+  onClose
+}: {
+  segment: CalendarSegmentCoverageItem;
+  target: { minWeeklyTouches: number; maxWeeklyTouches: number; maxDailyTouches: number };
+  onClose: () => void;
+}) {
+  const policyHref = segmentPressurePolicyHref(segment, target);
+  const plannedCampaigns = segment.campaigns.filter((campaign) => campaign.startAt && campaign.endAt);
+  const unscheduledCampaigns = segment.campaigns.filter((campaign) => !campaign.startAt || !campaign.endAt);
+
+  return (
+    <Drawer
+      eyebrow="Segment coverage"
+      title={segment.name}
+      description={<span className="font-mono text-xs">{segment.audienceKey}</span>}
+      onClose={onClose}
+      actions={
+        <>
+          <ButtonLink href={`/engage/calendar?audienceKey=${encodeURIComponent(segment.audienceKey)}`}>Filter calendar</ButtonLink>
+          <ButtonLink href={`/execution/precompute?segment=${encodeURIComponent(segment.audienceKey)}`} variant="outline">
+            Precompute
+          </ButtonLink>
+          {segment.status === "over" ? (
+            <ButtonLink href={policyHref} variant="outline">
+              Draft cap
+            </ButtonLink>
+          ) : null}
+        </>
+      }
+    >
+      <section className="grid gap-3 md:grid-cols-4">
+        <div className={`rounded-md border p-3 ${calendarLoadClassName(segment.riskLevel)}`}>
+          <p className="text-xs uppercase tracking-wide opacity-70">Coverage</p>
+          <p className="mt-2 text-lg font-semibold capitalize">{segment.status}</p>
+          <p className="mt-1 text-xs opacity-80">{segment.detail}</p>
+        </div>
+        <div className="rounded-md border border-stone-200 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Planned</p>
+          <p className="mt-2 text-lg font-semibold">{segment.plannedCampaigns}</p>
+          <p className="text-xs text-stone-600">{segment.activeCampaigns} active · {segment.unscheduledCampaigns} unscheduled</p>
+        </div>
+        <div className="rounded-md border border-stone-200 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Pressure</p>
+          <p className="mt-2 text-lg font-semibold">{segment.maxSameDayTouches}/day · {segment.maxSameWeekTouches}/week</p>
+          <p className="text-xs text-stone-600">Target max {target.maxDailyTouches}/day · {target.maxWeeklyTouches}/week</p>
+        </div>
+        <div className="rounded-md border border-stone-200 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Audience size</p>
+          <p className="mt-2 text-lg font-semibold">{segment.customerCount !== null ? segment.customerCount.toLocaleString() : "-"}</p>
+          <p className="text-xs text-stone-600">From Meiro metadata when available</p>
+        </div>
+      </section>
+
+      <section className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-md border border-stone-200 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-wide text-stone-500">Campaign types</p>
+            <span className="text-xs text-stone-500">{segment.campaignTypeBreakdown.length}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {segment.campaignTypeBreakdown.map((entry) => (
+              <span key={entry.key} className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-xs">
+                {entry.label}: {entry.count}
+              </span>
+            ))}
+            {segment.campaignTypeBreakdown.length === 0 ? <p className="text-sm text-stone-600">No scheduled campaign types in this window.</p> : null}
+          </div>
+        </div>
+        <div className="rounded-md border border-stone-200 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-wide text-stone-500">Channels</p>
+            <span className="text-xs text-stone-500">{segment.channelBreakdown.length}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {segment.channelBreakdown.map((entry) => (
+              <span key={entry.key} className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-xs">
+                {entry.label}: {entry.count}
+              </span>
+            ))}
+            {segment.channelBreakdown.length === 0 ? <p className="text-sm text-stone-600">No scheduled channels in this window.</p> : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-md border border-stone-200 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Campaigns driving this segment</p>
+          <span className="text-xs text-stone-500">{segment.campaigns.length}</span>
+        </div>
+        <div className="mt-3 space-y-2">
+          {plannedCampaigns.slice(0, 12).map((campaign) => (
+            <Link key={campaign.campaignId} href={campaign.detailHref} className="block rounded-md border border-stone-200 p-3 hover:border-stone-400">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{campaign.name}</p>
+                  <p className="font-mono text-xs text-stone-500">{campaign.campaignKey}</p>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <StatusBadge status={campaign.status} />
+                  {campaign.pressureRiskLevel !== "none" ? (
+                    <span className={`rounded border px-2 py-1 text-xs ${calendarRiskClassName(campaign.pressureRiskLevel)}`}>
+                      Pressure {calendarRiskLabel(campaign.pressureRiskLevel)}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-stone-600">
+                <span>{calendarChannelLabel(campaign.channel)}</span>
+                <span>{campaignDate(campaign.startAt)} - {campaignDate(campaign.endAt)}</span>
+                {campaign.campaignTypeTags.map((tag) => (
+                  <span key={tag} className="rounded border border-stone-200 px-1.5 py-0.5">{tag}</span>
+                ))}
+              </div>
+            </Link>
+          ))}
+          {plannedCampaigns.length === 0 ? <p className="text-sm text-stone-600">No scheduled campaigns with this exact segment reference in the visible window.</p> : null}
+        </div>
+      </section>
+
+      {unscheduledCampaigns.length > 0 ? (
+        <section className="rounded-md border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs uppercase tracking-wide text-amber-900">Unscheduled segment usage</p>
+          <p className="mt-2 text-sm text-amber-900">
+            {unscheduledCampaigns.length} campaign{unscheduledCampaigns.length === 1 ? "" : "s"} reference this segment but do not have a complete schedule.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+            {unscheduledCampaigns.slice(0, 8).map((campaign) => (
+              <Link key={campaign.campaignId} href={campaign.detailHref} className="rounded border border-amber-300 bg-white/70 px-2 py-1">
+                {campaign.campaignKey}
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </Drawer>
+  );
+}
+
 export default function CampaignCalendarPage() {
   const { hasPermission } = usePermissions();
   const canWrite = hasPermission("engage.campaign.write");
@@ -631,6 +786,7 @@ export default function CampaignCalendarPage() {
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
   const [draggedCampaignId, setDraggedCampaignId] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<CampaignCalendarItem | null>(null);
+  const [selectedSegment, setSelectedSegment] = useState<CalendarSegmentCoverageItem | null>(null);
   const [savedViews, setSavedViews] = useState<CalendarSavedView[]>([]);
   const [activeViewId, setActiveViewId] = useState("planning_risks");
   const [viewsOpen, setViewsOpen] = useState(false);
@@ -640,10 +796,25 @@ export default function CampaignCalendarPage() {
   const [recentExports, setRecentExports] = useState<CampaignCalendarExportAuditRecord[]>([]);
   const [recentReviewPacks, setRecentReviewPacks] = useState<CampaignCalendarReviewPackRecord[]>([]);
   const [creatingReviewPack, setCreatingReviewPack] = useState(false);
+  const [meiroSegments, setMeiroSegments] = useState<MeiroMcpSegment[]>([]);
+  const [segmentsLoading, setSegmentsLoading] = useState(false);
+  const [segmentsError, setSegmentsError] = useState<string | null>(null);
+  const defaultSegmentTarget = defaultCalendarSegmentTarget();
+  const [segmentMinWeekly, setSegmentMinWeekly] = useState(String(defaultSegmentTarget.minWeeklyTouches));
+  const [segmentMaxWeekly, setSegmentMaxWeekly] = useState(String(defaultSegmentTarget.maxWeeklyTouches));
+  const [segmentMaxDaily, setSegmentMaxDaily] = useState(String(defaultSegmentTarget.maxDailyTouches));
   const [urlReady, setUrlReady] = useState(false);
 
   const range = useMemo(() => windowForView(view, anchor), [view, anchor]);
   const days = useMemo(() => daysBetweenInclusive(range.from, range.to), [range.from, range.to]);
+  const segmentCoverageTarget = useMemo(
+    () => ({
+      minWeeklyTouches: Math.max(0, Number.parseInt(segmentMinWeekly, 10) || 0),
+      maxWeeklyTouches: Math.max(1, Number.parseInt(segmentMaxWeekly, 10) || 1),
+      maxDailyTouches: Math.max(1, Number.parseInt(segmentMaxDaily, 10) || 1)
+    }),
+    [segmentMaxDaily, segmentMaxWeekly, segmentMinWeekly]
+  );
 
   const loadCalendar = async () => {
     setLoading(true);
@@ -658,11 +829,11 @@ export default function CampaignCalendarPage() {
         assetType: assetType ? assetType as ActivationAssetType : undefined,
         channel: channel ? channel as ActivationAssetChannel : undefined,
         readiness: readiness ? readiness as CampaignCalendarItem["planningReadiness"]["status"] : undefined,
-        sourceType: sourceType === "in_app_campaign" ? "in_app_campaign" : undefined,
+        sourceType: sourceType === "in_app_campaign" || sourceType === "meiro_campaign" ? sourceType : undefined,
         audienceKey: audienceKey.trim() || undefined,
         overlapRisk: overlapRisk ? overlapRisk as CampaignCalendarItem["overlapRiskLevel"] : undefined,
         pressureRisk: pressureRisk ? pressureRisk as CampaignCalendarItem["pressureRiskLevel"] : undefined,
-        pressureSignal: pressureSignal ? pressureSignal as "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density" : undefined,
+        pressureSignal: pressureSignal ? pressureSignal as "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density" | "priority_arbitration" : undefined,
         needsAttentionOnly: needsAttentionOnly ? "true" : "false",
         includeArchived: includeArchived ? "true" : "false"
       });
@@ -705,6 +876,23 @@ export default function CampaignCalendarPage() {
     }
   };
 
+  const loadMeiroSegments = async () => {
+    setSegmentsLoading(true);
+    setSegmentsError(null);
+    try {
+      const response = await apiClient.meiro.mcp.segments({ optional: true });
+      setMeiroSegments(response.items);
+      if (response.degraded) {
+        setSegmentsError(response.error ?? "Meiro segment metadata is degraded.");
+      }
+    } catch (loadError) {
+      setMeiroSegments([]);
+      setSegmentsError(loadError instanceof Error ? loadError.message : "Failed to load Meiro segments.");
+    } finally {
+      setSegmentsLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadCalendar();
   }, [
@@ -732,6 +920,9 @@ export default function CampaignCalendarPage() {
     setSavedViews(prefs.views);
     setActiveViewId(prefs.activeViewId);
     setSwimlane(prefs.swimlane);
+    setSegmentMinWeekly(String(prefs.segmentTarget.minWeeklyTouches));
+    setSegmentMaxWeekly(String(prefs.segmentTarget.maxWeeklyTouches));
+    setSegmentMaxDaily(String(prefs.segmentTarget.maxDailyTouches));
 
     const params = new URLSearchParams(window.location.search);
     const initialView = params.get("view");
@@ -753,7 +944,7 @@ export default function CampaignCalendarPage() {
     setChannel(params.get("channel") ?? "");
     setReadiness(params.get("readiness") ?? "");
     setSourceType(params.get("sourceType") ?? "");
-    setAudienceKey(params.get("audienceKey") ?? "");
+    setAudienceKey(params.get("audienceKey") ?? params.get("audience") ?? "");
     setOverlapRisk(params.get("overlapRisk") ?? "");
     setPressureRisk(params.get("pressureRisk") ?? "");
     setPressureSignal(params.get("pressureSignal") ?? "");
@@ -763,10 +954,17 @@ export default function CampaignCalendarPage() {
     if (isCalendarSwimlane(initialSwimlane)) {
       setSwimlane(initialSwimlane);
     }
+    const queryMinWeekly = Number.parseInt(params.get("segmentMinWeekly") ?? "", 10);
+    const queryMaxWeekly = Number.parseInt(params.get("segmentMaxWeekly") ?? "", 10);
+    const queryMaxDaily = Number.parseInt(params.get("segmentMaxDaily") ?? "", 10);
+    if (Number.isFinite(queryMinWeekly)) setSegmentMinWeekly(String(Math.max(0, queryMinWeekly)));
+    if (Number.isFinite(queryMaxWeekly)) setSegmentMaxWeekly(String(Math.max(1, queryMaxWeekly)));
+    if (Number.isFinite(queryMaxDaily)) setSegmentMaxDaily(String(Math.max(1, queryMaxDaily)));
     setUrlReady(true);
     void loadServerSavedViews();
     void loadRecentExports();
     void loadRecentReviewPacks();
+    void loadMeiroSegments();
   }, []);
 
   const filters: CalendarFilters = {
@@ -788,18 +986,19 @@ export default function CampaignCalendarPage() {
 
   useEffect(() => {
     if (!urlReady || typeof window === "undefined") return;
-    const params = calendarShareParams({ view, swimlane, from: range.from, filters });
+    const params = calendarShareParams({ view, swimlane, from: range.from, filters, segmentTarget: segmentCoverageTarget });
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
-  }, [urlReady, view, swimlane, range.from.toISOString(), status, appKey, placementKey, assetKey, assetType, channel, readiness, sourceType, audienceKey, overlapRisk, pressureRisk, pressureSignal, needsAttentionOnly, includeArchived]);
+  }, [urlReady, view, swimlane, range.from.toISOString(), status, appKey, placementKey, assetKey, assetType, channel, readiness, sourceType, audienceKey, overlapRisk, pressureRisk, pressureSignal, needsAttentionOnly, includeArchived, segmentCoverageTarget]);
 
   useEffect(() => {
     if (!urlReady) return;
     saveCalendarPrefs({
       activeViewId,
       views: savedViews.length > 0 ? savedViews : loadCalendarPrefs().views,
-      swimlane
+      swimlane,
+      segmentTarget: segmentCoverageTarget
     });
-  }, [urlReady, activeViewId, savedViews, swimlane]);
+  }, [urlReady, activeViewId, savedViews, swimlane, segmentCoverageTarget]);
 
   useEffect(() => {
     if (!calendar) return;
@@ -973,6 +1172,16 @@ export default function CampaignCalendarPage() {
     () => buildCalendarPlanningInsights(visibleItems, days, new Date(calendar?.window.generatedAt ?? Date.now())),
     [visibleItems, days, calendar?.window.generatedAt]
   );
+  const segmentCoverage = useMemo(
+    () =>
+      buildCalendarSegmentCoverage({
+        items: visibleItems,
+        segments: meiroSegments,
+        days,
+        target: segmentCoverageTarget
+      }),
+    [visibleItems, meiroSegments, days, segmentCoverageTarget]
+  );
   const selectedItems = useMemo(
     () => visibleItems.filter((item) => selectedCampaignIds.has(item.campaignId)),
     [visibleItems, selectedCampaignIds]
@@ -986,7 +1195,7 @@ export default function CampaignCalendarPage() {
     assetKey,
     assetType
   });
-  const currentShareHref = `/engage/calendar?${calendarShareParams({ view, swimlane, from: range.from, filters }).toString()}`;
+  const currentShareHref = `/engage/calendar?${calendarShareParams({ view, swimlane, from: range.from, filters, segmentTarget: segmentCoverageTarget }).toString()}`;
 
   const actionPermissions = { canWrite, canActivate, canArchive };
   const bulkSummary = bulkActionDraft
@@ -1036,6 +1245,9 @@ export default function CampaignCalendarPage() {
     setPressureSignal(savedView.filters.pressureSignal ?? "");
     setNeedsAttentionOnly(savedView.filters.needsAttentionOnly ?? false);
     setIncludeArchived(savedView.filters.includeArchived ?? false);
+    setSegmentMinWeekly(String(savedView.segmentTarget.minWeeklyTouches));
+    setSegmentMaxWeekly(String(savedView.segmentTarget.maxWeeklyTouches));
+    setSegmentMaxDaily(String(savedView.segmentTarget.maxDailyTouches));
     setActiveViewId(savedView.id);
     setViewsOpen(false);
   };
@@ -1049,7 +1261,8 @@ export default function CampaignCalendarPage() {
         name,
         view,
         swimlane,
-        filters: toServerCalendarFilters(filters)
+        filters: toServerCalendarFilters(filters),
+        segmentTarget: segmentCoverageTarget
       });
       const savedView = fromServerSavedView(response.item);
       setSavedViews((current) => [...current.filter((entry) => entry.id !== savedView.id), savedView]);
@@ -1063,7 +1276,8 @@ export default function CampaignCalendarPage() {
         name,
         view,
         swimlane,
-        filters
+        filters,
+        segmentTarget: segmentCoverageTarget
       };
       setSavedViews((current) => [...current, savedView]);
       setActiveViewId(savedView.id);
@@ -1143,11 +1357,11 @@ export default function CampaignCalendarPage() {
         assetType: assetType ? assetType as ActivationAssetType : undefined,
         channel: channel ? channel as ActivationAssetChannel : undefined,
         readiness: readiness ? readiness as CampaignCalendarItem["planningReadiness"]["status"] : undefined,
-        sourceType: sourceType === "in_app_campaign" ? "in_app_campaign" : undefined,
+        sourceType: sourceType === "in_app_campaign" || sourceType === "meiro_campaign" ? sourceType : undefined,
         audienceKey: audienceKey.trim() || undefined,
         overlapRisk: overlapRisk ? overlapRisk as CampaignCalendarItem["overlapRiskLevel"] : undefined,
         pressureRisk: pressureRisk ? pressureRisk as CampaignCalendarItem["pressureRiskLevel"] : undefined,
-        pressureSignal: pressureSignal ? pressureSignal as "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density" : undefined,
+        pressureSignal: pressureSignal ? pressureSignal as "same_audience" | "same_placement" | "asset_reuse" | "cap_pressure" | "channel_density" | "priority_arbitration" : undefined,
         needsAttentionOnly: needsAttentionOnly ? "true" : "false",
         includeArchived: includeArchived ? "true" : "false"
       });
@@ -1595,7 +1809,9 @@ export default function CampaignCalendarPage() {
                       >
                         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => applySavedView(savedView)}>
                           <span>{savedView.name}</span>
-                          <span className="block text-xs text-stone-500">{swimlaneLabel(savedView.swimlane)} · {savedView.view}</span>
+                          <span className="block text-xs text-stone-500">
+                            {swimlaneLabel(savedView.swimlane)} · {savedView.view} · segment {savedView.segmentTarget.maxDailyTouches}/day, {savedView.segmentTarget.minWeeklyTouches}-{savedView.segmentTarget.maxWeeklyTouches}/week
+                          </span>
                         </button>
                         {!BUILT_IN_VIEW_IDS.has(savedView.id) ? (
                           <button
@@ -1702,7 +1918,7 @@ export default function CampaignCalendarPage() {
             Pressure cue
             <select className={inputClassName} value={pressureSignal} onChange={(event) => setPressureSignal(event.target.value)}>
               <option value="">Any cue</option>
-              {(["same_audience", "same_placement", "asset_reuse", "cap_pressure", "channel_density"] as const).map((signal) => (
+              {(["same_audience", "same_placement", "asset_reuse", "cap_pressure", "channel_density", "priority_arbitration"] as const).map((signal) => (
                 <option key={signal} value={signal}>{calendarPressureSignalLabel(signal)}</option>
               ))}
             </select>
@@ -1712,6 +1928,7 @@ export default function CampaignCalendarPage() {
             <select className={inputClassName} value={sourceType} onChange={(event) => setSourceType(event.target.value)}>
               <option value="">Any source</option>
               <option value="in_app_campaign">In-app campaigns</option>
+              <option value="meiro_campaign">Meiro campaigns</option>
             </select>
           </FieldLabel>
           <FieldLabel>
@@ -1724,7 +1941,7 @@ export default function CampaignCalendarPage() {
           </FieldLabel>
           <FieldLabel>
             Audience
-            <input className={inputClassName} value={audienceKey} onChange={(event) => setAudienceKey(event.target.value)} placeholder="audience key" />
+            <MeiroSegmentPicker value={audienceKey} onChange={setAudienceKey} placeholder="audience key or Meiro segment id" />
           </FieldLabel>
           <FieldLabel>
             Asset key
@@ -1858,6 +2075,103 @@ export default function CampaignCalendarPage() {
               {summary.hotspots.length === 0 ? <p className="text-sm text-stone-600">No overlap or pressure hotspots in this window.</p> : null}
             </div>
           </aside>
+        </section>
+      ) : null}
+
+      {summary ? (
+        <section className="rounded-md border border-stone-200 bg-white p-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-semibold">Segment coverage</h3>
+              <p className="text-xs text-stone-600">
+                Compares exact Meiro segment references in this calendar window against target communication cadence. This is coverage guidance, not customer-level reach math.
+              </p>
+              <p className="mt-1 text-xs text-stone-500">
+                Targets are saved with calendar views and shared links.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void loadMeiroSegments()} disabled={segmentsLoading}>
+                {segmentsLoading ? "Loading..." : "Refresh segments"}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => setSwimlane("audience")}>
+                Audience swimlane
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 md:grid-cols-[repeat(3,minmax(120px,160px))_1fr]">
+            <FieldLabel>
+              Min / week
+              <input className={inputClassName} type="number" min={0} value={segmentMinWeekly} onChange={(event) => setSegmentMinWeekly(event.target.value)} />
+            </FieldLabel>
+            <FieldLabel>
+              Max / week
+              <input className={inputClassName} type="number" min={1} value={segmentMaxWeekly} onChange={(event) => setSegmentMaxWeekly(event.target.value)} />
+            </FieldLabel>
+            <FieldLabel>
+              Max / day
+              <input className={inputClassName} type="number" min={1} value={segmentMaxDaily} onChange={(event) => setSegmentMaxDaily(event.target.value)} />
+            </FieldLabel>
+            <div className="flex flex-wrap items-end gap-2 text-xs">
+              <span className="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-rose-800">Over {segmentCoverage.overTarget}</span>
+              <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">Under {segmentCoverage.underTarget}</span>
+              <span className="rounded border border-stone-200 bg-stone-50 px-2 py-1 text-stone-600">No plan {segmentCoverage.noPlannedActivity}</span>
+              <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-800">Within {segmentCoverage.withinTarget}</span>
+              {segmentCoverage.unknownReferencedSegments > 0 ? (
+                <span className="rounded border border-sky-200 bg-sky-50 px-2 py-1 text-sky-800">
+                  {segmentCoverage.unknownReferencedSegments} referenced outside metadata
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          {segmentsError ? <p className="mt-2 text-xs text-amber-700">{segmentsError}</p> : null}
+
+          <div className="mt-3 grid gap-2 lg:grid-cols-2 xl:grid-cols-4">
+            {segmentCoverage.items.slice(0, 12).map((segment) => (
+              <div key={segment.id} className={`rounded-md border p-3 ${calendarLoadClassName(segment.riskLevel)}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{segment.name}</p>
+                    <p className="truncate font-mono text-xs opacity-80">{segment.audienceKey}</p>
+                  </div>
+                  <span className="rounded border border-current/20 bg-white/60 px-2 py-1 text-xs">{segment.status}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-1 text-xs">
+                  <span>{segment.plannedCampaigns} planned</span>
+                  <span>{segment.maxSameDayTouches}/day</span>
+                  <span>{segment.maxSameWeekTouches}/week</span>
+                </div>
+                <p className="mt-2 text-xs opacity-85">{segment.detail}</p>
+                {segment.customerCount !== null ? <p className="mt-1 text-xs opacity-80">{segment.customerCount.toLocaleString()} customers</p> : null}
+                {segment.campaignKeys.length > 0 ? <p className="mt-1 truncate text-xs opacity-75">{segment.campaignKeys.join(", ")}</p> : null}
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <Link className="underline decoration-current/40 underline-offset-2" href={`/engage/calendar?audienceKey=${encodeURIComponent(segment.audienceKey)}`}>
+                    Filter calendar
+                  </Link>
+                  <Link className="underline decoration-current/40 underline-offset-2" href={`/execution/precompute?segment=${encodeURIComponent(segment.audienceKey)}`}>
+                    Precompute
+                  </Link>
+                  <Link
+                    className="underline decoration-current/40 underline-offset-2"
+                    href={segment.status === "over" ? segmentPressurePolicyHref(segment, segmentCoverageTarget) : "/execution/orchestration?tag=campaign_type%3Anewsletter"}
+                  >
+                    {segment.status === "over" ? "Draft cap" : "Policy rules"}
+                  </Link>
+                  <button type="button" className="underline decoration-current/40 underline-offset-2" onClick={() => setSelectedSegment(segment)}>
+                    Inspect
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {segmentCoverage.items.length === 0 ? (
+            <p className="mt-3 text-sm text-stone-600">No Meiro segment metadata or exact audience references are available for this window.</p>
+          ) : segmentCoverage.items.length > 12 ? (
+            <p className="mt-3 text-xs text-stone-500">Showing the 12 highest-priority segment coverage rows from {segmentCoverage.totalSegments} known or referenced segments.</p>
+          ) : null}
         </section>
       ) : null}
 
@@ -2098,6 +2412,13 @@ export default function CampaignCalendarPage() {
             </div>
           </div>
         </section>
+      ) : null}
+      {selectedSegment ? (
+        <SegmentCoverageDrawer
+          segment={selectedSegment}
+          target={segmentCoverageTarget}
+          onClose={() => setSelectedSegment(null)}
+        />
       ) : null}
       {selectedItem ? (
         <CampaignCalendarDrawer

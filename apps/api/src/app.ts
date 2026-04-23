@@ -19,9 +19,11 @@ import {
 } from "@decisioning/dsl";
 import { evaluateDecision, type EngineContext, type EngineProfile, type StackEvaluationResult } from "@decisioning/engine";
 import {
+  MeiroMcpClient,
   WbsMeiroAdapter,
   buildWbsLookupRequest,
   createMeiroAdapter,
+  type MeiroMcpConfig,
   type MeiroAdapter,
   type WbsLookupAdapter,
   type WbsLookupResponse
@@ -36,6 +38,7 @@ import {
   type WbsProfileIdStrategy
 } from "@decisioning/wbs-mapping";
 import { z } from "zod";
+import { createApiBootstrapRuntimeConfig } from "./bootstrap/runtime";
 import { readConfig, type AppConfig } from "./config";
 import { seedMockProfiles } from "./data/mockProfiles";
 import {
@@ -81,6 +84,8 @@ import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
 import { createOrchestrationEventsWorker } from "./jobs/orchestrationEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { createRetentionWorker } from "./jobs/retentionWorker";
+import { createCachedProfileSegmentResolver } from "./services/segmentResolver";
+import { registerBootstrapRoutes } from "./routes/bootstrap";
 import { invalidateRealtimeCache, registerCacheRoutes } from "./routes/cache";
 import { registerCatalogRoutes } from "./routes/catalog";
 import { registerDlqRoutes } from "./routes/dlq";
@@ -90,6 +95,7 @@ import { registerPrecomputeRoutes } from "./routes/precompute";
 import { registerPipesCallbackRoutes } from "./routes/pipesCallback";
 import { registerReleaseRoutes } from "./routes/releases";
 import { registerExperimentRoutes } from "./routes/experiments";
+import { registerMeiroRoutes } from "./routes/meiro";
 import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
 import {
   processPipesWebhook,
@@ -98,10 +104,7 @@ import {
 } from "./routes/webhooks";
 import {
   RUNTIME_SETTINGS_KEY,
-  createRuntimeSettingsMap,
-  normalizeRuntimeSettings,
-  parseRuntimeSettings,
-  type RuntimeSettings
+  parseRuntimeSettings
 } from "./settings/runtimeSettings";
 import {
   APP_ENUM_SETTINGS_DEFAULTS,
@@ -132,6 +135,7 @@ export interface BuildAppDeps {
   prisma?: PrismaClient;
   dlqProvider?: DlqProvider;
   meiroAdapter?: MeiroAdapter;
+  meiroMcpClient?: MeiroMcpClient;
   wbsAdapter?: WbsLookupAdapter;
   cache?: JsonCache;
   config?: AppConfig;
@@ -2377,229 +2381,65 @@ const buildTraceEnvelope = (input: {
 export const buildApp = async (deps: BuildAppDeps = {}) => {
   const config = deps.config ?? readConfig();
   const app = Fastify({ logger: true });
-  const apiRuntimeRole = config.apiRuntimeRole === "serve" || config.apiRuntimeRole === "worker" ? config.apiRuntimeRole : "all";
-  const runBackgroundWorkers = apiRuntimeRole === "all" || apiRuntimeRole === "worker";
-  const realtimeCacheTtlSeconds =
-    typeof config.realtimeCacheTtlSeconds === "number" && Number.isFinite(config.realtimeCacheTtlSeconds)
-      ? Math.max(1, Math.floor(config.realtimeCacheTtlSeconds))
-      : 60;
-  const realtimeCacheLockTtlMs =
-    typeof config.realtimeCacheLockTtlMs === "number" && Number.isFinite(config.realtimeCacheLockTtlMs)
-      ? Math.max(50, Math.floor(config.realtimeCacheLockTtlMs))
-      : 3000;
-  const realtimeCacheImportantContextKeys =
-    Array.isArray(config.realtimeCacheImportantContextKeys) && config.realtimeCacheImportantContextKeys.length > 0
-      ? config.realtimeCacheImportantContextKeys
-      : ["appKey", "placement", "locale", "deviceType"];
-  const profileCacheTtlSeconds =
-    typeof config.profileCacheTtlSeconds === "number" && Number.isFinite(config.profileCacheTtlSeconds)
-      ? Math.max(1, Math.floor(config.profileCacheTtlSeconds))
-      : 30;
-  const precomputeConcurrency =
-    typeof config.precomputeConcurrency === "number" && Number.isFinite(config.precomputeConcurrency)
-      ? Math.max(1, Math.floor(config.precomputeConcurrency))
-      : 20;
-  const precomputeMaxRetries =
-    typeof config.precomputeMaxRetries === "number" && Number.isFinite(config.precomputeMaxRetries)
-      ? Math.max(0, Math.floor(config.precomputeMaxRetries))
-      : 2;
-  const precomputeLookupDelayMs =
-    typeof config.precomputeLookupDelayMs === "number" && Number.isFinite(config.precomputeLookupDelayMs)
-      ? Math.max(0, Math.floor(config.precomputeLookupDelayMs))
-      : 25;
-  const decisionDefaultTimeoutMs =
-    typeof config.decisionDefaultTimeoutMs === "number" && Number.isFinite(config.decisionDefaultTimeoutMs)
-      ? Math.max(20, Math.min(5000, Math.floor(config.decisionDefaultTimeoutMs)))
-      : 120;
-  const decisionDefaultWbsTimeoutMs =
-    typeof config.decisionDefaultWbsTimeoutMs === "number" && Number.isFinite(config.decisionDefaultWbsTimeoutMs)
-      ? Math.max(10, Math.min(4000, Math.floor(config.decisionDefaultWbsTimeoutMs)))
-      : 80;
-  const decisionDefaultCacheTtlSeconds =
-    typeof config.decisionDefaultCacheTtlSeconds === "number" && Number.isFinite(config.decisionDefaultCacheTtlSeconds)
-      ? Math.max(1, Math.min(86_400, Math.floor(config.decisionDefaultCacheTtlSeconds)))
-      : 60;
-  const decisionDefaultStaleTtlSeconds =
-    typeof config.decisionDefaultStaleTtlSeconds === "number" && Number.isFinite(config.decisionDefaultStaleTtlSeconds)
-      ? Math.max(0, Math.min(604_800, Math.floor(config.decisionDefaultStaleTtlSeconds)))
-      : 1800;
-  const dlqPollMs =
-    typeof config.dlqPollMs === "number" && Number.isFinite(config.dlqPollMs)
-      ? Math.max(250, Math.floor(config.dlqPollMs))
-      : 5000;
-  const dlqDueLimit =
-    typeof config.dlqDueLimit === "number" && Number.isFinite(config.dlqDueLimit)
-      ? Math.max(1, Math.min(500, Math.floor(config.dlqDueLimit)))
-      : 50;
-  const inappV2WbsTimeoutMs =
-    typeof config.inappV2WbsTimeoutMs === "number" && Number.isFinite(config.inappV2WbsTimeoutMs)
-      ? Math.max(20, Math.min(2000, Math.floor(config.inappV2WbsTimeoutMs)))
-      : 80;
-  const inappV2CacheTtlSeconds =
-    typeof config.inappV2CacheTtlSeconds === "number" && Number.isFinite(config.inappV2CacheTtlSeconds)
-      ? Math.max(1, Math.min(86_400, Math.floor(config.inappV2CacheTtlSeconds)))
-      : 60;
-  const inappV2StaleTtlSeconds =
-    typeof config.inappV2StaleTtlSeconds === "number" && Number.isFinite(config.inappV2StaleTtlSeconds)
-      ? Math.max(0, Math.min(604_800, Math.floor(config.inappV2StaleTtlSeconds)))
-      : 1800;
-  const inappV2CacheContextKeys =
-    Array.isArray(config.inappV2CacheContextKeys) && config.inappV2CacheContextKeys.length > 0
-      ? config.inappV2CacheContextKeys
-      : ["locale", "deviceType"];
-  const inappV2BodyLimitBytes =
-    typeof config.inappV2BodyLimitBytes === "number" && Number.isFinite(config.inappV2BodyLimitBytes)
-      ? Math.max(1024, Math.min(512 * 1024, Math.floor(config.inappV2BodyLimitBytes)))
-      : 64 * 1024;
-  const inappV2RateLimitPerAppKey =
-    typeof config.inappV2RateLimitPerAppKey === "number" && Number.isFinite(config.inappV2RateLimitPerAppKey)
-      ? Math.max(10, Math.floor(config.inappV2RateLimitPerAppKey))
-      : 3000;
-  const inappV2RateLimitWindowMs =
-    typeof config.inappV2RateLimitWindowMs === "number" && Number.isFinite(config.inappV2RateLimitWindowMs)
-      ? Math.max(100, Math.floor(config.inappV2RateLimitWindowMs))
-      : 1000;
-  const runtimeSettingsDefaults: RuntimeSettings = {
-    decisionDefaults: {
-      timeoutMs: decisionDefaultTimeoutMs,
-      wbsTimeoutMs: decisionDefaultWbsTimeoutMs,
-      cacheTtlSeconds: decisionDefaultCacheTtlSeconds,
-      staleTtlSeconds: decisionDefaultStaleTtlSeconds
-    },
-    realtimeCache: {
-      ttlSeconds: realtimeCacheTtlSeconds,
-      lockTtlMs: realtimeCacheLockTtlMs,
-      contextKeys: realtimeCacheImportantContextKeys
-    },
-    inappV2: {
-      wbsTimeoutMs: inappV2WbsTimeoutMs,
-      cacheTtlSeconds: inappV2CacheTtlSeconds,
-      staleTtlSeconds: inappV2StaleTtlSeconds,
-      cacheContextKeys: inappV2CacheContextKeys,
-      rateLimitPerAppKey: inappV2RateLimitPerAppKey,
-      rateLimitWindowMs: inappV2RateLimitWindowMs
-    },
-    precompute: {
-      concurrency: precomputeConcurrency,
-      maxRetries: precomputeMaxRetries,
-      lookupDelayMs: precomputeLookupDelayMs
-    }
-  };
-  const runtimeSettingsByEnvironment = createRuntimeSettingsMap(runtimeSettingsDefaults);
-  const runtimeSettingsOverrides: Partial<Record<Environment, RuntimeSettings>> = {};
-  const getRuntimeSettings = (environment: Environment): RuntimeSettings => runtimeSettingsByEnvironment[environment];
-  const applyRuntimeSettingsOverride = (environment: Environment, value: unknown) => {
-    const normalized = normalizeRuntimeSettings(value, runtimeSettingsDefaults);
-    runtimeSettingsOverrides[environment] = normalized;
-    runtimeSettingsByEnvironment[environment] = normalized;
-    return normalized;
-  };
-  const clearRuntimeSettingsOverride = (environment: Environment) => {
-    delete runtimeSettingsOverrides[environment];
-    runtimeSettingsByEnvironment[environment] = normalizeRuntimeSettings(undefined, runtimeSettingsDefaults);
-  };
-  const inappEventsStreamKey = config.inappEventsStreamKey ?? "inapp_events";
-  const inappEventsStreamGroup = config.inappEventsStreamGroup ?? "inapp_events_group";
-  const inappEventsConsumerName = config.inappEventsConsumerName ?? "api-1";
-  const inappEventsStreamMaxLen =
-    typeof config.inappEventsStreamMaxLen === "number" && Number.isFinite(config.inappEventsStreamMaxLen)
-      ? Math.max(1000, Math.floor(config.inappEventsStreamMaxLen))
-      : 200000;
-  const inappEventsWorkerEnabled = config.inappEventsWorkerEnabled !== false;
-  const inappEventsWorkerBatchSize =
-    typeof config.inappEventsWorkerBatchSize === "number" && Number.isFinite(config.inappEventsWorkerBatchSize)
-      ? Math.max(1, Math.min(2000, Math.floor(config.inappEventsWorkerBatchSize)))
-      : 500;
-  const inappEventsWorkerBlockMs =
-    typeof config.inappEventsWorkerBlockMs === "number" && Number.isFinite(config.inappEventsWorkerBlockMs)
-      ? Math.max(0, Math.floor(config.inappEventsWorkerBlockMs))
-      : 1000;
-  const inappEventsWorkerPollMs =
-    typeof config.inappEventsWorkerPollMs === "number" && Number.isFinite(config.inappEventsWorkerPollMs)
-      ? Math.max(100, Math.floor(config.inappEventsWorkerPollMs))
-      : 250;
-  const inappEventsWorkerReclaimIdleMs =
-    typeof config.inappEventsWorkerReclaimIdleMs === "number" && Number.isFinite(config.inappEventsWorkerReclaimIdleMs)
-      ? Math.max(1000, Math.floor(config.inappEventsWorkerReclaimIdleMs))
-      : 15000;
-  const inappEventsWorkerMaxBatchesPerTick =
-    typeof config.inappEventsWorkerMaxBatchesPerTick === "number" &&
-    Number.isFinite(config.inappEventsWorkerMaxBatchesPerTick)
-      ? Math.max(1, Math.min(20, Math.floor(config.inappEventsWorkerMaxBatchesPerTick)))
-      : 3;
-  const inappEventsWorkerDedupeTtlSeconds =
-    typeof config.inappEventsWorkerDedupeTtlSeconds === "number" &&
-    Number.isFinite(config.inappEventsWorkerDedupeTtlSeconds)
-      ? Math.max(60, Math.min(604800, Math.floor(config.inappEventsWorkerDedupeTtlSeconds)))
-      : 86400;
-  const orchestrationPolicyCacheTtlMs =
-    typeof config.orchestrationPolicyCacheTtlMs === "number" && Number.isFinite(config.orchestrationPolicyCacheTtlMs)
-      ? Math.max(1000, Math.floor(config.orchestrationPolicyCacheTtlMs))
-      : 5000;
-  const orchestrationEventsStreamKey = config.orchestrationEventsStreamKey ?? "orchestr_events";
-  const orchestrationEventsStreamGroup = config.orchestrationEventsStreamGroup ?? "orchestr_events_group";
-  const orchestrationEventsConsumerName = config.orchestrationEventsConsumerName ?? "orchestr-1";
-  const orchestrationEventsStreamMaxLen =
-    typeof config.orchestrationEventsStreamMaxLen === "number" && Number.isFinite(config.orchestrationEventsStreamMaxLen)
-      ? Math.max(1000, Math.floor(config.orchestrationEventsStreamMaxLen))
-      : 200000;
-  const orchestrationEventsWorkerEnabled = config.orchestrationEventsWorkerEnabled !== false;
-  const orchestrationEventsWorkerBatchSize =
-    typeof config.orchestrationEventsWorkerBatchSize === "number" && Number.isFinite(config.orchestrationEventsWorkerBatchSize)
-      ? Math.max(1, Math.min(2000, Math.floor(config.orchestrationEventsWorkerBatchSize)))
-      : 500;
-  const orchestrationEventsWorkerBlockMs =
-    typeof config.orchestrationEventsWorkerBlockMs === "number" && Number.isFinite(config.orchestrationEventsWorkerBlockMs)
-      ? Math.max(0, Math.floor(config.orchestrationEventsWorkerBlockMs))
-      : 1000;
-  const orchestrationEventsWorkerPollMs =
-    typeof config.orchestrationEventsWorkerPollMs === "number" && Number.isFinite(config.orchestrationEventsWorkerPollMs)
-      ? Math.max(100, Math.floor(config.orchestrationEventsWorkerPollMs))
-      : 250;
-  const orchestrationEventsWorkerReclaimIdleMs =
-    typeof config.orchestrationEventsWorkerReclaimIdleMs === "number" &&
-    Number.isFinite(config.orchestrationEventsWorkerReclaimIdleMs)
-      ? Math.max(1000, Math.floor(config.orchestrationEventsWorkerReclaimIdleMs))
-      : 15000;
-  const orchestrationEventsWorkerMaxBatchesPerTick =
-    typeof config.orchestrationEventsWorkerMaxBatchesPerTick === "number" &&
-    Number.isFinite(config.orchestrationEventsWorkerMaxBatchesPerTick)
-      ? Math.max(1, Math.min(20, Math.floor(config.orchestrationEventsWorkerMaxBatchesPerTick)))
-      : 3;
-  const orchestrationEventsWorkerDedupeTtlSeconds =
-    typeof config.orchestrationEventsWorkerDedupeTtlSeconds === "number" &&
-    Number.isFinite(config.orchestrationEventsWorkerDedupeTtlSeconds)
-      ? Math.max(60, Math.min(604800, Math.floor(config.orchestrationEventsWorkerDedupeTtlSeconds)))
-      : 86400;
-  const retentionWorkerEnabled = config.retentionWorkerEnabled !== false;
-  const retentionPollMs =
-    typeof config.retentionPollMs === "number" && Number.isFinite(config.retentionPollMs)
-      ? Math.max(60_000, Math.floor(config.retentionPollMs))
-      : 6 * 60 * 60 * 1000;
-  const retentionDecisionLogsDays =
-    typeof config.retentionDecisionLogsDays === "number" && Number.isFinite(config.retentionDecisionLogsDays)
-      ? Math.max(1, Math.floor(config.retentionDecisionLogsDays))
-      : 30;
-  const retentionStackLogsDays =
-    typeof config.retentionStackLogsDays === "number" && Number.isFinite(config.retentionStackLogsDays)
-      ? Math.max(1, Math.floor(config.retentionStackLogsDays))
-      : 30;
-  const retentionInappEventsDays =
-    typeof config.retentionInappEventsDays === "number" && Number.isFinite(config.retentionInappEventsDays)
-      ? Math.max(1, Math.floor(config.retentionInappEventsDays))
-      : 30;
-  const retentionInappDecisionLogsDays =
-    typeof config.retentionInappDecisionLogsDays === "number" && Number.isFinite(config.retentionInappDecisionLogsDays)
-      ? Math.max(1, Math.floor(config.retentionInappDecisionLogsDays))
-      : 30;
-  const retentionDecisionResultsDays =
-    typeof config.retentionDecisionResultsDays === "number" && Number.isFinite(config.retentionDecisionResultsDays)
-      ? Math.max(1, Math.floor(config.retentionDecisionResultsDays))
-      : 14;
-  const retentionPrecomputeRunsDays =
-    typeof config.retentionPrecomputeRunsDays === "number" && Number.isFinite(config.retentionPrecomputeRunsDays)
-      ? Math.max(1, Math.floor(config.retentionPrecomputeRunsDays))
-      : 30;
+  const {
+    apiRuntimeRole,
+    runBackgroundWorkers,
+    realtimeCacheTtlSeconds,
+    realtimeCacheLockTtlMs,
+    realtimeCacheImportantContextKeys,
+    profileCacheTtlSeconds,
+    precomputeConcurrency,
+    precomputeMaxRetries,
+    precomputeLookupDelayMs,
+    decisionDefaultTimeoutMs,
+    decisionDefaultWbsTimeoutMs,
+    decisionDefaultCacheTtlSeconds,
+    decisionDefaultStaleTtlSeconds,
+    dlqPollMs,
+    dlqDueLimit,
+    inappV2WbsTimeoutMs,
+    inappV2CacheTtlSeconds,
+    inappV2StaleTtlSeconds,
+    inappV2CacheContextKeys,
+    inappV2BodyLimitBytes,
+    inappV2RateLimitPerAppKey,
+    inappV2RateLimitWindowMs,
+    runtimeSettingsDefaults,
+    getRuntimeSettings,
+    applyRuntimeSettingsOverride,
+    clearRuntimeSettingsOverride,
+    inappEventsStreamKey,
+    inappEventsStreamGroup,
+    inappEventsConsumerName,
+    inappEventsStreamMaxLen,
+    inappEventsWorkerEnabled,
+    inappEventsWorkerBatchSize,
+    inappEventsWorkerBlockMs,
+    inappEventsWorkerPollMs,
+    inappEventsWorkerReclaimIdleMs,
+    inappEventsWorkerMaxBatchesPerTick,
+    inappEventsWorkerDedupeTtlSeconds,
+    orchestrationPolicyCacheTtlMs,
+    orchestrationEventsStreamKey,
+    orchestrationEventsStreamGroup,
+    orchestrationEventsConsumerName,
+    orchestrationEventsStreamMaxLen,
+    orchestrationEventsWorkerEnabled,
+    orchestrationEventsWorkerBatchSize,
+    orchestrationEventsWorkerBlockMs,
+    orchestrationEventsWorkerPollMs,
+    orchestrationEventsWorkerReclaimIdleMs,
+    orchestrationEventsWorkerMaxBatchesPerTick,
+    orchestrationEventsWorkerDedupeTtlSeconds,
+    retentionWorkerEnabled,
+    retentionPollMs,
+    retentionDecisionLogsDays,
+    retentionStackLogsDays,
+    retentionInappEventsDays,
+    retentionInappDecisionLogsDays,
+    retentionDecisionResultsDays,
+    retentionPrecomputeRunsDays
+  } = createApiBootstrapRuntimeConfig(config);
 
   await app.register(cors, { origin: true });
 
@@ -2629,6 +2469,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     createMeiroAdapter(
       config.meiroMode,
       {
+        domain: config.meiroMcpDomain,
+        username: config.meiroMcpUsername,
+        password: config.meiroMcpPassword,
         baseUrl: config.meiroBaseUrl,
         token: config.meiroToken,
         timeoutMs: config.meiroTimeoutMs ?? 1500,
@@ -2636,6 +2479,31 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       },
       seedMockProfiles
     );
+  const liveMeiro =
+    deps.meiroAdapter ??
+    createMeiroAdapter(
+      "real",
+      {
+        domain: config.meiroMcpDomain,
+        username: config.meiroMcpUsername,
+        password: config.meiroMcpPassword,
+        baseUrl: config.meiroBaseUrl,
+        token: config.meiroToken,
+        timeoutMs: Math.max(config.meiroTimeoutMs ?? 1500, 15000),
+        maxRetries: 1
+      },
+      seedMockProfiles
+    );
+  const meiroMcpConfig: MeiroMcpConfig = {
+    enabled: config.meiroMcpEnabled === true,
+    command: config.meiroMcpCommand,
+    args: config.meiroMcpArgs,
+    domain: config.meiroMcpDomain,
+    username: config.meiroMcpUsername,
+    password: config.meiroMcpPassword,
+    timeoutMs: config.meiroMcpTimeoutMs
+  };
+  const meiroMcp = deps.meiroMcpClient ?? new MeiroMcpClient(meiroMcpConfig);
   const wbsAdapter = deps.wbsAdapter ?? new WbsMeiroAdapter();
   const cache =
     deps.cache ??
@@ -3416,6 +3284,13 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       if (route.includes("/archive")) return "engage.campaign.archive";
       return method === "GET" ? "engage.campaign.read" : "engage.campaign.write";
     }
+    if (route.startsWith("/v1/meiro/campaigns") || route.startsWith("/v1/meiro/native-campaigns")) {
+      if (route.includes("/manual-activation") || route.includes("/test-activation")) return "engage.campaign.activate";
+      return method === "GET" ? "engage.campaign.read" : "engage.campaign.write";
+    }
+    if (route.startsWith("/v1/meiro/audience") || route.startsWith("/v1/meiro/api")) {
+      return method === "GET" ? "engage.campaign.read" : "engage.campaign.write";
+    }
     if (route.startsWith("/v1/experiments")) {
       if (route.includes("/activate")) return "experiment.activate";
       if (route.includes("/archive")) return "experiment.archive";
@@ -3502,7 +3377,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         lookupDelayMs: settings.precompute.lookupDelayMs
       };
     },
-    segmentResolver: deps.segmentResolver
+    segmentResolver: deps.segmentResolver ?? createCachedProfileSegmentResolver({ cache, logger: app.log })
   });
 
   const dlqExportTaskSchema = z.object({
@@ -3752,6 +3627,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     prisma,
     cache,
     meiro,
+    meiroApi: liveMeiro,
     wbsAdapter,
     now,
     requireWriteAuth,
@@ -3782,6 +3658,15 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     },
     getInappEventsWorkerStatus: () => inappEventsWorker?.getStatus() ?? null,
     orchestration
+  });
+
+  await registerMeiroRoutes({
+    app,
+    meiro,
+    meiroApi: liveMeiro,
+    meiroMcp,
+    requireWriteAuth,
+    buildResponseError
   });
 
   await registerCatalogRoutes({
@@ -3911,52 +3796,20 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     app.log.info({ runtimeRole: apiRuntimeRole }, "Runtime settings routes not started (app settings storage unavailable)");
   }
 
-  app.get("/health", async () => {
-    return {
-      status: "ok",
-      timestamp: now().toISOString(),
-      runtime: {
-        role: apiRuntimeRole,
-        workers: {
-          dlq: runBackgroundWorkers && config.dlqWorkerEnabled !== false && hasDlqStorage,
-          inappEvents: runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled,
-          orchestrationEvents: runBackgroundWorkers && orchestrationEventsWorkerEnabled && cache.enabled,
-          retention: runBackgroundWorkers && retentionWorkerEnabled
-        }
-      }
-    };
-  });
-
-  app.get("/", async () => {
-    return {
-      name: "decisioning-api",
-      status: "ok",
-      docsHint: "Use /health or /v1/* endpoints."
-    };
-  });
-
-  app.get("/v1/me", async (request, reply) => {
-    const auth = await resolveAuthContext(request, reply);
-    if (!auth) {
-      if (!config.apiWriteKey) {
-        return {
-          email: null,
-          userId: null,
-          envPermissions: {
-            DEV: allPermissions(),
-            STAGE: allPermissions(),
-            PROD: allPermissions()
-          }
-        };
-      }
-      return buildResponseError(reply, 401, "Unauthorized");
-    }
-
-    return {
-      email: auth.email,
-      userId: auth.userId,
-      envPermissions: auth.permissionsByEnv
-    };
+  await registerBootstrapRoutes({
+    app,
+    now,
+    runtimeRole: apiRuntimeRole,
+    workers: {
+      dlq: runBackgroundWorkers && config.dlqWorkerEnabled !== false && hasDlqStorage,
+      inappEvents: runBackgroundWorkers && inappEventsWorkerEnabled && cache.enabled,
+      orchestrationEvents: runBackgroundWorkers && orchestrationEventsWorkerEnabled && cache.enabled,
+      retention: runBackgroundWorkers && retentionWorkerEnabled
+    },
+    resolveAuthContext,
+    apiWriteKey: config.apiWriteKey,
+    allPermissions,
+    buildResponseError
   });
 
   app.post("/v1/auth/dev-login", async (request, reply) => {

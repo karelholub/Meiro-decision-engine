@@ -13,6 +13,7 @@ import {
   calendarBulkActionSummary,
   calendarCampaignActionOptions,
   buildCalendarPlanningInsights,
+  buildCalendarSegmentCoverage,
   calendarPlanCsv,
   calendarPlanningBrief,
   daysBetweenInclusive,
@@ -139,6 +140,7 @@ describe("campaign calendar utils", () => {
     expect(calendarRiskLabel("critical")).toBe("Critical");
     expect(calendarRiskClassName("high")).toContain("orange");
     expect(calendarPressureSignalLabel("cap_pressure")).toBe("Cap pressure");
+    expect(calendarPressureSignalLabel("priority_arbitration")).toBe("Priority arbitration");
   });
 
   it("groups campaigns by planning swimlanes", () => {
@@ -189,12 +191,74 @@ describe("campaign calendar utils", () => {
         pressureSignal: "cap_pressure",
         needsAttentionOnly: true,
         includeArchived: true
-      }
+      },
+      segmentTarget: { minWeeklyTouches: 2, maxWeeklyTouches: 5, maxDailyTouches: 2 }
     });
 
     expect(params.toString()).toBe(
-      "view=week&from=2026-04-13&swimlane=placement&status=PENDING_APPROVAL&appKey=web&placementKey=home_top&assetKey=hero&assetType=website_banner&channel=website_personalization&readiness=blocked&sourceType=in_app_campaign&audienceKey=buyers&overlapRisk=high&pressureRisk=critical&pressureSignal=cap_pressure&needsAttentionOnly=true&includeArchived=true"
+      "view=week&from=2026-04-13&swimlane=placement&status=PENDING_APPROVAL&appKey=web&placementKey=home_top&assetKey=hero&assetType=website_banner&channel=website_personalization&readiness=blocked&sourceType=in_app_campaign&audienceKey=buyers&overlapRisk=high&pressureRisk=critical&pressureSignal=cap_pressure&needsAttentionOnly=true&includeArchived=true&segmentMinWeekly=2&segmentMaxWeekly=5&segmentMaxDaily=2"
     );
+  });
+
+  it("builds segment over, under, and no-plan coverage from exact references", () => {
+    const days = daysBetweenInclusive(new Date("2026-04-01T00:00:00.000Z"), new Date("2026-04-07T00:00:00.000Z"));
+    const coverage = buildCalendarSegmentCoverage({
+      days,
+      segments: [
+        { id: "vip", name: "VIP buyers", customerCount: 120 },
+        { id: "new", name: "New customers", customerCount: 320 },
+        { id: "silent", name: "Silent segment", customerCount: 50 }
+      ],
+      target: { minWeeklyTouches: 2, maxWeeklyTouches: 3, maxDailyTouches: 1 },
+      items: [
+        item({
+          campaignId: "1",
+          campaignKey: "vip_a",
+          audienceKeys: ["meiro_segment:vip"],
+          orchestrationMarkers: ["priority:1", "campaign_type:newsletter"],
+          startAt: "2026-04-01T00:00:00.000Z",
+          endAt: "2026-04-01T23:00:00.000Z"
+        }),
+        item({
+          campaignId: "2",
+          campaignKey: "vip_b",
+          audienceKeys: ["meiro_segment:vip"],
+          channel: "email",
+          channels: ["email"],
+          orchestrationMarkers: ["priority:1", "campaign_type:discount"],
+          startAt: "2026-04-01T08:00:00.000Z",
+          endAt: "2026-04-01T23:00:00.000Z"
+        }),
+        item({ campaignId: "3", campaignKey: "new_a", audienceKeys: ["new"], startAt: "2026-04-03T00:00:00.000Z", endAt: "2026-04-03T23:00:00.000Z" })
+      ]
+    });
+
+    expect(coverage.overTarget).toBe(1);
+    expect(coverage.underTarget).toBe(1);
+    expect(coverage.noPlannedActivity).toBe(1);
+    expect(coverage.items.find((entry) => entry.id === "vip")).toMatchObject({
+      status: "over",
+      maxSameDayTouches: 2,
+      maxSameWeekTouches: 2,
+      campaignKeys: ["vip_a", "vip_b"]
+    });
+    expect(coverage.items.find((entry) => entry.id === "vip")?.campaigns.map((campaign) => campaign.campaignKey)).toEqual(["vip_a", "vip_b"]);
+    expect(coverage.items.find((entry) => entry.id === "vip")?.channelBreakdown.map((entry) => [entry.key, entry.count])).toEqual([
+      ["email", 1],
+      ["website_personalization", 1]
+    ]);
+    expect(coverage.items.find((entry) => entry.id === "vip")?.campaignTypeBreakdown.map((entry) => [entry.key, entry.count])).toEqual([
+      ["campaign_type:discount", 1],
+      ["campaign_type:newsletter", 1]
+    ]);
+    expect(coverage.items.find((entry) => entry.id === "new")).toMatchObject({
+      status: "under",
+      maxSameWeekTouches: 1
+    });
+    expect(coverage.items.find((entry) => entry.id === "silent")).toMatchObject({
+      status: "none",
+      plannedCampaigns: 0
+    });
   });
 
   it("builds campaign creation links with asset and schedule prefill", () => {

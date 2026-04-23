@@ -11,7 +11,7 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 3000) => {
   }
 };
 
-const buildHarness = () => {
+const buildHarness = (options: { segmentResolver?: Parameters<typeof createPrecomputeRunner>[0]["segmentResolver"] } = {}) => {
   const runs = new Map<string, any>();
   const results: any[] = [];
 
@@ -110,7 +110,8 @@ const buildHarness = () => {
     apiWriteKey: "local-write-key",
     concurrency: 4,
     maxRetries: 1,
-    lookupDelayMs: 0
+    lookupDelayMs: 0,
+    segmentResolver: options.segmentResolver
   });
 
   return {
@@ -222,5 +223,61 @@ describe("precompute runner", () => {
     expect(run.noop).toBe(1);
     expect(run.succeeded).toBe(0);
     expect(harness.app.inject).not.toHaveBeenCalled();
+  });
+
+  it("resolves segment cohorts through the configured segment resolver", async () => {
+    const segmentResolver = {
+      resolve: vi.fn(async () => [{ profileId: "p-1001" }, { lookup: { attribute: "email", value: "alex@example.com" } }])
+    };
+    const harness = buildHarness({ segmentResolver });
+    harness.runs.set("run-segment", {
+      runKey: "run-segment",
+      environment: "DEV",
+      status: "QUEUED",
+      mode: "decision",
+      key: "cart_recovery",
+      total: 0,
+      processed: 0,
+      succeeded: 0,
+      noop: 0,
+      suppressed: 0,
+      errors: 0,
+      parameters: {
+        runKey: "run-segment",
+        mode: "decision",
+        key: "cart_recovery",
+        cohort: {
+          type: "segment",
+          segment: {
+            attribute: "audience",
+            value: "meiro_segment:1937"
+          }
+        },
+        ttlSecondsDefault: 60,
+        overwrite: false
+      }
+    });
+
+    harness.runner.enqueue("run-segment");
+    await waitFor(() => harness.runs.get("run-segment")?.status === "DONE");
+
+    expect(segmentResolver.resolve).toHaveBeenCalledWith({
+      environment: "DEV",
+      segment: {
+        attribute: "audience",
+        value: "meiro_segment:1937"
+      }
+    });
+    expect(harness.runs.get("run-segment")?.total).toBe(2);
+    expect(harness.app.inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ profileId: "p-1001" })
+      })
+    );
+    expect(harness.app.inject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ lookup: { attribute: "email", value: "alex@example.com" } })
+      })
+    );
   });
 });

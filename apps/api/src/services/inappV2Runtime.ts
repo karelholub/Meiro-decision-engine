@@ -80,6 +80,7 @@ export interface InAppV2DecideResponse extends InAppDecideResponse {
       offerKey?: string;
       contentKey?: string;
       campaignKey?: string;
+      audienceKeys?: string[];
       tags: string[];
     };
     fallbackReason?: string;
@@ -914,6 +915,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             campaignKey: campaign.key,
             offerKey: descriptorOfferKey,
             contentKey: descriptorContentKey,
+            audienceKeys: eligibilityAudiences,
             tags: candidateTags,
             payload: {
               appKey: input.body.appKey,
@@ -929,6 +931,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
             appKey: input.body.appKey,
             placement: input.body.placement,
             explicitTags: candidateTags,
+            audienceKeys: eligibilityAudiences,
             catalogResolver,
             metadata: {
               source: "v2_inapp_decide_candidate",
@@ -1303,6 +1306,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
                   ...(result.actionDescriptor.offerKey ? { offerKey: result.actionDescriptor.offerKey } : {}),
                   ...(result.actionDescriptor.contentKey ? { contentKey: result.actionDescriptor.contentKey } : {}),
                   ...(result.actionDescriptor.campaignKey ? { campaignKey: result.actionDescriptor.campaignKey } : {}),
+                  ...(result.actionDescriptor.audienceKeys?.length ? { audienceKeys: result.actionDescriptor.audienceKeys } : {}),
                   tags: result.actionDescriptor.tags
                 }
               }

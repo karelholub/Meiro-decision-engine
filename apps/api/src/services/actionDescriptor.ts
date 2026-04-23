@@ -25,6 +25,7 @@ interface BuildActionDescriptorResult {
   actionType: string;
   payload?: Record<string, unknown>;
   tags?: string[];
+  audienceKeys?: string[];
   actionKey?: string;
   offerKey?: string;
   contentKey?: string;
@@ -37,6 +38,7 @@ interface BuildActionDescriptorContext {
   placement?: string;
   explicitTags?: string[];
   campaignTags?: string[];
+  audienceKeys?: string[];
   metadata?: Record<string, unknown>;
   catalogResolver: {
     resolveOfferTags: (input: { environment: Environment; offerKey?: string | null }) => Promise<string[]>;
@@ -85,6 +87,19 @@ export const buildActionDescriptor = async (
     ])
   ].sort((a, b) => a.localeCompare(b));
 
+  const payloadAudienceKeys = Array.isArray(payload.audienceKeys)
+    ? payload.audienceKeys
+    : Array.isArray(payload.eligibilityAudiencesAny)
+      ? payload.eligibilityAudiencesAny
+      : [];
+  const audienceKeys = [
+    ...new Set(
+      [...payloadAudienceKeys, ...(Array.isArray(result.audienceKeys) ? result.audienceKeys : []), ...(Array.isArray(context.audienceKeys) ? context.audienceKeys : [])]
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+    )
+  ].sort((a, b) => a.localeCompare(b));
+
   const actionKey = firstString(
     result.actionKey,
     payload.actionKey,
@@ -109,6 +124,7 @@ export const buildActionDescriptor = async (
     ...(offerKey ? { offerKey } : {}),
     ...(contentKey ? { contentKey } : {}),
     ...(campaignKey ? { campaignKey } : {}),
+    ...(audienceKeys.length > 0 ? { audienceKeys } : {}),
     ...(actionKey ? { actionKey } : {}),
     ...(context.metadata ? { metadata: context.metadata } : {})
   };

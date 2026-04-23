@@ -52,11 +52,13 @@ const orchestrationEventInputSchema = z.object({
 const policyPreviewBodySchema = z.object({
   appKey: z.string().min(1).optional(),
   placement: z.string().min(1).optional(),
+  policyJson: z.unknown().optional(),
   candidateAction: z.object({
     actionType: z.string().min(1),
     offerKey: z.string().min(1).optional(),
     contentKey: z.string().min(1).optional(),
     campaignKey: z.string().min(1).optional(),
+    audienceKeys: z.array(z.string().min(1)).optional(),
     tags: z.array(z.string()).optional()
   }),
   profileId: z.string().min(1).optional(),
@@ -380,50 +382,70 @@ export const registerOrchestrationRoutes = async (deps: {
     }
 
     const appKey = parsed.data.appKey;
-    const policies = await prisma.orchestrationPolicy.findMany({
-      where: {
-        environment,
+    let selectedPolicy: {
+      key: string;
+      version: number;
+      appKey: string | null;
+      policyJson: unknown;
+    } | null = null;
+
+    if (parsed.data.policyJson !== undefined) {
+      const validation = orchestration.validatePolicy(parsed.data.policyJson);
+      if (!validation.valid || !validation.policy) {
+        return buildResponseError(reply, 400, "Invalid orchestration policy", validation.errors ?? []);
+      }
+      selectedPolicy = {
         key: params.data.key,
-        status: {
-          in: ["DRAFT", "ACTIVE"]
+        version: 0,
+        appKey: appKey ?? null,
+        policyJson: validation.policy
+      };
+    } else {
+      const policies = await prisma.orchestrationPolicy.findMany({
+        where: {
+          environment,
+          key: params.data.key,
+          status: {
+            in: ["DRAFT", "ACTIVE"]
+          },
+          ...(appKey
+            ? {
+                OR: [{ appKey }, { appKey: null }]
+              }
+            : {})
         },
-        ...(appKey
-          ? {
-              OR: [{ appKey }, { appKey: null }]
-            }
-          : {})
-      },
-      orderBy: [{ version: "desc" }, { updatedAt: "desc" }]
-    });
+        orderBy: [{ version: "desc" }, { updatedAt: "desc" }]
+      });
 
-    const selectedPolicy =
-      [...policies].sort((left, right) => {
-        const leftScope = appKey ? (left.appKey === appKey ? 2 : left.appKey === null ? 1 : 0) : left.appKey === null ? 2 : 1;
-        const rightScope = appKey
-          ? right.appKey === appKey
-            ? 2
+      selectedPolicy =
+        [...policies].sort((left, right) => {
+          const leftScope = appKey ? (left.appKey === appKey ? 2 : left.appKey === null ? 1 : 0) : left.appKey === null ? 2 : 1;
+          const rightScope = appKey
+            ? right.appKey === appKey
+              ? 2
+              : right.appKey === null
+                ? 1
+                : 0
             : right.appKey === null
-              ? 1
-              : 0
-          : right.appKey === null
-            ? 2
-            : 1;
-        if (leftScope !== rightScope) {
-          return rightScope - leftScope;
-        }
-        const leftStatus = left.status === "DRAFT" ? 2 : 1;
-        const rightStatus = right.status === "DRAFT" ? 2 : 1;
-        if (leftStatus !== rightStatus) {
-          return rightStatus - leftStatus;
-        }
-        if (left.version !== right.version) {
-          return right.version - left.version;
-        }
-        return right.updatedAt.getTime() - left.updatedAt.getTime();
-      })[0] ?? null;
+              ? 2
+              : 1;
+          if (leftScope !== rightScope) {
+            return rightScope - leftScope;
+          }
+          const leftStatus = left.status === "DRAFT" ? 2 : 1;
+          const rightStatus = right.status === "DRAFT" ? 2 : 1;
+          if (leftStatus !== rightStatus) {
+            return rightStatus - leftStatus;
+          }
+          if (left.version !== right.version) {
+            return right.version - left.version;
+          }
+          return right.updatedAt.getTime() - left.updatedAt.getTime();
+        })[0] ?? null;
 
-    if (!selectedPolicy) {
-      return buildResponseError(reply, 404, "Policy not found");
+      if (!selectedPolicy) {
+        return buildResponseError(reply, 404, "Policy not found");
+      }
     }
 
     const descriptor = await buildActionDescriptor(
@@ -432,6 +454,7 @@ export const registerOrchestrationRoutes = async (deps: {
         offerKey: parsed.data.candidateAction.offerKey,
         contentKey: parsed.data.candidateAction.contentKey,
         campaignKey: parsed.data.candidateAction.campaignKey,
+        audienceKeys: parsed.data.candidateAction.audienceKeys,
         tags: parsed.data.candidateAction.tags
       },
       {
@@ -439,6 +462,7 @@ export const registerOrchestrationRoutes = async (deps: {
         appKey: parsed.data.appKey,
         placement: parsed.data.placement,
         explicitTags: parsed.data.candidateAction.tags,
+        audienceKeys: parsed.data.candidateAction.audienceKeys,
         catalogResolver,
         metadata: parsed.data.context
       }

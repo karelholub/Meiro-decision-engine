@@ -125,6 +125,105 @@ describe("campaign calendar", () => {
     ]);
     expect(calendar.items.every((item) => item.conflicts.every((conflict) => conflict.type === "placement_overlap"))).toBe(true);
     expect(calendar.items.every((item) => item.planningReadiness.status === "blocked")).toBe(true);
+    expect(calendar.items.map((item) => item.pressureSignals.map((signal) => signal.code))).toEqual([
+      expect.arrayContaining(["priority_arbitration"]),
+      expect.arrayContaining(["priority_arbitration"])
+    ]);
+    const activeArbitrationSignal = calendar.items.find((item) => item.campaignKey === "active_a")?.pressureSignals.find((signal) => signal.code === "priority_arbitration");
+    const pendingArbitrationSignal = calendar.items.find((item) => item.campaignKey === "pending_b")?.pressureSignals.find((signal) => signal.code === "priority_arbitration");
+    expect(activeArbitrationSignal).toMatchObject({
+      riskLevel: "low",
+      count: 1
+    });
+    expect(activeArbitrationSignal?.refs).toEqual(expect.arrayContaining(["web:home_top", "pending_b"]));
+    expect(pendingArbitrationSignal).toMatchObject({
+      riskLevel: "high",
+      count: 1
+    });
+    expect(pendingArbitrationSignal?.refs).toEqual(expect.arrayContaining(["web:home_top", "active_a"]));
+    expect(calendar.items.find((item) => item.campaignKey === "pending_b")?.pressureRiskLevel).toBe("high");
+    expect(calendar.items.find((item) => item.campaignKey === "pending_b")?.warnings).toContain("ARBITRATION_SUPPRESSION_RISK");
+    expect(calendar.items.find((item) => item.campaignKey === "pending_b")?.overlapSummary.nearbyCampaigns[0]?.reasons).toEqual(
+      expect.arrayContaining(["Higher-priority overlap on same placement: active_a (10 > 1)."])
+    );
+
+    const priorityFiltered = buildCampaignCalendar({
+      from,
+      to,
+      now,
+      pressureSignal: "priority_arbitration",
+      campaigns: [
+        {
+          id: "campaign-1",
+          key: "active_a",
+          name: "Active A",
+          status: InAppCampaignStatus.ACTIVE,
+          appKey: "web",
+          placementKey: "home_top",
+          templateKey: "banner_v1",
+          priority: 10,
+          startAt: "2026-04-10T00:00:00.000Z",
+          endAt: "2026-04-20T00:00:00.000Z"
+        },
+        {
+          id: "campaign-2",
+          key: "pending_b",
+          name: "Pending B",
+          status: InAppCampaignStatus.PENDING_APPROVAL,
+          appKey: "web",
+          placementKey: "home_top",
+          templateKey: "banner_v1",
+          priority: 1,
+          startAt: "2026-04-16T00:00:00.000Z",
+          endAt: "2026-04-25T00:00:00.000Z"
+        }
+      ]
+    });
+    expect(priorityFiltered.items.map((item) => item.campaignKey)).toEqual(["active_a", "pending_b"]);
+  });
+
+  it("flags same-priority placement ties as priority arbitration cues", () => {
+    const calendar = buildCampaignCalendar({
+      from,
+      to,
+      now,
+      campaigns: [
+        {
+          id: "campaign-1",
+          key: "tie_a",
+          name: "Tie A",
+          status: InAppCampaignStatus.ACTIVE,
+          appKey: "web",
+          placementKey: "home_top",
+          templateKey: "banner_v1",
+          priority: 5,
+          startAt: "2026-04-10T00:00:00.000Z",
+          endAt: "2026-04-20T00:00:00.000Z"
+        },
+        {
+          id: "campaign-2",
+          key: "tie_b",
+          name: "Tie B",
+          status: InAppCampaignStatus.PENDING_APPROVAL,
+          appKey: "web",
+          placementKey: "home_top",
+          templateKey: "banner_v1",
+          priority: 5,
+          startAt: "2026-04-16T00:00:00.000Z",
+          endAt: "2026-04-25T00:00:00.000Z"
+        }
+      ]
+    });
+
+    const signals = calendar.items.map((item) => item.pressureSignals.find((signal) => signal.code === "priority_arbitration"));
+    expect(signals).toEqual([
+      expect.objectContaining({ riskLevel: "high", count: 1 }),
+      expect.objectContaining({ riskLevel: "high", count: 1 })
+    ]);
+    expect(calendar.items.every((item) => item.warnings.includes("ARBITRATION_TIE_RISK"))).toBe(true);
+    expect(calendar.items.flatMap((item) => item.reachabilityNotes)).toEqual(
+      expect.arrayContaining(["Same-priority same-placement overlaps require explicit tie-break or mutex rules. This calendar cue does not evaluate runtime policy configuration."])
+    );
   });
 
   it("flags same-channel, same-audience, and shared-asset overlaps from grounded references", () => {
@@ -241,6 +340,73 @@ describe("campaign calendar", () => {
       }))
     });
     expect(capFiltered.items.map((item) => item.campaignKey)).toEqual(["home_a"]);
+  });
+
+  it("normalizes native Meiro campaigns without treating channel as placement arbitration", () => {
+    const calendar = buildCampaignCalendar({
+      from,
+      to,
+      now,
+      audienceKey: "1937",
+      campaigns: [
+        {
+          id: "meiro:email:campaign-a",
+          key: "meiro_email_campaign_a",
+          name: "Email A",
+          sourceType: "meiro_campaign",
+          status: InAppCampaignStatus.ACTIVE,
+          appKey: "meiro_cdp",
+          placementKey: "unplaced",
+          templateKey: "meiro_email",
+          channel: "email",
+          channels: ["email"],
+          priority: 0,
+          capsPerProfilePerDay: 1,
+          eligibilityAudiencesAny: ["meiro_segment:1937"],
+          startAt: "2026-04-10T09:00:00.000Z",
+          endAt: "2026-04-10T10:00:00.000Z",
+          placementSummary: "No placement reference in native Meiro campaign API payload",
+          approvalSummary: "Native Meiro email schedule",
+          orchestrationSummary: "Meiro frequency cap 1/profile/day",
+          orchestrationMarkers: ["meiro_channel:email", "cap_day:1", "segments:1"],
+          drilldownTargets: [{ type: "meiro_campaign", label: "Open Meiro campaign", href: "/engage/meiro-campaigns?channel=email&campaignId=campaign-a" }]
+        },
+        {
+          id: "meiro:email:campaign-b",
+          key: "meiro_email_campaign_b",
+          name: "Email B",
+          sourceType: "meiro_campaign",
+          status: InAppCampaignStatus.ACTIVE,
+          appKey: "meiro_cdp",
+          placementKey: "unplaced",
+          templateKey: "meiro_email",
+          channel: "email",
+          channels: ["email"],
+          priority: 0,
+          capsPerProfilePerDay: 1,
+          eligibilityAudiencesAny: ["meiro_segment:1937"],
+          startAt: "2026-04-10T11:00:00.000Z",
+          endAt: "2026-04-10T12:00:00.000Z",
+          placementSummary: "No placement reference in native Meiro campaign API payload",
+          approvalSummary: "Native Meiro email schedule",
+          orchestrationSummary: "Meiro frequency cap 1/profile/day",
+          orchestrationMarkers: ["meiro_channel:email", "cap_day:1", "segments:1"],
+          drilldownTargets: [{ type: "meiro_campaign", label: "Open Meiro campaign", href: "/engage/meiro-campaigns?channel=email&campaignId=campaign-b" }]
+        }
+      ]
+    });
+
+    expect(calendar.items).toHaveLength(2);
+    expect(calendar.items[0]).toMatchObject({
+      sourceType: "meiro_campaign",
+      channel: "email",
+      audienceKeys: ["meiro_segment:1937"],
+      planningReadiness: expect.objectContaining({ status: "ready" })
+    });
+    expect(calendar.items.flatMap((item) => item.conflicts.map((conflict) => conflict.type))).not.toContain("placement_overlap");
+    expect(calendar.items.every((item) => item.pressureSignals.some((signal) => signal.code === "audience_pressure"))).toBe(true);
+    expect(calendar.items.every((item) => item.capSignals.some((signal) => signal.code === "daily_cap_pressure"))).toBe(true);
+    expect(calendar.summary.hotspots.map((hotspot) => hotspot.type)).toContain("audience");
   });
 
   it("summarizes placement and asset concentration without precise reach claims", () => {

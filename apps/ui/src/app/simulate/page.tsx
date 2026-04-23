@@ -11,6 +11,7 @@ import type {
 } from "@decisioning/shared";
 import { parseLegacyKey } from "@decisioning/shared";
 import { InlineError } from "../../components/ui/app-state";
+import { MeiroProfileSearch } from "../../components/meiro/MeiroProfileSearch";
 import { Button } from "../../components/ui/button";
 import { FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 import { DependenciesPanel } from "../../components/registry/DependenciesPanel";
@@ -125,6 +126,10 @@ export default function SimulatePage() {
   const [profileId, setProfileId] = useState("p-1001");
   const [lookupAttribute, setLookupAttribute] = useState("email");
   const [lookupValue, setLookupValue] = useState("alex@example.com");
+  const [meiroWbsAttribute, setMeiroWbsAttribute] = useState("stitching_meiro_id");
+  const [meiroWbsValue, setMeiroWbsValue] = useState("");
+  const [meiroWbsCategoryId, setMeiroWbsCategoryId] = useState("accessories");
+  const [meiroWbsLoading, setMeiroWbsLoading] = useState(false);
 
   const [inAppAppKey, setInAppAppKey] = useState("meiro_store");
   const [inAppPlacement, setInAppPlacement] = useState("home_top");
@@ -474,6 +479,61 @@ export default function SimulatePage() {
     setSaveProfileNotice(`Saved profile ${resolvedLookupProfile.profileId} into simulation profiles.`);
   };
 
+  const importMeiroProfile = (profile: SimulationProfile) => {
+    setSavedProfiles((current) => mergeProfiles([...current, profile]));
+    setSavedProfileId(profile.profileId);
+    setProfileInputMode("saved");
+    setProfileJson(pretty(profile));
+    setProfileId(profile.profileId);
+    setStackProfileId(profile.profileId);
+    setInAppProfileId(profile.profileId);
+    setSaveProfileNotice(`Imported Meiro profile ${profile.profileId} into simulator profiles.`);
+  };
+
+  const importMeiroWbsProfile = async () => {
+    const attribute = meiroWbsAttribute.trim();
+    const value = meiroWbsValue.trim();
+    if (!attribute || !value) {
+      setError("Meiro WBS attribute and value are required.");
+      return;
+    }
+
+    setMeiroWbsLoading(true);
+    setError(null);
+    setSaveProfileNotice(null);
+    try {
+      const [profileResponse, segmentsResponse] = await Promise.all([
+        apiClient.meiro.audience.profile({
+          attribute,
+          value,
+          categoryId: meiroWbsCategoryId.trim() || undefined
+        }),
+        apiClient.meiro.audience.segments({ attribute, value })
+      ]);
+      const profile: SimulationProfile = {
+        profileId: profileResponse.customerEntityId ?? value,
+        attributes: {
+          ...profileResponse.returnedAttributes,
+          meiro_lookup_attribute: attribute,
+          meiro_lookup_value: value,
+          meiro_customer_entity_id: profileResponse.customerEntityId,
+          meiro_wbs_status: profileResponse.status,
+          meiro_wbs_data: profileResponse.data
+        },
+        audiences: segmentsResponse.segmentIds,
+        consents: []
+      };
+      importMeiroProfile(profile);
+      setSaveProfileNotice(
+        `Imported live Meiro profile ${profile.profileId} with ${segmentsResponse.segmentIds.length} segment membership reference(s).`
+      );
+    } catch (lookupError) {
+      setError(lookupError instanceof Error ? lookupError.message : "Meiro WBS lookup failed");
+    } finally {
+      setMeiroWbsLoading(false);
+    }
+  };
+
   const reasonDiff = useMemo(() => {
     if (!previousDecisionResult || !decisionResult) {
       return null;
@@ -762,6 +822,44 @@ export default function SimulatePage() {
                     </select>
                   </label>
                 ) : null}
+                <div className="md:col-span-2 lg:col-span-3">
+                  <MeiroProfileSearch onImportProfile={importMeiroProfile} />
+                </div>
+                <div className="md:col-span-2 lg:col-span-3 rounded-md border border-stone-200 bg-white p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-stone-800">Live Meiro WBS profile</p>
+                      <p className="text-xs text-stone-600">Import returned attributes and exact segment IDs from the configured Meiro CDP instance.</p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => void importMeiroWbsProfile()} disabled={meiroWbsLoading}>
+                      {meiroWbsLoading ? "Importing..." : "Import WBS profile"}
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-[180px_1fr_180px]">
+                    <label className="flex flex-col gap-1 text-xs text-stone-600">
+                      Attribute
+                      <input className={inputClassName} value={meiroWbsAttribute} onChange={(event) => setMeiroWbsAttribute(event.target.value)} />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-stone-600">
+                      Value
+                      <input
+                        className={inputClassName}
+                        value={meiroWbsValue}
+                        onChange={(event) => setMeiroWbsValue(event.target.value)}
+                        placeholder="customer identifier allowed by WBS"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-stone-600">
+                      Category ID
+                      <input
+                        className={inputClassName}
+                        value={meiroWbsCategoryId}
+                        onChange={(event) => setMeiroWbsCategoryId(event.target.value)}
+                        placeholder="optional"
+                      />
+                    </label>
+                  </div>
+                </div>
               </>
             ) : (
               <>
