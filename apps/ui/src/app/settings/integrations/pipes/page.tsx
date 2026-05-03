@@ -5,6 +5,12 @@ import {
   ApiError,
   apiClient,
   type PipesInlineEvaluateResponse,
+  type PipesPrismCheckResponse,
+  type PipesPrismImportCandidatesResponse,
+  type PipesPrismImportPreviewResponse,
+  type PipesPrismImportSnapshotResponse,
+  type PipesPrismMappingRecommendationsResponse,
+  type PipesPrismStatusResponse,
   type PipesRequirementsResponse
 } from "../../../../lib/api";
 import { DEFAULT_APP_ENUM_SETTINGS } from "../../../../lib/app-enum-settings";
@@ -75,6 +81,18 @@ export default function PipesIntegrationPage() {
   const [requirementsReachable, setRequirementsReachable] = useState<"ok" | "error" | "unknown">("unknown");
   const [evaluateReachable, setEvaluateReachable] = useState<"ok" | "error" | "unknown">("unknown");
   const [callbackConfigured, setCallbackConfigured] = useState<"ok" | "warn" | "unknown">("unknown");
+  const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
+  const [prismCheck, setPrismCheck] = useState<PipesPrismCheckResponse | null>(null);
+  const [prismCandidates, setPrismCandidates] = useState<PipesPrismImportCandidatesResponse | null>(null);
+  const [prismSnapshot, setPrismSnapshot] = useState<PipesPrismImportSnapshotResponse | null>(null);
+  const [prismMappings, setPrismMappings] = useState<PipesPrismMappingRecommendationsResponse | null>(null);
+  const [prismImportPreview, setPrismImportPreview] = useState<PipesPrismImportPreviewResponse | null>(null);
+  const [prismError, setPrismError] = useState<string | null>(null);
+  const [prismChecking, setPrismChecking] = useState(false);
+  const [prismLoadingCandidates, setPrismLoadingCandidates] = useState(false);
+  const [prismSyncingSnapshot, setPrismSyncingSnapshot] = useState(false);
+  const [prismLoadingMappings, setPrismLoadingMappings] = useState(false);
+  const [prismLoadingImportPreview, setPrismLoadingImportPreview] = useState(false);
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -103,6 +121,28 @@ export default function PipesIntegrationPage() {
       } catch {
         setCallbackConfigured("unknown");
       }
+
+      try {
+        const status = await apiClient.pipes.prismStatus();
+        setPrismStatus(status);
+        if (status.sourceMode !== "pipes_cli") {
+          setPrismSnapshot(null);
+          setPrismMappings(null);
+          setPrismImportPreview(null);
+          setPrismError(null);
+          return;
+        }
+        const snapshot = await apiClient.pipes.prismImportSnapshot();
+        setPrismSnapshot(snapshot);
+        const mappings = await apiClient.pipes.prismMappingRecommendations();
+        setPrismMappings(mappings);
+        const importPreview = await apiClient.pipes.prismImportPreview();
+        setPrismImportPreview(importPreview);
+        setPrismError(null);
+      } catch (error) {
+        setPrismStatus(null);
+        setPrismError(error instanceof Error ? error.message : "Failed to load Prism/Pipes status");
+      }
     };
 
     void runStatusChecks();
@@ -110,6 +150,103 @@ export default function PipesIntegrationPage() {
 
   const evaluateEndpoint = useMemo(() => `${API_BASE_URL}/v1/evaluate`, []);
   const requirementsEndpoint = useMemo(() => `${API_BASE_URL}/v1/requirements/${requirementsMode}/:key`, [requirementsMode]);
+  const pipesCliSourceActive = prismStatus?.sourceMode !== "meiro_mcp";
+
+  const runPrismCheck = async () => {
+    if (prismStatus?.sourceMode !== "pipes_cli") {
+      setPrismError("Pipes CLI checks are disabled because MEIRO_PRISM_SOURCE_MODE is set to meiro_mcp.");
+      return;
+    }
+    setPrismChecking(true);
+    setPrismError(null);
+    try {
+      const response = await apiClient.pipes.prismCheck();
+      setPrismCheck(response);
+      const status = await apiClient.pipes.prismStatus();
+      setPrismStatus(status);
+    } catch (error) {
+      setPrismCheck(null);
+      setPrismError(error instanceof Error ? error.message : "Failed to check Prism/Pipes connection");
+    } finally {
+      setPrismChecking(false);
+    }
+  };
+
+  const loadPrismCandidates = async () => {
+    if (prismStatus?.sourceMode !== "pipes_cli") {
+      setPrismError("Pipes CLI import candidates are disabled because MEIRO_PRISM_SOURCE_MODE is set to meiro_mcp.");
+      return;
+    }
+    setPrismLoadingCandidates(true);
+    setPrismError(null);
+    try {
+      const response = await apiClient.pipes.prismImportCandidates();
+      setPrismCandidates(response);
+    } catch (error) {
+      setPrismCandidates(null);
+      setPrismError(error instanceof Error ? error.message : "Failed to load Prism import candidates");
+    } finally {
+      setPrismLoadingCandidates(false);
+    }
+  };
+
+  const syncPrismSnapshot = async () => {
+    if (prismStatus?.sourceMode !== "pipes_cli") {
+      setPrismError("Pipes CLI snapshot sync is disabled because MEIRO_PRISM_SOURCE_MODE is set to meiro_mcp.");
+      return;
+    }
+    setPrismSyncingSnapshot(true);
+    setPrismError(null);
+    try {
+      const response = await apiClient.pipes.syncPrismImportSnapshot();
+      setPrismSnapshot(response);
+      setPrismCandidates(response.snapshot);
+      const mappings = await apiClient.pipes.prismMappingRecommendations();
+      setPrismMappings(mappings);
+      const importPreview = await apiClient.pipes.prismImportPreview();
+      setPrismImportPreview(importPreview);
+    } catch (error) {
+      setPrismError(error instanceof Error ? error.message : "Failed to sync Prism snapshot");
+    } finally {
+      setPrismSyncingSnapshot(false);
+    }
+  };
+
+  const loadPrismMappings = async () => {
+    if (prismStatus?.sourceMode !== "pipes_cli") {
+      setPrismError("Pipes CLI mapping recommendations are disabled because MEIRO_PRISM_SOURCE_MODE is set to meiro_mcp.");
+      return;
+    }
+    setPrismLoadingMappings(true);
+    setPrismError(null);
+    try {
+      const response = await apiClient.pipes.prismMappingRecommendations();
+      setPrismMappings(response);
+    } catch (error) {
+      setPrismMappings(null);
+      setPrismError(error instanceof Error ? error.message : "Failed to load Prism mapping recommendations");
+    } finally {
+      setPrismLoadingMappings(false);
+    }
+  };
+
+  const loadPrismImportPreview = async () => {
+    if (prismStatus?.sourceMode !== "pipes_cli") {
+      setPrismError("Pipes CLI import preview is disabled because MEIRO_PRISM_SOURCE_MODE is set to meiro_mcp.");
+      return;
+    }
+    setPrismLoadingImportPreview(true);
+    setPrismError(null);
+    try {
+      const response = await apiClient.pipes.prismImportPreview();
+      setPrismImportPreview(response);
+    } catch (error) {
+      setPrismImportPreview(null);
+      setPrismError(error instanceof Error ? error.message : "Failed to load Prism import preview");
+    } finally {
+      setPrismLoadingImportPreview(false);
+    }
+  };
 
   const loadRequirements = async () => {
     if (!requirementsKey.trim()) {
@@ -251,6 +388,297 @@ export default function PipesIntegrationPage() {
 
       <CollapsibleSection title="Connect Pipes" subtitle="Confirm endpoints and required headers for this environment.">
         <div className="space-y-3">
+          <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-medium">Prism / Pipes API and CLI</p>
+                <p className="mt-1 text-xs text-stone-700">Configured from environment only. Token values are never displayed or stored by this screen.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void runPrismCheck()} disabled={prismChecking}>
+                {prismChecking ? "Checking..." : "Check Prism/Pipes"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void loadPrismCandidates()} disabled={prismLoadingCandidates || !pipesCliSourceActive}>
+                {prismLoadingCandidates ? "Loading..." : "Load import candidates"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void syncPrismSnapshot()} disabled={prismSyncingSnapshot || !pipesCliSourceActive}>
+                {prismSyncingSnapshot ? "Syncing..." : "Sync local snapshot"}
+              </Button>
+            </div>
+            {prismError ? <p className="mt-2 text-xs text-red-700">{prismError}</p> : null}
+            <div className="mt-3 grid gap-2 md:grid-cols-5">
+              <div className="rounded border border-stone-200 bg-white px-2 py-1.5">
+                <p className="text-[11px] text-stone-500">Base URL</p>
+                <p className="truncate font-mono text-xs">{prismStatus?.baseUrl ?? "not configured"}</p>
+              </div>
+              <div className="rounded border border-stone-200 bg-white px-2 py-1.5">
+                <p className="text-[11px] text-stone-500">Data source</p>
+                <p className="truncate text-xs">{prismStatus?.activeSource ?? "loading"}</p>
+              </div>
+              <div className="rounded border border-stone-200 bg-white px-2 py-1.5">
+                <p className="text-[11px] text-stone-500">Token</p>
+                <p className="text-xs">{prismStatus?.tokenConfigured ? "configured" : "not configured"}</p>
+              </div>
+              <div className="rounded border border-stone-200 bg-white px-2 py-1.5">
+                <p className="text-[11px] text-stone-500">CLI</p>
+                <p className="truncate text-xs">{prismStatus?.cli.installed ? prismStatus.cli.version ?? "installed" : "not installed"}</p>
+              </div>
+              <div className="rounded border border-stone-200 bg-white px-2 py-1.5">
+                <p className="text-[11px] text-stone-500">API check</p>
+                <p className="text-xs">{prismCheck ? (prismCheck.ok ? `ok ${prismCheck.selectedPath ?? ""}` : "not ready") : "not run"}</p>
+              </div>
+            </div>
+            <div className="mt-3 rounded border border-stone-200 bg-white p-2 text-xs text-stone-700">
+              <p className="font-medium">Expected API service env</p>
+              <p className="mt-1 font-mono">MEIRO_PRISM_SOURCE_MODE, MEIRO_PIPES_BASE_URL, MEIRO_PIPES_TOKEN or MEIRO_PIPES_TOKEN_FILE, MEIRO_PIPES_TIMEOUT_MS, MEIRO_PIPES_CLI_COMMAND</p>
+              {prismStatus?.cli.error ? <p className="mt-1 text-amber-700">CLI check: {prismStatus.cli.error}</p> : null}
+              <p className="mt-1">Local snapshot: {prismSnapshot?.updatedAt ? new Date(prismSnapshot.updatedAt).toLocaleString() : "not synced"}</p>
+              {prismStatus?.sourceMode === "meiro_mcp" ? (
+                <p className="mt-1 text-amber-700">Pipes CLI reads are disabled for this screen because Meiro MCP is the active source.</p>
+              ) : null}
+            </div>
+            {prismCheck?.attempts.length ? (
+              <div className="mt-3 overflow-auto rounded border border-stone-200 bg-white">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-stone-500">
+                      <th className="border-b border-stone-200 px-2 py-1">Path</th>
+                      <th className="border-b border-stone-200 px-2 py-1">Reachable</th>
+                      <th className="border-b border-stone-200 px-2 py-1">HTTP</th>
+                      <th className="border-b border-stone-200 px-2 py-1">Payload</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {prismCheck.attempts.map((attempt) => (
+                      <tr key={attempt.path}>
+                        <td className="border-b border-stone-100 px-2 py-1 font-mono">{attempt.path}</td>
+                        <td className="border-b border-stone-100 px-2 py-1">{attempt.reachable ? "yes" : "no"}</td>
+                        <td className="border-b border-stone-100 px-2 py-1">{attempt.status ?? "-"}</td>
+                        <td className="border-b border-stone-100 px-2 py-1">{Array.isArray(attempt.payloadShape) ? attempt.payloadShape.join(", ") : attempt.payloadShape ?? attempt.error ?? "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {prismCandidates ? (
+              <div className="mt-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-stone-700">Read-only Prism import candidates</p>
+                  <p className="text-xs text-stone-500">{prismCandidates.sections.filter((section) => section.ok).length} sections reachable</p>
+                </div>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {prismCandidates.sections.map((section) => (
+                    <div key={section.key} className="rounded border border-stone-200 bg-white p-2 text-xs">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium">{section.label}</p>
+                          <p className="mt-0.5 text-stone-500">{section.mapsTo}</p>
+                        </div>
+                        <span className={section.ok ? "text-emerald-700" : "text-red-700"}>{section.ok ? `${section.count} shown` : "error"}</span>
+                      </div>
+                      {section.error ? <p className="mt-1 text-red-700">{section.error}</p> : null}
+                      {section.items.length ? (
+                        <div className="mt-2 max-h-40 overflow-auto">
+                          <table className="w-full">
+                            <tbody>
+                              {section.items.slice(0, 8).map((item) => (
+                                <tr key={`${section.key}-${item.id}`}>
+                                  <td className="border-t border-stone-100 py-1 pr-2 font-mono text-[11px]">{item.id}</td>
+                                  <td className="border-t border-stone-100 py-1">{item.name}</td>
+                                  <td className="border-t border-stone-100 py-1 text-stone-500">{item.type ?? item.status ?? "-"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : section.ok ? (
+                        <p className="mt-2 text-stone-500">No items returned.</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="mt-3 rounded border border-stone-200 bg-white p-2 text-xs">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-medium text-stone-700">Activation and measurement mappings</p>
+                  <p className="mt-0.5 text-stone-500">Read-only recommendations from the local Prism snapshot for decision keys, campaign_id joins, creative assets, and offer catalogs.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void loadPrismMappings()} disabled={prismLoadingMappings || !pipesCliSourceActive}>
+                    {prismLoadingMappings ? "Loading..." : "Refresh mappings"}
+                  </Button>
+                  {prismMappings ? (
+                    <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(prismMappings, null, 2))}>
+                      Copy mapping JSON
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              {prismMappings ? (
+                <div className="mt-3 space-y-3">
+                  <div className="grid gap-2 md:grid-cols-5">
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Campaigns</p>
+                      <p className="text-sm font-medium">{prismMappings.counts.campaigns}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Assets</p>
+                      <p className="text-sm font-medium">{prismMappings.counts.assets}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Catalogs</p>
+                      <p className="text-sm font-medium">{prismMappings.counts.catalogs}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Decision inputs</p>
+                      <p className="text-sm font-medium">{prismMappings.counts.decisionInputs}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Join keys</p>
+                      <p className="text-sm font-medium">{prismMappings.counts.measurementJoins}</p>
+                    </div>
+                  </div>
+                  {prismMappings.campaignMappings.length ? (
+                    <div className="overflow-auto rounded border border-stone-200">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="text-left text-stone-500">
+                            <th className="border-b border-stone-200 px-2 py-1">Prism campaign</th>
+                            <th className="border-b border-stone-200 px-2 py-1">deciEngine key</th>
+                            <th className="border-b border-stone-200 px-2 py-1">MMM/MTA tags</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {prismMappings.campaignMappings.slice(0, 6).map((mapping) => (
+                            <tr key={mapping.sourceId}>
+                              <td className="border-b border-stone-100 px-2 py-1">{mapping.sourceName}</td>
+                              <td className="border-b border-stone-100 px-2 py-1 font-mono text-[11px]">{mapping.recommendedKey}</td>
+                              <td className="border-b border-stone-100 px-2 py-1 font-mono text-[11px]">
+                                campaign_id={mapping.measurementTags.activation_campaign_id}; channel={mapping.measurementTags.channel}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-stone-500">Sync a Prism snapshot to generate campaign mapping recommendations.</p>
+                  )}
+                  <div className="grid gap-2 lg:grid-cols-3">
+                    {prismMappings.assetMappings.slice(0, 3).map((mapping) => (
+                      <div key={mapping.sourceId} className="rounded border border-stone-200 p-2">
+                        <p className="font-medium">{mapping.sourceName}</p>
+                        <p className="mt-1 font-mono text-[11px]">{mapping.recommendedKey}</p>
+                        <p className="mt-1 text-stone-500">{mapping.targetType}</p>
+                      </div>
+                    ))}
+                    {prismMappings.catalogMappings.slice(0, 3).map((mapping) => (
+                      <div key={mapping.sourceId} className="rounded border border-stone-200 p-2">
+                        <p className="font-medium">{mapping.sourceName}</p>
+                        <p className="mt-1 font-mono text-[11px]">{mapping.recommendedKey}</p>
+                        <p className="mt-1 text-stone-500">{mapping.targetType}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {prismMappings.measurementJoins.map((join) => (
+                      <span key={join.key} className="rounded border border-stone-200 px-2 py-1 font-mono text-[11px]" title={join.description}>
+                        {join.key}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-stone-500">No mapping recommendations loaded yet.</p>
+              )}
+            </div>
+            <div className="mt-3 rounded border border-stone-200 bg-white p-2 text-xs">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-medium text-stone-700">Controlled import preview</p>
+                  <p className="mt-0.5 text-stone-500">Compares recommended Prism keys with local campaigns, content blocks, and bundles before any write import exists.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => void loadPrismImportPreview()} disabled={prismLoadingImportPreview || !pipesCliSourceActive}>
+                    {prismLoadingImportPreview ? "Loading..." : "Refresh preview"}
+                  </Button>
+                  {prismImportPreview ? (
+                    <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(prismImportPreview, null, 2))}>
+                      Copy preview JSON
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              {prismImportPreview ? (
+                <div className="mt-3 space-y-3">
+                  <div className="grid gap-2 md:grid-cols-5">
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Operations</p>
+                      <p className="text-sm font-medium">{prismImportPreview.counts.total}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Create drafts</p>
+                      <p className="text-sm font-medium">{prismImportPreview.counts.createDraft}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Link existing</p>
+                      <p className="text-sm font-medium">{prismImportPreview.counts.linkExisting}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Decision inputs</p>
+                      <p className="text-sm font-medium">{prismImportPreview.counts.decisionInputs}</p>
+                    </div>
+                    <div className="rounded border border-stone-200 px-2 py-1.5">
+                      <p className="text-[11px] text-stone-500">Writable now</p>
+                      <p className="text-sm font-medium">0</p>
+                    </div>
+                  </div>
+                  <div className="overflow-auto rounded border border-stone-200">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="text-left text-stone-500">
+                          <th className="border-b border-stone-200 px-2 py-1">Prism entity</th>
+                          <th className="border-b border-stone-200 px-2 py-1">Target</th>
+                          <th className="border-b border-stone-200 px-2 py-1">Action</th>
+                          <th className="border-b border-stone-200 px-2 py-1">Existing local record</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prismImportPreview.operations.slice(0, 10).map((operation) => (
+                          <tr key={`${operation.targetType}-${operation.targetKey}`}>
+                            <td className="border-b border-stone-100 px-2 py-1">{operation.sourceName}</td>
+                            <td className="border-b border-stone-100 px-2 py-1">
+                              <span className="font-mono text-[11px]">{operation.targetKey}</span>
+                              <span className="ml-2 text-stone-500">{operation.targetType}</span>
+                            </td>
+                            <td className="border-b border-stone-100 px-2 py-1">
+                              <span className={operation.action === "link_existing" ? "text-emerald-700" : "text-amber-700"}>
+                                {operation.action === "link_existing" ? "link existing" : "create draft later"}
+                              </span>
+                            </td>
+                            <td className="border-b border-stone-100 px-2 py-1 text-stone-500">
+                              {operation.existing ? `${operation.existing.status}${operation.existing.version ? ` v${operation.existing.version}` : ""}` : "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {prismImportPreview.warnings.length ? (
+                    <ul className="list-disc space-y-1 pl-4 text-stone-600">
+                      {prismImportPreview.warnings.map((warning) => (
+                        <li key={warning}>{warning}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-2 text-stone-500">No import preview loaded yet.</p>
+              )}
+            </div>
+          </div>
           <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
             <p className="font-medium">Environment: {environment}</p>
             <p className="mt-1">Requirements endpoint: <span className="font-mono text-xs">{requirementsEndpoint}</span></p>

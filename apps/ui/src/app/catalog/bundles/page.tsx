@@ -9,6 +9,10 @@ import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
 import { InlineError } from "../../../components/ui/app-state";
 import { PageHeader } from "../../../components/ui/page";
+import { ActivationActionConfirm } from "../../../components/activation/ActivationActionConfirm";
+import { ActivationImpactPanel } from "../../../components/activation/ActivationImpactPanel";
+import { ActivationMeasurementPanel } from "../../../components/activation/ActivationMeasurementPanel";
+import { ActivationTimelinePanel } from "../../../components/activation/ActivationTimelinePanel";
 import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import { AssetBadge, ChannelBadges } from "../../../components/catalog/ActivationAssetCard";
 
@@ -163,6 +167,7 @@ export default function CatalogBundlesPage() {
   }>({ readiness: null, impact: null, archive: null });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
 
   const selected = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
   const selectedOffer = useMemo(() => offers.find((offer) => offer.key === editor.offerKey.trim()) ?? null, [editor.offerKey, offers]);
@@ -232,10 +237,11 @@ export default function CatalogBundlesPage() {
     await load();
   };
 
-  const archive = async () => {
+  const archive = async (acceptedPreview?: unknown) => {
     if (!selected) return;
-    const response = await apiClient.catalog.bundles.archive(selected.key);
+    const response = await apiClient.catalog.bundles.archive(selected.key, acceptedPreview);
     setMessage(response.archiveSafety?.warning ? `Archived ${selected.key}. ${response.archiveSafety.warning}` : `Archived ${selected.key}`);
+    setArchiveConfirmOpen(false);
     await load();
   };
 
@@ -308,7 +314,16 @@ export default function CatalogBundlesPage() {
         </aside>
 
         <div className="space-y-4">
-          {selected && editor.key.trim() ? <ActivationAssetProfilePanel entityType="bundle" assetKey={editor.key.trim()} /> : null}
+          {selected && editor.key.trim() ? (
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <ActivationAssetProfilePanel entityType="bundle" assetKey={editor.key.trim()} />
+              <div className="space-y-3">
+                <ActivationMeasurementPanel objectType="bundle" objectId={editor.key.trim()} />
+                <ActivationImpactPanel type="bundle" entityKey={editor.key.trim()} />
+                <ActivationTimelinePanel type="bundle" entityKey={editor.key.trim()} />
+              </div>
+            </div>
+          ) : null}
           <section className="panel space-y-3 p-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -353,8 +368,20 @@ export default function CatalogBundlesPage() {
               <Button onClick={() => void save()} disabled={!canWrite}>Save</Button>
               <Button variant="outline" onClick={() => void runPreview()}>Preview bundle</Button>
               <Button variant="outline" onClick={() => void activate()} disabled={!selected || !canActivate}>Activate</Button>
-              <Button variant="danger" onClick={() => void archive()} disabled={!selected || !canWrite}>Archive</Button>
+              <Button variant="danger" onClick={() => setArchiveConfirmOpen(true)} disabled={!selected || !canWrite}>Archive</Button>
             </div>
+            {selected ? (
+              <div className="md:col-span-2">
+                <ActivationActionConfirm
+                  type="bundle"
+                  entityKey={selected.key}
+                  action="archive"
+                  open={archiveConfirmOpen}
+                  onConfirm={(preview) => void archive(preview)}
+                  onCancel={() => setArchiveConfirmOpen(false)}
+                />
+              </div>
+            ) : null}
           </section>
           {changeSummary.readiness ? (
             <section className="panel space-y-2 p-3 text-sm">

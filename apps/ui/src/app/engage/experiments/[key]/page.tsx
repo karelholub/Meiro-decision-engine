@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { ExperimentDefinition, ExperimentDetails, ExperimentSummaryDetails } from "@decisioning/shared";
+import { ActivationActionConfirm } from "../../../../components/activation/ActivationActionConfirm";
+import { ActivationImpactPanel } from "../../../../components/activation/ActivationImpactPanel";
+import { ActivationMeasurementPanel } from "../../../../components/activation/ActivationMeasurementPanel";
+import { ActivationTimelinePanel } from "../../../../components/activation/ActivationTimelinePanel";
 import { DependenciesPanel } from "../../../../components/registry/DependenciesPanel";
 import { ResolvedRefValue } from "../../../../components/registry/ResolvedRefValue";
 import { HasDraftBadge, NoTrafficBadge, StatusBadge } from "../../../../components/ui/status-badges";
@@ -32,6 +36,7 @@ export default function ExperimentDetailsPage() {
   const [previewLookupAttribute, setPreviewLookupAttribute] = useState("email");
   const [previewContextText, setPreviewContextText] = useState("");
   const [previewResult, setPreviewResult] = useState<Record<string, unknown> | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"activate" | "archive" | null>(null);
   const { settings: enumSettings } = useAppEnumSettings(summary?.appKey ?? undefined);
 
   const canWrite = hasPermission("experiment.write");
@@ -133,13 +138,14 @@ export default function ExperimentDetailsPage() {
     }
   };
 
-  const activate = async () => {
+  const activate = async (acceptedPreview?: unknown) => {
     if (!summary) {
       return;
     }
     try {
-      await apiClient.experiments.activate(summary.key, summary.draftVersion ?? undefined);
+      await apiClient.experiments.activate(summary.key, summary.draftVersion ?? undefined, acceptedPreview);
       setMessage("Activated.");
+      setConfirmAction(null);
       await load();
     } catch (activateError) {
       setError(activateError instanceof Error ? activateError.message : "Activate failed");
@@ -156,14 +162,11 @@ export default function ExperimentDetailsPage() {
     }
   };
 
-  const archive = async () => {
-    const confirmed = window.confirm("Archive this experiment?");
-    if (!confirmed) {
-      return;
-    }
+  const archive = async (acceptedPreview?: unknown) => {
     try {
-      await apiClient.experiments.archive(key);
+      await apiClient.experiments.archive(key, acceptedPreview);
       setMessage("Archived.");
+      setConfirmAction(null);
       await load();
     } catch (archiveError) {
       setError(archiveError instanceof Error ? archiveError.message : "Archive failed");
@@ -315,6 +318,9 @@ export default function ExperimentDetailsPage() {
         </div>
 
         <aside className="space-y-3">
+          <ActivationMeasurementPanel objectType="experiment" objectId={key} />
+          <ActivationImpactPanel type="experiment" entityKey={key} />
+          <ActivationTimelinePanel type="experiment" entityKey={key} />
           <DependenciesPanel items={dependencyItems} />
           <article className="rounded-lg border border-stone-200 bg-white p-4">
             <h3 className="font-semibold">Actions</h3>
@@ -326,11 +332,30 @@ export default function ExperimentDetailsPage() {
                   <button className="rounded border border-stone-300 px-3 py-2 text-sm" onClick={() => void validate()} disabled={!details?.id}>Validate</button>
                 </>
               ) : null}
-              {canActivate ? <button className="rounded border border-emerald-400 px-3 py-2 text-sm text-emerald-700" onClick={() => void activate()}>Activate</button> : null}
+              {canActivate ? <button className="rounded border border-emerald-400 px-3 py-2 text-sm text-emerald-700" onClick={() => setConfirmAction("activate")}>Activate</button> : null}
               {canWrite ? <button className="rounded border border-amber-400 px-3 py-2 text-sm text-amber-700" onClick={() => void pause()}>Pause</button> : null}
-              {canArchive ? <button className="rounded border border-rose-400 px-3 py-2 text-sm text-rose-700" onClick={() => void archive()}>Archive</button> : null}
+              {canArchive ? <button className="rounded border border-rose-400 px-3 py-2 text-sm text-rose-700" onClick={() => setConfirmAction("archive")}>Archive</button> : null}
               {canPromote ? <Link className="rounded border border-stone-300 px-3 py-2 text-sm" href={`/releases?type=experiment&key=${encodeURIComponent(key)}`}>Promote</Link> : null}
             </div>
+            {confirmAction ? (
+              <div className="mt-3">
+                <ActivationActionConfirm
+                  type="experiment"
+                  entityKey={key}
+                  action={confirmAction}
+                  open={Boolean(confirmAction)}
+                  loading={loading}
+                  onConfirm={(preview) => {
+                    if (confirmAction === "activate") {
+                      void activate(preview);
+                    } else {
+                      void archive(preview);
+                    }
+                  }}
+                  onCancel={() => setConfirmAction(null)}
+                />
+              </div>
+            ) : null}
           </article>
 
           <article className="rounded-lg border border-stone-200 bg-white p-4 text-sm">

@@ -15,6 +15,10 @@ import { PageHeader, PagePanel } from "../../../components/ui/page";
 import { HasDraftBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
+import { ActivationActionConfirm } from "../../../components/activation/ActivationActionConfirm";
+import { ActivationImpactPanel } from "../../../components/activation/ActivationImpactPanel";
+import { ActivationMeasurementPanel } from "../../../components/activation/ActivationMeasurementPanel";
+import { ActivationTimelinePanel } from "../../../components/activation/ActivationTimelinePanel";
 
 export default function DecisionDetailsClient({ decisionId }: { decisionId: string }) {
   const { hasPermission } = usePermissions();
@@ -22,6 +26,7 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
   const [report, setReport] = useState<DecisionReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"activate" | "archive" | null>(null);
 
   const load = async () => {
     try {
@@ -57,20 +62,22 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
     }
   };
 
-  const activate = async () => {
+  const activate = async (acceptedPreview?: unknown) => {
     try {
-      await apiClient.decisions.activate(decisionId);
+      await apiClient.decisions.activate(decisionId, { acceptedPreview });
       setMessage("Activated.");
+      setConfirmAction(null);
       await load();
     } catch (activateError) {
       setError(activateError instanceof Error ? activateError.message : "Activate failed");
     }
   };
 
-  const archive = async () => {
+  const archive = async (acceptedPreview?: unknown) => {
     try {
-      await apiClient.decisions.archive(decisionId);
+      await apiClient.decisions.archive(decisionId, acceptedPreview);
       setMessage("Archived.");
+      setConfirmAction(null);
       await load();
     } catch (archiveError) {
       setError(archiveError instanceof Error ? archiveError.message : "Archive failed");
@@ -160,15 +167,36 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
         </div>
 
         <aside className="space-y-3">
+          <ActivationMeasurementPanel objectType="decision" objectId={details.key} />
+          <ActivationImpactPanel type="decision" entityKey={details.key} />
+          <ActivationTimelinePanel type="decision" entityKey={details.key} />
           <PagePanel density="compact">
             <h3 className="font-semibold">Actions</h3>
             <div className="mt-2 grid gap-2">
               {canWrite ? <ButtonLink size="sm" variant="outline" href={`/decisions/${decisionId}/edit`}>Edit draft</ButtonLink> : null}
-              {canActivate ? <Button size="sm" variant="outline" className="border-emerald-400 text-emerald-700" onClick={() => void activate()} disabled={!draft} title={!draft ? "No draft available." : undefined}>Activate</Button> : null}
-              {canArchive ? <Button size="sm" variant="outline" className="border-rose-300 text-rose-700" onClick={() => void archive()} disabled={!active && !draft} title={!active && !draft ? "No active or draft version." : undefined}>Archive</Button> : null}
+              {canActivate ? <Button size="sm" variant="outline" className="border-emerald-400 text-emerald-700" onClick={() => setConfirmAction("activate")} disabled={!draft} title={!draft ? "No draft available." : undefined}>Activate</Button> : null}
+              {canArchive ? <Button size="sm" variant="outline" className="border-rose-300 text-rose-700" onClick={() => setConfirmAction("archive")} disabled={!active && !draft} title={!active && !draft ? "No active or draft version." : undefined}>Archive</Button> : null}
               {canPromote ? <ButtonLink size="sm" variant="outline" href={`/releases?type=decision&key=${encodeURIComponent(details.key)}`}>Promote</ButtonLink> : null}
               <Button size="sm" variant="outline" onClick={() => void load()}>Refresh</Button>
             </div>
+            {confirmAction ? (
+              <div className="mt-3">
+                <ActivationActionConfirm
+                  type="decision"
+                  entityKey={details.key}
+                  action={confirmAction}
+                  open={Boolean(confirmAction)}
+                  onConfirm={(preview) => {
+                    if (confirmAction === "activate") {
+                      void activate(preview);
+                    } else {
+                      void archive(preview);
+                    }
+                  }}
+                  onCancel={() => setConfirmAction(null)}
+                />
+              </div>
+            ) : null}
           </PagePanel>
         </aside>
       </section>

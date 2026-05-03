@@ -93,10 +93,14 @@ import { registerMaintenanceRoutes } from "./routes/maintenance";
 import { registerOrchestrationRoutes } from "./routes/orchestration";
 import { registerPrecomputeRoutes } from "./routes/precompute";
 import { registerPipesCallbackRoutes } from "./routes/pipesCallback";
+import { registerPipesPrismRoutes } from "./routes/pipesPrism";
 import { registerReleaseRoutes } from "./routes/releases";
 import { registerExperimentRoutes } from "./routes/experiments";
 import { registerMeiroRoutes } from "./routes/meiro";
 import { registerRuntimeSettingsRoutes } from "./routes/runtimeSettings";
+import { registerActivationGraphRoutes } from "./routes/activationGraph";
+import { registerActivationTimelineRoutes } from "./routes/activationTimeline";
+import { registerMeasurementRoutes } from "./routes/measurement";
 import {
   processPipesWebhook,
   pipesWebhookBodySchema,
@@ -265,7 +269,14 @@ const activateDecisionBodySchema = z
       .object({
         reason: z.string().min(10).max(2_000)
       })
-      .optional()
+      .optional(),
+    acceptedPreview: z.unknown().optional()
+  })
+  .optional();
+
+const acceptedPreviewBodySchema = z
+  .object({
+    acceptedPreview: z.unknown().optional()
   })
   .optional();
 
@@ -3316,6 +3327,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     if (route.startsWith("/v1/settings/app")) return method === "GET" ? "settings.app.read" : "settings.app.write";
     if (route.startsWith("/v1/settings/runtime")) return method === "GET" ? "settings.app.read" : "settings.app.write";
     if (route.startsWith("/v1/settings/pipes-callback")) return method === "GET" ? "settings.pipes.read" : "settings.pipes.write";
+    if (route.startsWith("/v1/settings/pipes-prism")) return method === "GET" ? "settings.pipes.read" : "settings.pipes.write";
     if (route.startsWith("/v1/settings/webhook-rules")) return method === "GET" ? "settings.webhooks.read" : "settings.webhooks.write";
     if (route.startsWith("/v1/releases")) {
       if (route.endsWith("/approve")) return "promotion.approve";
@@ -3715,6 +3727,30 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     requireWriteAuth
   });
 
+  await registerActivationGraphRoutes({
+    app,
+    prisma,
+    resolveEnvironment,
+    buildResponseError,
+    requireAnyPermission
+  });
+
+  await registerActivationTimelineRoutes({
+    app,
+    prisma,
+    resolveEnvironment,
+    buildResponseError,
+    requireAnyPermission
+  });
+
+  await registerMeasurementRoutes({
+    app,
+    measurementApiBaseUrl: config.measurementApiBaseUrl,
+    measurementApiTimeoutMs: config.measurementApiTimeoutMs ?? 1500,
+    requireReadAuth: requirePermission("engage.campaign.read"),
+    buildResponseError
+  });
+
   await registerReleaseRoutes({
     app,
     prisma,
@@ -3790,6 +3826,19 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         requireWriteAuth,
         resolveEnvironment,
         buildResponseError
+      });
+      await registerPipesPrismRoutes({
+        app,
+        prisma,
+        requireReadAuth: requirePermission("settings.pipes.read"),
+        requireWriteAuth,
+        resolveEnvironment,
+        buildResponseError,
+        baseUrl: config.meiroPipesBaseUrl,
+        token: config.meiroPipesToken,
+        timeoutMs: config.meiroPipesTimeoutMs ?? 5000,
+        cliCommand: config.meiroPipesCliCommand ?? "mpcli",
+        sourceMode: config.meiroPrismSourceMode ?? "pipes_cli"
       });
     }
   } else {
@@ -5994,6 +6043,24 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         }
       });
     }
+    if (auditModel?.create && body.data?.acceptedPreview) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.activate.preview_accepted",
+          entityType: "decision",
+          entityKey: activated.definition.key,
+          entityVersion: activated.version.version,
+          metadata: toInputJson({
+            acceptedPreview: body.data.acceptedPreview,
+            decisionId: params.data.id,
+            versionId: activated.version.id
+          })
+        }
+      });
+    }
     if (auditModel?.create && activated.approvalOverrideReason) {
       await auditModel.create({
         data: {
@@ -6034,8 +6101,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid decision id");
+    const body = acceptedPreviewBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const target = await prisma.decisionVersion.findFirst({
@@ -6067,6 +6135,26 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     });
 
     clearDecisionCaches(environment);
+
+    if (body.data?.acceptedPreview) {
+      const auth = await resolveAuthContext(request, reply);
+      await (prisma as any).auditEvent?.create?.({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "decision.archive.preview_accepted",
+          entityType: "decision",
+          entityKey: archivedDefinition.key,
+          entityVersion: archived.version,
+          metadata: toInputJson({
+            acceptedPreview: body.data.acceptedPreview,
+            decisionId: params.data.id,
+            versionId: archived.id
+          })
+        }
+      });
+    }
 
     return {
       decisionId: params.data.id,
@@ -6383,8 +6471,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const params = stackByIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid stack id");
+    const body = acceptedPreviewBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const nowIso = now().toISOString();
@@ -6453,6 +6542,27 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
     clearStackCaches(environment);
 
+    if (body.data?.acceptedPreview) {
+      const auth = await resolveAuthContext(request, reply);
+      const activeDefinition = parseStackDefinition(activated.definitionJson);
+      await (prisma as any).auditEvent?.create?.({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "stack.activate.preview_accepted",
+          entityType: "stack",
+          entityKey: activeDefinition.key,
+          entityVersion: activated.version,
+          metadata: toInputJson({
+            acceptedPreview: body.data.acceptedPreview,
+            stackId: activated.id,
+            versionId: activated.id
+          })
+        }
+      });
+    }
+
     return {
       stackId: activated.id,
       versionId: activated.id,
@@ -6470,8 +6580,9 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     }
 
     const params = stackByIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid stack id");
+    const body = acceptedPreviewBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const target = await prisma.decisionStack.findFirst({
@@ -6519,6 +6630,26 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     });
 
     clearStackCaches(environment);
+
+    if (body.data?.acceptedPreview) {
+      const auth = await resolveAuthContext(request, reply);
+      await (prisma as any).auditEvent?.create?.({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: "stack.archive.preview_accepted",
+          entityType: "stack",
+          entityKey: archivedDefinition.key,
+          entityVersion: archived.version,
+          metadata: toInputJson({
+            acceptedPreview: body.data.acceptedPreview,
+            stackId: archived.id,
+            versionId: archived.id
+          })
+        }
+      });
+    }
 
     return {
       stackId: archived.id,

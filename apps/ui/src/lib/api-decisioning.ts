@@ -23,6 +23,13 @@ import type {
 import type { DecisionDefinition } from "@decisioning/dsl";
 import { apiFetch, toQuery } from "./api-core";
 import type {
+  PipesPrismCheckResponse,
+  PipesPrismFieldRegistryResponse,
+  PipesPrismImportCandidatesResponse,
+  PipesPrismImportPreviewResponse,
+  PipesPrismImportSnapshotResponse,
+  PipesPrismMappingRecommendationsResponse,
+  PipesPrismStatusResponse,
   PipesRequirementsResponse,
   PipesInlineEvaluateResponse
 } from "./api-types";
@@ -174,13 +181,18 @@ export const decisioningApiClient = {
         activationNote?: string;
         expectedDraftVersion?: number;
         approvalOverride?: { reason: string };
+        acceptedPreview?: unknown;
       } = {}
     ) =>
       apiFetch(`/v1/decisions/${decisionId}/activate`, {
         method: "POST",
         body: JSON.stringify(input)
       }),
-    archive: (decisionId: string) => apiFetch(`/v1/decisions/${decisionId}/archive`, { method: "POST" }),
+    archive: (decisionId: string, acceptedPreview?: unknown) =>
+      apiFetch(`/v1/decisions/${decisionId}/archive`, {
+        method: "POST",
+        body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
+      }),
     report: (decisionId: string, input: { from?: string; to?: string } = {}) =>
       apiFetch<DecisionReportResponse>(
         `/v1/reports/decision/${decisionId}${toQuery({
@@ -255,8 +267,16 @@ export const decisioningApiClient = {
         method: "POST",
         body: JSON.stringify(definition ? { definition } : {})
       }),
-    activate: (stackId: string) => apiFetch(`/v1/stacks/${stackId}/activate`, { method: "POST" }),
-    archive: (stackId: string) => apiFetch(`/v1/stacks/${stackId}/archive`, { method: "POST" }),
+    activate: (stackId: string, acceptedPreview?: unknown) =>
+      apiFetch(`/v1/stacks/${stackId}/activate`, {
+        method: "POST",
+        body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
+      }),
+    archive: (stackId: string, acceptedPreview?: unknown) =>
+      apiFetch(`/v1/stacks/${stackId}/archive`, {
+        method: "POST",
+        body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
+      }),
     duplicateFromActive: (stackId: string, key?: string) =>
       apiFetch(`/v1/stacks/${stackId}/duplicate-from-active${toQuery({ key })}`, { method: "POST" })
   },
@@ -266,6 +286,20 @@ export const decisioningApiClient = {
       body: JSON.stringify(input)
     }),
   pipes: {
+    prismStatus: () => apiFetch<PipesPrismStatusResponse>(`/v1/settings/pipes-prism/status`),
+    prismCheck: () =>
+      apiFetch<PipesPrismCheckResponse>(`/v1/settings/pipes-prism/check`, {
+        method: "POST"
+      }),
+    prismImportCandidates: () => apiFetch<PipesPrismImportCandidatesResponse>(`/v1/settings/pipes-prism/import-candidates`),
+    prismImportSnapshot: () => apiFetch<PipesPrismImportSnapshotResponse>(`/v1/settings/pipes-prism/import-snapshot`),
+    syncPrismImportSnapshot: () =>
+      apiFetch<PipesPrismImportSnapshotResponse>(`/v1/settings/pipes-prism/import-snapshot`, {
+        method: "POST"
+    }),
+    prismFieldRegistry: () => apiFetch<PipesPrismFieldRegistryResponse>(`/v1/settings/pipes-prism/field-registry`),
+    prismMappingRecommendations: () => apiFetch<PipesPrismMappingRecommendationsResponse>(`/v1/settings/pipes-prism/mapping-recommendations`),
+    prismImportPreview: () => apiFetch<PipesPrismImportPreviewResponse>(`/v1/settings/pipes-prism/import-preview`),
     getDecisionRequirements: (key: string) =>
       apiFetch<PipesRequirementsResponse>(`/v1/requirements/decision/${encodeURIComponent(key)}`),
     getStackRequirements: (key: string) =>

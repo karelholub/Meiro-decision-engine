@@ -61,6 +61,10 @@ const mergeRegistries = (base: FieldRegistryItem[], mapped: FieldRegistryItem[])
 export function useAuthoringFieldRegistry() {
   const [mappedFields, setMappedFields] = useState<FieldRegistryItem[]>([]);
   const [meiroFields, setMeiroFields] = useState<FieldRegistryItem[]>([]);
+  const [prismFields, setPrismFields] = useState<FieldRegistryItem[]>([]);
+  const [prismAudiences, setPrismAudiences] = useState<Array<{ id: string; name: string }>>([]);
+  const [prismAudienceCount, setPrismAudienceCount] = useState(0);
+  const [audienceSourceLabel, setAudienceSourceLabel] = useState("Prism audiences");
   const [sourceLabel, setSourceLabel] = useState("Built-in profile fields");
 
   useEffect(() => {
@@ -110,22 +114,55 @@ export function useAuthoringFieldRegistry() {
 
     const load = async () => {
       try {
-        const response = await apiClient.meiro.mcp.attributes();
+        const status = await apiClient.pipes.prismStatus();
+        if (status.sourceMode === "meiro_mcp") {
+          const [attributes, segments] = await Promise.all([
+            apiClient.meiro.mcp.attributes(),
+            apiClient.meiro.mcp.segments()
+          ]);
+          if (cancelled) {
+            return;
+          }
+          setMeiroFields(
+            attributes.items.map((attribute) => ({
+              field: attribute.id,
+              label: attribute.name,
+              dataType: inferMeiroType(attribute.dataType),
+              description: attribute.description ?? undefined,
+              common: false
+            }))
+          );
+          setPrismFields([]);
+          setPrismAudiences(segments.items.map((segment) => ({ id: String(segment.id), name: segment.name })));
+          setPrismAudienceCount(segments.items.length);
+          setAudienceSourceLabel("Meiro MCP segments");
+          return;
+        }
+
+        const response = await apiClient.pipes.prismFieldRegistry();
         if (cancelled) {
           return;
         }
-        setMeiroFields(
-          response.items.map((attribute) => ({
-            field: attribute.id,
-            label: attribute.name,
-            dataType: inferMeiroType(attribute.dataType),
-            description: attribute.description ?? undefined,
+        setMeiroFields([]);
+        setPrismFields(
+          response.attributes.map((attribute) => ({
+            field: attribute.field,
+            label: attribute.label,
+            dataType: attribute.dataType,
+            description: attribute.description,
             common: false
           }))
         );
+        setPrismAudiences(response.audiences.map((audience) => ({ id: audience.id, name: audience.name })));
+        setPrismAudienceCount(response.counts.audiences);
+        setAudienceSourceLabel("Prism audiences");
       } catch {
         if (!cancelled) {
           setMeiroFields([]);
+          setPrismFields([]);
+          setPrismAudiences([]);
+          setPrismAudienceCount(0);
+          setAudienceSourceLabel("Prism audiences");
         }
       }
     };
@@ -136,11 +173,21 @@ export function useAuthoringFieldRegistry() {
     };
   }, []);
 
-  const registry = useMemo(() => mergeRegistries(mergeRegistries(fallbackFieldRegistry, mappedFields), meiroFields), [mappedFields, meiroFields]);
+  const registry = useMemo(
+    () => mergeRegistries(mergeRegistries(mergeRegistries(fallbackFieldRegistry, mappedFields), meiroFields), prismFields),
+    [mappedFields, meiroFields, prismFields]
+  );
+
+  const sourceParts = [sourceLabel];
+  if (meiroFields.length > 0) sourceParts.push("Meiro CDP attributes");
+  if (prismFields.length > 0) sourceParts.push("Prism snapshot");
 
   return {
     registry,
-    sourceLabel: meiroFields.length > 0 ? `${sourceLabel} + Meiro CDP attributes` : sourceLabel,
-    mappedFieldCount: mappedFields.length + meiroFields.length
+    sourceLabel: sourceParts.join(" + "),
+    mappedFieldCount: mappedFields.length + meiroFields.length + prismFields.length,
+    prismAudiences,
+    prismAudienceCount,
+    audienceSourceLabel
   };
 }

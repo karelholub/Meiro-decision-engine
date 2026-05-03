@@ -546,7 +546,8 @@ const inAppCampaignIdParamsSchema = z.object({
 });
 
 const inAppCampaignActionBodySchema = z.object({
-  comment: z.string().optional()
+  comment: z.string().optional(),
+  acceptedPreview: z.unknown().optional()
 });
 
 const inAppCampaignRollbackBodySchema = z.object({
@@ -563,9 +564,20 @@ export const inAppEventsBodySchema = z.object({
   appKey: z.string().min(1),
   placement: z.string().min(1),
   tracking: z.object({
+    schema_version: z.string().min(1).optional(),
+    source_system: z.string().min(1).optional(),
     campaign_id: z.string().min(1),
     message_id: z.string().min(1),
     variant_id: z.string().min(1),
+    activation_campaign_id: z.string().min(1).optional(),
+    decision_key: z.string().min(1).optional(),
+    decision_stack_key: z.string().min(1).optional(),
+    placement_key: z.string().min(1).optional(),
+    template_key: z.string().min(1).optional(),
+    content_block_id: z.string().min(1).optional(),
+    offer_id: z.string().min(1).optional(),
+    bundle_id: z.string().min(1).optional(),
+    channel: z.string().min(1).optional(),
     experiment_id: z.string().min(1).optional(),
     experiment_version: z.number().int().positive().optional(),
     is_holdout: z.boolean().optional(),
@@ -2420,8 +2432,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const parsed = inAppCampaignScheduleUpdateSchema.safeParse(request.body);
@@ -2534,8 +2547,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const campaign = await prisma.inAppCampaign.findFirst({
@@ -2564,8 +2578,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const campaign = await prisma.inAppCampaign.findFirst({
@@ -3225,8 +3240,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const existing = await prisma.inAppCampaign.findFirst({
@@ -3273,7 +3289,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       entityType: "inapp_campaign",
       entityId: activated.id,
       beforeValue: makeCampaignSnapshot(existing),
-      afterValue: makeCampaignSnapshot(activated)
+      afterValue: makeCampaignSnapshot(activated),
+      meta: {
+        acceptedPreview: body.data.acceptedPreview ?? null
+      }
     });
 
     return {
@@ -3292,8 +3311,9 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
     }
 
     const params = inAppCampaignIdParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid campaign id", params.error.flatten());
+    const body = inAppCampaignActionBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     const existing = await prisma.inAppCampaign.findFirst({
@@ -3337,7 +3357,10 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       entityType: "inapp_campaign",
       entityId: archived.id,
       beforeValue: makeCampaignSnapshot(existing),
-      afterValue: makeCampaignSnapshot(archived)
+      afterValue: makeCampaignSnapshot(archived),
+      meta: {
+        acceptedPreview: body.data.acceptedPreview ?? null
+      }
     });
 
     return {
@@ -3406,7 +3429,8 @@ export const registerInAppRoutes = async (deps: RegisterInAppRoutesDeps) => {
       beforeValue: makeCampaignSnapshot(existing),
       afterValue: makeCampaignSnapshot(updated),
       meta: {
-        comment: body.data.comment ?? null
+        comment: body.data.comment ?? null,
+        acceptedPreview: body.data.acceptedPreview ?? null
       }
     });
 

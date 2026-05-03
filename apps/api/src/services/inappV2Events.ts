@@ -24,9 +24,20 @@ export interface InAppV2EventBody {
   appKey: string;
   placement: string;
   tracking: {
+    schema_version?: string;
+    source_system?: string;
     campaign_id: string;
     message_id: string;
     variant_id: string;
+    activation_campaign_id?: string;
+    decision_key?: string;
+    decision_stack_key?: string;
+    placement_key?: string;
+    template_key?: string;
+    content_block_id?: string;
+    offer_id?: string;
+    bundle_id?: string;
+    channel?: string;
     experiment_id?: string;
     experiment_version?: number;
     is_holdout?: boolean;
@@ -97,9 +108,20 @@ export const createInAppV2EventsService = (deps: InAppV2EventsDeps) => {
         ts: timestamp.toISOString(),
         appKey: input.body.appKey,
         placement: input.body.placement,
+        schema_version: input.body.tracking.schema_version ?? "",
+        source_system: input.body.tracking.source_system ?? "",
         campaign_id: input.body.tracking.campaign_id,
         message_id: input.body.tracking.message_id,
         variant_id: input.body.tracking.variant_id,
+        activation_campaign_id: input.body.tracking.activation_campaign_id ?? "",
+        decision_key: input.body.tracking.decision_key ?? "",
+        decision_stack_key: input.body.tracking.decision_stack_key ?? "",
+        placement_key: input.body.tracking.placement_key ?? "",
+        template_key: input.body.tracking.template_key ?? "",
+        content_block_id: input.body.tracking.content_block_id ?? "",
+        offer_id: input.body.tracking.offer_id ?? "",
+        bundle_id: input.body.tracking.bundle_id ?? "",
+        channel: input.body.tracking.channel ?? "",
         experiment_id: input.body.tracking.experiment_id ?? "",
         experiment_version:
           typeof input.body.tracking.experiment_version === "number" ? String(input.body.tracking.experiment_version) : "",

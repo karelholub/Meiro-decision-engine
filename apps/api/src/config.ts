@@ -1,9 +1,18 @@
+import { readFileSync } from "node:fs";
+
 export type ApiRuntimeRole = "all" | "serve" | "worker";
+export type MeiroPrismSourceMode = "pipes_cli" | "meiro_mcp";
 
 export interface AppConfig {
   apiPort: number;
   apiWriteKey?: string;
   pipesSharedSecret?: string;
+  meiroPipesBaseUrl?: string;
+  meiroPipesToken?: string;
+  meiroPipesTokenFile?: string;
+  meiroPipesTimeoutMs?: number;
+  meiroPipesCliCommand?: string;
+  meiroPrismSourceMode?: MeiroPrismSourceMode;
   protectDecide: boolean;
   apiRuntimeRole?: ApiRuntimeRole;
   meiroMode: "mock" | "real";
@@ -17,6 +26,8 @@ export interface AppConfig {
   meiroMcpUsername?: string;
   meiroMcpPassword?: string;
   meiroMcpTimeoutMs?: number;
+  measurementApiBaseUrl?: string;
+  measurementApiTimeoutMs?: number;
   redisUrl?: string;
   realtimeCacheTtlSeconds?: number;
   realtimeCacheLockTtlMs?: number;
@@ -127,10 +138,35 @@ const toRuntimeRole = (value: string | undefined, fallback: ApiRuntimeRole): Api
   return fallback;
 };
 
+const toMeiroPrismSourceMode = (value: string | undefined, fallback: MeiroPrismSourceMode): MeiroPrismSourceMode => {
+  if (value === "pipes_cli" || value === "meiro_mcp") {
+    return value;
+  }
+  return fallback;
+};
+
+const readSecretFile = (path: string | undefined): string | undefined => {
+  if (!path?.trim()) {
+    return undefined;
+  }
+  try {
+    const value = readFileSync(path, "utf8").trim();
+    return value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const readConfig = (): AppConfig => ({
   apiPort: Number.parseInt(process.env.API_PORT ?? "3001", 10),
   apiWriteKey: process.env.API_WRITE_KEY,
   pipesSharedSecret: process.env.PIPES_SHARED_SECRET,
+  meiroPipesBaseUrl: process.env.MEIRO_PIPES_BASE_URL,
+  meiroPipesToken: process.env.MEIRO_PIPES_TOKEN || readSecretFile(process.env.MEIRO_PIPES_TOKEN_FILE),
+  meiroPipesTokenFile: process.env.MEIRO_PIPES_TOKEN_FILE,
+  meiroPipesTimeoutMs: toNumber(process.env.MEIRO_PIPES_TIMEOUT_MS, 5000),
+  meiroPipesCliCommand: process.env.MEIRO_PIPES_CLI_COMMAND ?? "mpcli",
+  meiroPrismSourceMode: toMeiroPrismSourceMode(process.env.MEIRO_PRISM_SOURCE_MODE, "pipes_cli"),
   protectDecide: toBool(process.env.PROTECT_DECIDE, false),
   apiRuntimeRole: toRuntimeRole(process.env.API_RUNTIME_ROLE, "all"),
   meiroMode: process.env.MEIRO_MODE === "real" ? "real" : "mock",
@@ -144,6 +180,8 @@ export const readConfig = (): AppConfig => ({
   meiroMcpUsername: process.env.MEIRO_USERNAME,
   meiroMcpPassword: process.env.MEIRO_PASSWORD,
   meiroMcpTimeoutMs: toNumber(process.env.MEIRO_MCP_TIMEOUT_MS, 15000),
+  measurementApiBaseUrl: process.env.MEASUREMENT_API_BASE_URL ?? "http://host.docker.internal:8000",
+  measurementApiTimeoutMs: toNumber(process.env.MEASUREMENT_API_TIMEOUT_MS, 1500),
   redisUrl: process.env.REDIS_URL,
   realtimeCacheTtlSeconds: toNumber(process.env.REALTIME_CACHE_TTL_SECONDS, 60),
   realtimeCacheLockTtlMs: toNumber(process.env.REALTIME_CACHE_LOCK_TTL_MS, 3000),

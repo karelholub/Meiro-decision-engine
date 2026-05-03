@@ -38,5 +38,8 @@ WORKDIR /app
 RUN apk add --no-cache python3 py3-pip \
     && pip3 install --break-system-packages --no-cache-dir uv
 COPY --from=build /app /app
+COPY docker/mpcli.mjs /usr/local/lib/deciengine/mpcli.mjs
+RUN ln -sf /usr/local/lib/deciengine/mpcli.mjs /usr/local/bin/mpcli \
+    && chmod +x /usr/local/lib/deciengine/mpcli.mjs
 EXPOSE 3001
 CMD ["pnpm", "--filter", "@decisioning/api", "start:docker"]

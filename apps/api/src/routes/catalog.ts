@@ -129,6 +129,10 @@ const assetQuerySchema = z.object({
   key: z.string().min(1)
 });
 
+const acceptedPreviewBodySchema = z.object({
+  acceptedPreview: z.unknown().optional()
+});
+
 const activationAssetTypeSchema = z.enum([
   "image",
   "copy_snippet",
@@ -2292,8 +2296,12 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       return;
     }
     const params = keyParamsSchema.safeParse(request.params);
+    const body = acceptedPreviewBodySchema.safeParse(request.body ?? {});
     if (!params.success) {
       return deps.buildResponseError(reply, 400, "Invalid key");
+    }
+    if (!body.success) {
+      return deps.buildResponseError(reply, 400, "Invalid body", body.error.flatten());
     }
     const existing = await (deps.prisma as any).assetBundle.findFirst({ where: { environment, key: params.data.key }, orderBy: { version: "desc" } });
     if (!existing) {
@@ -2302,7 +2310,7 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     const dependencies = await findAssetDependencies(environment, "bundle", params.data.key);
     const changePayload = await buildChangeManagementPayload(environment, "bundle", params.data.key);
     await (deps.prisma as any).assetBundle.updateMany({ where: { environment, key: params.data.key, status: { not: "ARCHIVED" } }, data: { status: "ARCHIVED", archivedAt: deps.now() } });
-    await recordAudit({ environment, entityType: "asset_bundle", entityId: existing.id, entityKey: existing.key, version: existing.version, action: "archive", actorId: normalizeActorId(request), meta: { archiveSafety: dependencies.archiveSafety, archiveConsequence: changePayload?.archive } });
+    await recordAudit({ environment, entityType: "asset_bundle", entityId: existing.id, entityKey: existing.key, version: existing.version, action: "archive", actorId: normalizeActorId(request), meta: { archiveSafety: dependencies.archiveSafety, archiveConsequence: changePayload?.archive, acceptedPreview: body.data.acceptedPreview ?? null } });
     request.log.info({ event: "catalog_archive_consequence", assetType: "bundle", assetKey: params.data.key, riskLevel: changePayload?.archive.riskLevel, reasonCodes: changePayload?.archive.consequences.map((item) => item.code) ?? [] }, "Catalog archive consequence evaluated");
     return { archivedKey: params.data.key, archiveSafety: dependencies.archiveSafety, archiveConsequence: changePayload?.archive, dependencies };
   });
@@ -2747,8 +2755,12 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     }
 
     const params = keyParamsSchema.safeParse(request.params);
+    const body = acceptedPreviewBodySchema.safeParse(request.body ?? {});
     if (!params.success) {
       return deps.buildResponseError(reply, 400, "Invalid key");
+    }
+    if (!body.success) {
+      return deps.buildResponseError(reply, 400, "Invalid body", body.error.flatten());
     }
 
     const existing = await deps.prisma.offer.findFirst({
@@ -2790,7 +2802,8 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       actorId: normalizeActorId(request),
       meta: {
         archiveSafety: dependencies.archiveSafety,
-        archiveConsequence: changePayload?.archive
+        archiveConsequence: changePayload?.archive,
+        acceptedPreview: body.data.acceptedPreview ?? null
       }
     });
     request.log.info({ event: "catalog_archive_consequence", assetType: "offer", assetKey: params.data.key, riskLevel: changePayload?.archive.riskLevel, reasonCodes: changePayload?.archive.consequences.map((item) => item.code) ?? [] }, "Catalog archive consequence evaluated");
@@ -3206,8 +3219,12 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
     }
 
     const params = keyParamsSchema.safeParse(request.params);
+    const body = acceptedPreviewBodySchema.safeParse(request.body ?? {});
     if (!params.success) {
       return deps.buildResponseError(reply, 400, "Invalid key");
+    }
+    if (!body.success) {
+      return deps.buildResponseError(reply, 400, "Invalid body", body.error.flatten());
     }
 
     const existing = await deps.prisma.contentBlock.findFirst({
@@ -3249,7 +3266,8 @@ export const registerCatalogRoutes = async (deps: RegisterCatalogRoutesDeps) => 
       actorId: normalizeActorId(request),
       meta: {
         archiveSafety: dependencies.archiveSafety,
-        archiveConsequence: changePayload?.archive
+        archiveConsequence: changePayload?.archive,
+        acceptedPreview: body.data.acceptedPreview ?? null
       }
     });
     request.log.info({ event: "catalog_archive_consequence", assetType: "content", assetKey: params.data.key, riskLevel: changePayload?.archive.riskLevel, reasonCodes: changePayload?.archive.consequences.map((item) => item.code) ?? [] }, "Catalog archive consequence evaluated");

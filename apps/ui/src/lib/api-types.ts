@@ -15,6 +15,227 @@ export type SystemHealthResponse = {
   timestamp: string;
 };
 
+export type PipesPrismStatusResponse = {
+  configured: boolean;
+  sourceMode: "pipes_cli" | "meiro_mcp";
+  activeSource: "Pipes CLI" | "Meiro MCP";
+  mixedSourceReadsAllowed: false;
+  baseUrl: string | null;
+  tokenConfigured: boolean;
+  env: {
+    baseUrl: string;
+    token: string;
+    tokenFile?: string;
+    timeoutMs: string;
+    cliCommand: string;
+    sourceMode: string;
+    mpcliUrl?: string;
+    mpcliToken?: string;
+    mpcliTokenFile?: string;
+  };
+  cli: {
+    command: string;
+    installed: boolean;
+    version: string | null;
+    error: string | null;
+    durationMs: number;
+  };
+  notes: string[];
+};
+
+export type PipesPrismCheckResponse = {
+  ok: boolean;
+  baseUrl: string | null;
+  selectedPath?: string;
+  attempts: Array<{
+    path: string;
+    ok: boolean;
+    status?: number;
+    reachable: boolean;
+    payloadShape?: string[] | string;
+    error?: string;
+  }>;
+  cli: PipesPrismStatusResponse["cli"];
+};
+
+export type PipesPrismImportCandidatesResponse = {
+  ok: boolean;
+  baseUrl: string | null;
+  cli: PipesPrismStatusResponse["cli"];
+  sections: Array<{
+    key: string;
+    label: string;
+    path: string;
+    mapsTo: string;
+    ok: boolean;
+    count: number;
+    durationMs: number;
+    error?: string;
+    items: Array<{
+      id: string;
+      name: string;
+      key: string | null;
+      status: string | null;
+      type: string | null;
+      updatedAt: string | null;
+    }>;
+  }>;
+  notes: string[];
+};
+
+export type PipesPrismImportSnapshotResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  sourceMode?: "pipes_cli" | "meiro_mcp";
+  snapshot: (PipesPrismImportCandidatesResponse & {
+    environment?: "DEV" | "STAGE" | "PROD";
+    sourceMode?: "pipes_cli" | "meiro_mcp";
+    syncedAt?: string;
+  }) | null;
+  updatedAt: string | null;
+};
+
+export type PipesPrismFieldRegistryResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  sourceMode?: "pipes_cli" | "meiro_mcp";
+  updatedAt: string | null;
+  syncedAt: string | null;
+  attributes: Array<{
+    field: string;
+    label: string;
+    dataType: "number" | "string" | "boolean" | "array";
+    description: string;
+    source: "prism_snapshot";
+    updatedAt: string | null;
+  }>;
+  audiences: Array<{
+    id: string;
+    name: string;
+    source: "prism_snapshot";
+    updatedAt: string | null;
+  }>;
+  counts: {
+    attributes: number;
+    audiences: number;
+  };
+};
+
+export type PipesPrismMappingRecommendationsResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  sourceMode?: "pipes_cli" | "meiro_mcp";
+  updatedAt: string | null;
+  syncedAt: string | null;
+  campaignMappings: Array<{
+    sourceId: string;
+    sourceName: string;
+    sourceType: "prism_campaign";
+    targetType: "activation_campaign";
+    recommendedKey: string;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+    measurementTags: {
+      source_system: "meiro_prism";
+      native_meiro_campaign_id: string;
+      activation_campaign_id: string;
+      channel: string;
+    };
+  }>;
+  assetMappings: Array<{
+    sourceId: string;
+    sourceName: string;
+    sourceType: "prism_asset";
+    targetType: "content_asset";
+    recommendedKey: string;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+    measurementTags: {
+      source_system: "meiro_prism";
+      native_meiro_asset_id: string;
+      creative_asset_id: string;
+    };
+  }>;
+  catalogMappings: Array<{
+    sourceId: string;
+    sourceName: string;
+    sourceType: "prism_catalog";
+    targetType: "offer_catalog";
+    recommendedKey: string;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+    measurementTags: {
+      source_system: "meiro_prism";
+      native_meiro_catalog_id: string;
+      offer_catalog_id: string;
+    };
+  }>;
+  decisionInputs: Array<{
+    sourceId: string;
+    sourceName: string;
+    sourceType: "prism_attribute" | "prism_audience";
+    targetType: "decision_profile_field" | "decision_audience";
+    recommendedKey: string;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+    dataType?: "number" | "string" | "boolean" | "array";
+  }>;
+  measurementJoins: Array<{
+    key: string;
+    source: string;
+    description: string;
+  }>;
+  counts: {
+    campaigns: number;
+    assets: number;
+    catalogs: number;
+    decisionInputs: number;
+    measurementJoins: number;
+  };
+};
+
+export type PipesPrismImportPreviewResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  sourceMode?: "pipes_cli" | "meiro_mcp";
+  updatedAt: string | null;
+  syncedAt: string | null;
+  operations: Array<{
+    sourceId: string;
+    sourceName: string;
+    targetType: "in_app_campaign" | "content_block" | "asset_bundle";
+    targetKey: string;
+    action: "create_draft" | "link_existing";
+    existing: {
+      id: string;
+      key: string;
+      name: string;
+      status: string;
+      version: number | null;
+      updatedAt: string | null;
+    } | null;
+    writable: false;
+    reason: string;
+    draft: Record<string, unknown>;
+  }>;
+  decisionInputOperations: Array<{
+    sourceId: string;
+    sourceName: string;
+    targetType: "decision_profile_field" | "decision_audience";
+    targetKey: string;
+    action: "available_for_authoring";
+    writable: false;
+    reason: string;
+    dataType: "number" | "string" | "boolean" | "array" | null;
+  }>;
+  counts: {
+    total: number;
+    createDraft: number;
+    linkExisting: number;
+    campaigns: number;
+    assets: number;
+    catalogs: number;
+    decisionInputs: number;
+  };
+  warnings: string[];
+};
+
 export type RealtimeCacheStatsResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   redisEnabled: boolean;
@@ -66,9 +287,20 @@ export type InAppV2DecideResponse = {
   templateId: string;
   ttl_seconds: number;
   tracking: {
+    schema_version?: string;
+    source_system?: string;
     campaign_id: string;
     message_id: string;
     variant_id: string;
+    activation_campaign_id?: string;
+    decision_key?: string;
+    decision_stack_key?: string;
+    placement_key?: string;
+    template_key?: string;
+    content_block_id?: string;
+    offer_id?: string;
+    bundle_id?: string;
+    channel?: string;
     experiment_id?: string;
     experiment_version?: number;
     is_holdout?: boolean;
@@ -107,6 +339,90 @@ export type InAppV2DecideResponse = {
     };
     fallbackReason?: string;
   };
+};
+
+export type ActivationMeasurementSummary = {
+  status?: "ok" | "unavailable" | string;
+  source?: string;
+  reason?: string;
+  object: {
+    type: string;
+    id: string;
+  };
+  period?: {
+    date_from?: string | null;
+    date_to?: string | null;
+    conversion_key?: string | null;
+  };
+  summary?: {
+    matched_touchpoints: number;
+    matched_journeys: number;
+    matched_profiles: number;
+    conversions: number;
+    revenue: number;
+    conversion_rate: number | null;
+    activation_metadata_coverage: number;
+    variants: string[];
+    experiments: string[];
+    placements: string[];
+  };
+  evidence?: {
+    attribution?: {
+      available: boolean;
+      method?: string;
+      basis?: string;
+      limitations?: string[];
+    };
+    mmm?: {
+      available: boolean;
+      reason?: string;
+    };
+    incrementality?: {
+      available: boolean;
+      reason?: string;
+    };
+    data_quality?: {
+      status: string;
+      activation_metadata_coverage?: number;
+      warnings?: string[];
+    };
+  };
+  recommended_actions?: Array<{
+    id: string;
+    label: string;
+    reason?: string;
+  }>;
+};
+
+export type ActivationMeasurementEvidence = {
+  status?: "ok" | "unavailable" | string;
+  source?: string;
+  reason?: string;
+  object: {
+    type: string;
+    id: string;
+  };
+  period?: {
+    date_from?: string | null;
+    date_to?: string | null;
+    conversion_key?: string | null;
+  };
+  total_matches?: number;
+  limit?: number;
+  items?: Array<{
+    journey_id: string;
+    profile_id: string;
+    touchpoint_index: number;
+    touchpoint_ts: string | null;
+    conversion_ts: string | null;
+    converted: boolean;
+    revenue: number;
+    conversion_id: string;
+    channel: string;
+    campaign: string;
+    campaign_id: string;
+    activation: Record<string, string | number | boolean>;
+  }>;
 };
 
 export type InAppV2EventsMonitorResponse = {
@@ -359,6 +675,109 @@ export type MeResponse = {
 };
 
 export type DevLoginProfile = "viewer" | "builder" | "publisher" | "operator" | "admin";
+
+export type ActivationEntityType =
+  | "decision"
+  | "stack"
+  | "offer"
+  | "content"
+  | "bundle"
+  | "experiment"
+  | "campaign"
+  | "template"
+  | "placement"
+  | "app";
+
+export type ActivationGraphNode = {
+  id: string;
+  type: ActivationEntityType;
+  key: string;
+  label: string;
+  status: string | null;
+  version: number | null;
+  environment: "DEV" | "STAGE" | "PROD" | string;
+  updatedAt: string | null;
+  lastServedAt: string | null;
+  active: boolean;
+  missing?: boolean;
+};
+
+export type ActivationGraphEdge = {
+  from: string;
+  to: string;
+  relation: "uses" | "contains" | "targets" | "renders_with" | "runs_experiment" | "serves" | "belongs_to";
+  label: string;
+  source: string;
+};
+
+export type ActivationGraphResponse = {
+  environment: "DEV" | "STAGE" | "PROD" | string;
+  root: { type: ActivationEntityType; key: string };
+  rootNode: ActivationGraphNode;
+  nodes: ActivationGraphNode[];
+  edges: ActivationGraphEdge[];
+  dependencies: ActivationGraphNode[];
+  dependents: ActivationGraphNode[];
+  impact: {
+    dependencyCount: number;
+    dependentCount: number;
+    activeDependentCount: number;
+    lastServedAt: string | null;
+    riskLevel: "low" | "medium" | "high" | "blocking";
+    summary: string;
+  };
+  explanations: string[];
+};
+
+export type ActivationActionPreviewResponse = {
+  environment: "DEV" | "STAGE" | "PROD" | string;
+  action: "archive" | "activate" | "promote" | "release";
+  entity: { type: ActivationEntityType; key: string };
+  title: string;
+  summary: string;
+  affectedEntities: ActivationGraphNode[];
+  blockers: string[];
+  risks: string[];
+  requiredPermissions: string[];
+  rollback: string | null;
+  explanations: string[];
+  canProceed: boolean;
+};
+
+export type ActivationTimelineEvent = {
+  id: string;
+  ts: string;
+  kind: "audit" | "release" | "runtime" | "catalog" | "review";
+  action: string;
+  title: string;
+  detail: string;
+  actor: string | null;
+  entityType: string;
+  entityKey: string;
+  entityVersion: number | null;
+  environment: "DEV" | "STAGE" | "PROD" | string;
+  source: string;
+  metadata?: {
+    releaseId?: string;
+    logId?: string;
+    requestId?: string;
+    correlationId?: string;
+    [key: string]: unknown;
+  };
+};
+
+export type ActivationTimelineResponse = {
+  environment: "DEV" | "STAGE" | "PROD" | string;
+  entity: { type: ActivationEntityType; key: string };
+  items: ActivationTimelineEvent[];
+  summary: {
+    total: number;
+    auditCount: number;
+    releaseCount: number;
+    runtimeCount: number;
+    lastEventAt: string | null;
+  };
+};
 
 export type ReleasePlanItem = {
   type: "decision" | "stack" | "offer" | "content" | "bundle" | "experiment" | "campaign" | "policy" | "template" | "placement" | "app";

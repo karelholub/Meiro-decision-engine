@@ -15,12 +15,17 @@ import { PageHeader, PagePanel } from "../../../components/ui/page";
 import { HasDraftBadge, StatusBadge } from "../../../components/ui/status-badges";
 import { apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
+import { ActivationActionConfirm } from "../../../components/activation/ActivationActionConfirm";
+import { ActivationImpactPanel } from "../../../components/activation/ActivationImpactPanel";
+import { ActivationMeasurementPanel } from "../../../components/activation/ActivationMeasurementPanel";
+import { ActivationTimelinePanel } from "../../../components/activation/ActivationTimelinePanel";
 
 export default function StackDetailsClient({ stackId }: { stackId: string }) {
   const { hasPermission } = usePermissions();
   const [details, setDetails] = useState<DecisionStackDetailsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"activate" | "archive" | null>(null);
 
   const load = async () => {
     try {
@@ -52,10 +57,11 @@ export default function StackDetailsClient({ stackId }: { stackId: string }) {
     }
   };
 
-  const activate = async () => {
+  const activate = async (acceptedPreview?: unknown) => {
     if (!details) return;
     try {
-      await apiClient.stacks.activate(details.stackId);
+      await apiClient.stacks.activate(details.stackId, acceptedPreview);
+      setConfirmAction(null);
       setMessage("Activated.");
       await load();
     } catch (activateError) {
@@ -63,10 +69,11 @@ export default function StackDetailsClient({ stackId }: { stackId: string }) {
     }
   };
 
-  const archive = async () => {
+  const archive = async (acceptedPreview?: unknown) => {
     if (!details) return;
     try {
-      await apiClient.stacks.archive(details.stackId);
+      await apiClient.stacks.archive(details.stackId, acceptedPreview);
+      setConfirmAction(null);
       setMessage("Archived.");
       await load();
     } catch (archiveError) {
@@ -155,15 +162,36 @@ export default function StackDetailsClient({ stackId }: { stackId: string }) {
         </div>
 
         <aside className="space-y-3">
+          <ActivationMeasurementPanel objectType="decision_stack" objectId={details.key} />
+          <ActivationImpactPanel type="stack" entityKey={details.key} />
+          <ActivationTimelinePanel type="stack" entityKey={details.key} />
           <PagePanel density="compact">
             <h3 className="font-semibold">Actions</h3>
             <div className="mt-2 grid gap-2">
               {canWrite ? <ButtonLink size="sm" variant="outline" href={`/stacks/${stackId}/edit`}>Edit draft</ButtonLink> : null}
-              {canActivate ? <Button size="sm" variant="outline" className="border-emerald-400 text-emerald-700" onClick={() => void activate()} disabled={!draft} title={!draft ? "No draft available." : undefined}>Activate</Button> : null}
-              {canArchive ? <Button size="sm" variant="outline" className="border-rose-300 text-rose-700" onClick={() => void archive()} disabled={!active && !draft} title={!active && !draft ? "No active or draft version." : undefined}>Archive</Button> : null}
+              {canActivate ? <Button size="sm" variant="outline" className="border-emerald-400 text-emerald-700" onClick={() => setConfirmAction("activate")} disabled={!draft} title={!draft ? "No draft available." : undefined}>Activate</Button> : null}
+              {canArchive ? <Button size="sm" variant="outline" className="border-rose-300 text-rose-700" onClick={() => setConfirmAction("archive")} disabled={!active && !draft} title={!active && !draft ? "No active or draft version." : undefined}>Archive</Button> : null}
               {canPromote ? <ButtonLink size="sm" variant="outline" href={`/releases?type=stack&key=${encodeURIComponent(details.key)}`}>Promote</ButtonLink> : null}
               <Button size="sm" variant="outline" onClick={() => void load()}>Refresh</Button>
             </div>
+            {confirmAction ? (
+              <div className="mt-3">
+                <ActivationActionConfirm
+                  type="stack"
+                  entityKey={details.key}
+                  action={confirmAction}
+                  open={Boolean(confirmAction)}
+                  onCancel={() => setConfirmAction(null)}
+                  onConfirm={(preview) => {
+                    if (confirmAction === "activate") {
+                      void activate(preview);
+                    } else {
+                      void archive(preview);
+                    }
+                  }}
+                />
+              </div>
+            ) : null}
           </PagePanel>
         </aside>
       </section>

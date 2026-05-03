@@ -522,6 +522,22 @@ export function DecisionWizard({
     }));
   };
 
+  const addAudienceAny = (audienceId: string) => {
+    const current = audiencesAnyInput
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const audiencesAny = [...new Set([...current, audienceId])];
+    setAudiencesAnyInput(audiencesAny.join(", "));
+    setDraft((draftCurrent) => ({
+      ...draftCurrent,
+      eligibility: {
+        ...draftCurrent.eligibility,
+        audiencesAny
+      }
+    }));
+  };
+
   const timeoutPreset = useMemo(() => {
     const timeout = draft.performance?.timeoutMs ?? 120;
     if (timeout <= 120) {
@@ -675,6 +691,7 @@ export function DecisionWizard({
             <p className="text-xs text-stone-600">
               Field registry: {authoringFields.sourceLabel}
               {authoringFields.mappedFieldCount > 0 ? ` (${authoringFields.mappedFieldCount} mapped fields)` : ""}
+              {authoringFields.prismAudienceCount > 0 ? `; ${authoringFields.prismAudienceCount} ${authoringFields.audienceSourceLabel} synced` : ""}
             </p>
             {emptyEligibility && hasMessagingAction ? (
               <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
@@ -697,6 +714,32 @@ export function DecisionWizard({
                 placeholder="buyers, newsletter"
               />
             </label>
+            {authoringFields.prismAudiences.length > 0 ? (
+              <div className="space-y-1">
+                <p className="text-xs text-stone-600">{authoringFields.audienceSourceLabel}</p>
+                <div className="flex max-h-24 flex-wrap gap-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2">
+                  {authoringFields.prismAudiences.slice(0, 18).map((audience) => {
+                    const selected = (draft.eligibility.audiencesAny ?? []).includes(audience.id);
+                    return (
+                      <button
+                        key={audience.id}
+                        type="button"
+                        disabled={readOnly || selected}
+                        onClick={() => addAudienceAny(audience.id)}
+                        className={`rounded border px-2 py-1 text-left text-xs ${
+                          selected
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : "border-stone-200 bg-white text-stone-700 hover:border-sky-300 hover:text-sky-800"
+                        } disabled:cursor-default`}
+                        title={audience.id}
+                      >
+                        {audience.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
 
             <ConditionBuilder
               title="Profile conditions"

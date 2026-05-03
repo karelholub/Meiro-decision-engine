@@ -8,6 +8,10 @@ import { usePermissions } from "../../../lib/permissions";
 import { Button } from "../../../components/ui/button";
 import { InlineError, LoadingState } from "../../../components/ui/app-state";
 import { PageHeader } from "../../../components/ui/page";
+import { ActivationActionConfirm } from "../../../components/activation/ActivationActionConfirm";
+import { ActivationImpactPanel } from "../../../components/activation/ActivationImpactPanel";
+import { ActivationMeasurementPanel } from "../../../components/activation/ActivationMeasurementPanel";
+import { ActivationTimelinePanel } from "../../../components/activation/ActivationTimelinePanel";
 import { ActivationAssetProfilePanel } from "../../../components/catalog/ActivationAssetProfilePanel";
 import { AssetVariantsEditor, CatalogActionBar, OfferEditor, makeVariantEditorRows, serializeVariantRows, type AssetVariantEditorRow } from "../../../components/catalog";
 import {
@@ -101,7 +105,6 @@ export default function CatalogOffersPage() {
   const [statusFilter, setStatusFilter] = useState<"ALL" | CatalogOffer["status"]>("ALL");
 
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
-  const [archiveConfirmKey, setArchiveConfirmKey] = useState("");
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -340,15 +343,14 @@ export default function CatalogOffersPage() {
     }
   };
 
-  const archive = async () => {
+  const archive = async (acceptedPreview?: unknown) => {
     if (!editor.key.trim()) {
       return;
     }
     try {
-      const response = await apiClient.catalog.offers.archive(editor.key.trim());
+      const response = await apiClient.catalog.offers.archive(editor.key.trim(), acceptedPreview);
       setMessage(response.archiveSafety?.warning ? `Archived ${editor.key.trim()}. ${response.archiveSafety.warning}` : `Archived ${editor.key.trim()}`);
       setArchiveConfirmOpen(false);
-      setArchiveConfirmKey("");
       await load();
     } catch (archiveError) {
       setError(archiveError instanceof Error ? archiveError.message : "Archive failed");
@@ -453,7 +455,16 @@ export default function CatalogOffersPage() {
       {message ? <p className="text-sm text-green-700">{message}</p> : null}
       {loading ? <LoadingState title="Loading offers" /> : null}
 
-      {!createMode && editor.key.trim() ? <ActivationAssetProfilePanel entityType="offer" assetKey={editor.key.trim()} /> : null}
+      {!createMode && editor.key.trim() ? (
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <ActivationAssetProfilePanel entityType="offer" assetKey={editor.key.trim()} />
+          <div className="space-y-3">
+            <ActivationMeasurementPanel objectType="offer" objectId={editor.key.trim()} />
+            <ActivationImpactPanel type="offer" entityKey={editor.key.trim()} />
+            <ActivationTimelinePanel type="offer" entityKey={editor.key.trim()} />
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
         <aside className="panel space-y-3 p-3">
@@ -630,28 +641,15 @@ export default function CatalogOffersPage() {
             Archive key
           </Button>
         ) : (
-          <div className="space-y-2">
-            <p className="text-sm">Type <span className="font-mono">{editor.key.trim()}</span> to confirm.</p>
-            <input
-              value={archiveConfirmKey}
-              onChange={(event) => setArchiveConfirmKey(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            />
-            <div className="flex gap-2">
-              <Button variant="danger" onClick={() => void archive()} disabled={archiveConfirmKey.trim() !== editor.key.trim() || !editor.key.trim()}>
-                Confirm archive
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setArchiveConfirmOpen(false);
-                  setArchiveConfirmKey("");
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
+          <ActivationActionConfirm
+            type="offer"
+            entityKey={editor.key.trim()}
+            action="archive"
+            open={archiveConfirmOpen}
+            loading={saving}
+            onConfirm={(preview) => void archive(preview)}
+            onCancel={() => setArchiveConfirmOpen(false)}
+          />
         )}
       </section>
 

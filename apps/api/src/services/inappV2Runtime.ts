@@ -41,9 +41,20 @@ export interface InAppDecideResponse {
   templateId: string;
   ttl_seconds: number;
   tracking: {
+    schema_version?: string;
+    source_system?: string;
     campaign_id: string;
     message_id: string;
     variant_id: string;
+    activation_campaign_id?: string;
+    decision_key?: string;
+    decision_stack_key?: string;
+    placement_key?: string;
+    template_key?: string;
+    content_block_id?: string;
+    offer_id?: string;
+    bundle_id?: string;
+    channel?: string;
     experiment_id?: string;
     experiment_version?: number;
     is_holdout?: boolean;
@@ -355,6 +366,17 @@ const normalizeInAppResponse = (raw: unknown, fallbackPlacement: string): InAppD
       campaign_id: typeof raw.tracking.campaign_id === "string" ? raw.tracking.campaign_id : "",
       message_id: typeof raw.tracking.message_id === "string" ? raw.tracking.message_id : "",
       variant_id: typeof raw.tracking.variant_id === "string" ? raw.tracking.variant_id : "",
+      ...(typeof raw.tracking.schema_version === "string" ? { schema_version: raw.tracking.schema_version } : {}),
+      ...(typeof raw.tracking.source_system === "string" ? { source_system: raw.tracking.source_system } : {}),
+      ...(typeof raw.tracking.activation_campaign_id === "string" ? { activation_campaign_id: raw.tracking.activation_campaign_id } : {}),
+      ...(typeof raw.tracking.decision_key === "string" ? { decision_key: raw.tracking.decision_key } : {}),
+      ...(typeof raw.tracking.decision_stack_key === "string" ? { decision_stack_key: raw.tracking.decision_stack_key } : {}),
+      ...(typeof raw.tracking.placement_key === "string" ? { placement_key: raw.tracking.placement_key } : {}),
+      ...(typeof raw.tracking.template_key === "string" ? { template_key: raw.tracking.template_key } : {}),
+      ...(typeof raw.tracking.content_block_id === "string" ? { content_block_id: raw.tracking.content_block_id } : {}),
+      ...(typeof raw.tracking.offer_id === "string" ? { offer_id: raw.tracking.offer_id } : {}),
+      ...(typeof raw.tracking.bundle_id === "string" ? { bundle_id: raw.tracking.bundle_id } : {}),
+      ...(typeof raw.tracking.channel === "string" ? { channel: raw.tracking.channel } : {}),
       ...(typeof raw.tracking.experiment_id === "string" ? { experiment_id: raw.tracking.experiment_id } : {}),
       ...(typeof raw.tracking.experiment_version === "number" ? { experiment_version: raw.tracking.experiment_version } : {}),
       ...(typeof raw.tracking.is_holdout === "boolean" ? { is_holdout: raw.tracking.is_holdout } : {}),
@@ -1144,9 +1166,19 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
       templateId: selectedTemplate.key,
       ttl_seconds: ttlSeconds,
       tracking: {
+        schema_version: "activation_measurement.v1",
+        source_system: "deciEngine",
         campaign_id: selectedCampaign.key,
         message_id: messageId,
         variant_id: selectedVariant.variantKey,
+        activation_campaign_id: selectedCampaign.key,
+        ...(input.body.decisionKey ? { decision_key: input.body.decisionKey } : {}),
+        ...(input.body.stackKey ? { decision_stack_key: input.body.stackKey } : {}),
+        placement_key: input.body.placement,
+        template_key: selectedTemplate.key,
+        ...(selectedContentKey ? { content_block_id: selectedContentKey } : {}),
+        ...(selectedOfferKey ? { offer_id: selectedOfferKey } : {}),
+        channel: typeof baseContext.channel === "string" ? baseContext.channel : "inapp",
         ...(selectedExperiment
           ? {
               experiment_id: selectedExperiment.key,

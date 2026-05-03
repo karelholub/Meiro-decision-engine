@@ -18,6 +18,8 @@ import { apiFetch, apiFetchText, toQuery } from "./api-core";
 import type {
   InAppV2DecideResponse,
   InAppV2EventsMonitorResponse,
+  ActivationMeasurementEvidence,
+  ActivationMeasurementSummary,
   ActivationAssetType,
   ActivationAssetChannel,
   CampaignCalendarRiskLevel,
@@ -217,17 +219,25 @@ export const inAppApiClient = {
           method: "POST",
           body: JSON.stringify(input)
         }),
-      activate: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/activate`, { method: "POST" }),
-      archive: (id: string) => apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/archive`, { method: "POST" }),
+      activate: (id: string, acceptedPreview?: unknown) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/activate`, {
+          method: "POST",
+          body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
+        }),
+      archive: (id: string, acceptedPreview?: unknown) =>
+        apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/archive`, {
+          method: "POST",
+          body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
+        }),
       submitForApproval: (id: string, comment?: string) =>
         apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/submit-for-approval`, {
           method: "POST",
           body: JSON.stringify(comment ? { comment } : {})
         }),
-      approveAndActivate: (id: string, comment?: string) =>
+      approveAndActivate: (id: string, comment?: string, acceptedPreview?: unknown) =>
         apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/approve-and-activate`, {
           method: "POST",
-          body: JSON.stringify(comment ? { comment } : {})
+          body: JSON.stringify({ ...(comment ? { comment } : {}), ...(acceptedPreview ? { acceptedPreview } : {}) })
         }),
       rejectToDraft: (id: string, comment?: string) =>
         apiFetch<{ item: InAppCampaign }>(`/v1/inapp/campaigns/${id}/reject-to-draft`, {
@@ -291,6 +301,23 @@ export const inAppApiClient = {
         apiFetchText(`/v1/inapp/reports/export.csv${toQuery(params)}`)
     }
   },
+  measurement: {
+    activationSummary: (params: {
+      object_type: "campaign" | "decision" | "decision_stack" | "asset" | "offer" | "content" | "bundle" | "experiment" | "variant" | "placement" | "template";
+      object_id: string;
+      date_from?: string;
+      date_to?: string;
+      conversion_key?: string;
+    }) => apiFetch<ActivationMeasurementSummary>(`/v1/measurement/activation-summary${toQuery(params)}`),
+    activationEvidence: (params: {
+      object_type: "campaign" | "decision" | "decision_stack" | "asset" | "offer" | "content" | "bundle" | "experiment" | "variant" | "placement" | "template";
+      object_id: string;
+      date_from?: string;
+      date_to?: string;
+      conversion_key?: string;
+      limit?: number;
+    }) => apiFetch<ActivationMeasurementEvidence>(`/v1/measurement/activation-evidence${toQuery(params)}`)
+  },
   experiments: {
     list: (
       params: {
@@ -333,18 +360,19 @@ export const inAppApiClient = {
       apiFetch<{ valid: boolean; errors: string[]; warnings: string[] }>(`/v1/experiments/${id}/validate`, {
         method: "POST"
       }),
-    activate: (key: string, version?: number) =>
+    activate: (key: string, version?: number, acceptedPreview?: unknown) =>
       apiFetch<{ item: ExperimentDetails }>(`/v1/experiments/${encodeURIComponent(key)}/activate`, {
         method: "POST",
-        body: JSON.stringify(version ? { version } : {})
+        body: JSON.stringify({ ...(version ? { version } : {}), ...(acceptedPreview ? { acceptedPreview } : {}) })
       }),
     pause: (key: string) =>
       apiFetch<{ item: ExperimentDetails | null }>(`/v1/experiments/${encodeURIComponent(key)}/pause`, {
         method: "POST"
       }),
-    archive: (key: string) =>
+    archive: (key: string, acceptedPreview?: unknown) =>
       apiFetch<{ item: ExperimentDetails | null }>(`/v1/experiments/${encodeURIComponent(key)}/archive`, {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
       }),
     preview: (key: string, input: Record<string, unknown>) =>
       apiFetch<{

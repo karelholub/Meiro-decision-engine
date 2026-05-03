@@ -54,7 +54,12 @@ const summaryParamsSchema = z.object({
 });
 
 const activateBodySchema = z.object({
-  version: z.number().int().positive().optional()
+  version: z.number().int().positive().optional(),
+  acceptedPreview: z.unknown().optional()
+});
+
+const actionPreviewBodySchema = z.object({
+  acceptedPreview: z.unknown().optional()
 });
 
 const previewBodySchema = z.object({
@@ -878,6 +883,19 @@ export const registerExperimentRoutes = async (deps: {
       }
     });
 
+    await (prisma as any).auditEvent?.create?.({
+      data: {
+        env: environment,
+        action: "experiment.activate",
+        entityType: "experiment",
+        entityKey: params.data.key,
+        entityVersion: active?.version ?? candidate.version,
+        metadata: {
+          acceptedPreview: body.data.acceptedPreview ?? null
+        }
+      }
+    });
+
     return {
       item: {
         ...serializeExperimentSummary(active),
@@ -893,8 +911,9 @@ export const registerExperimentRoutes = async (deps: {
     }
 
     const params = keyParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return buildResponseError(reply, 400, "Invalid key", params.error.flatten());
+    const body = actionPreviewBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid request");
     }
 
     await (prisma as any).experimentVersion.updateMany({
@@ -914,6 +933,19 @@ export const registerExperimentRoutes = async (deps: {
         key: params.data.key
       },
       orderBy: { version: "desc" }
+    });
+
+    await (prisma as any).auditEvent?.create?.({
+      data: {
+        env: environment,
+        action: "experiment.archive",
+        entityType: "experiment",
+        entityKey: params.data.key,
+        entityVersion: item?.version ?? null,
+        metadata: {
+          acceptedPreview: body.data.acceptedPreview ?? null
+        }
+      }
     });
 
     return {

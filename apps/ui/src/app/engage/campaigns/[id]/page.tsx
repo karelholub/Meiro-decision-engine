@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { InAppAuditLog, InAppCampaign, InAppCampaignActivationPreview, InAppCampaignVersion } from "@decisioning/shared";
+import { ActivationActionConfirm } from "../../../../components/activation/ActivationActionConfirm";
+import { ActivationImpactPanel } from "../../../../components/activation/ActivationImpactPanel";
+import { ActivationMeasurementPanel } from "../../../../components/activation/ActivationMeasurementPanel";
+import { ActivationTimelinePanel } from "../../../../components/activation/ActivationTimelinePanel";
 import { DependenciesPanel } from "../../../../components/registry/DependenciesPanel";
 import { ResolvedRefValue } from "../../../../components/registry/ResolvedRefValue";
 import { EndsSoonBadge, StatusBadge } from "../../../../components/ui/status-badges";
@@ -30,6 +34,7 @@ export default function CampaignDetailsPage() {
   const [preview, setPreview] = useState<InAppCampaignActivationPreview | null>(null);
   const [versions, setVersions] = useState<InAppCampaignVersion[]>([]);
   const [auditLogs, setAuditLogs] = useState<InAppAuditLog[]>([]);
+  const [confirmAction, setConfirmAction] = useState<"activate" | "archive" | null>(null);
 
   const load = async () => {
     if (!id) {
@@ -37,8 +42,8 @@ export default function CampaignDetailsPage() {
     }
     setLoading(true);
     try {
-      const [campaignResponse, previewResponse, versionsResponse, auditResponse] = await Promise.all([
-        apiClient.inapp.campaigns.get(id),
+      const campaignResponse = await apiClient.inapp.campaigns.get(id);
+      const [previewResponse, versionsResponse, auditResponse] = await Promise.all([
         apiClient.inapp.campaigns.activationPreview(id),
         apiClient.inapp.campaigns.versions(id),
         apiClient.inapp.campaigns.audit(id, 25)
@@ -59,14 +64,15 @@ export default function CampaignDetailsPage() {
     void load();
   }, [id]);
 
-  const runAction = async (action: "activate" | "archive" | "submit" | "reject") => {
+  const runAction = async (action: "activate" | "archive" | "submit" | "reject", acceptedPreview?: unknown) => {
     if (!campaign) return;
     try {
-      if (action === "activate") await apiClient.inapp.campaigns.approveAndActivate(campaign.id);
-      if (action === "archive") await apiClient.inapp.campaigns.archive(campaign.id);
+      if (action === "activate") await apiClient.inapp.campaigns.approveAndActivate(campaign.id, undefined, acceptedPreview);
+      if (action === "archive") await apiClient.inapp.campaigns.archive(campaign.id, acceptedPreview);
       if (action === "submit") await apiClient.inapp.campaigns.submitForApproval(campaign.id);
       if (action === "reject") await apiClient.inapp.campaigns.rejectToDraft(campaign.id);
       setMessage(`${action} completed.`);
+      setConfirmAction(null);
       await load();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : `${action} failed`);
@@ -185,15 +191,31 @@ export default function CampaignDetailsPage() {
         </div>
 
         <aside className="space-y-3">
+          <ActivationMeasurementPanel objectType="campaign" objectId={campaign?.key} />
+          <ActivationImpactPanel type="campaign" entityKey={campaign?.key} />
+          <ActivationTimelinePanel type="campaign" entityKey={campaign?.key} />
           <DependenciesPanel items={dependencyItems} />
           <article className="rounded-lg border border-stone-200 bg-white p-4">
             <h3 className="font-semibold">Actions</h3>
             <div className="mt-2 grid gap-2">
               {canWrite ? <button className="rounded border border-stone-300 px-3 py-2 text-sm text-left" onClick={() => void runAction("submit")} disabled={loading}>Submit for approval</button> : null}
-              {canActivate ? <button className="rounded border border-indigo-400 px-3 py-2 text-left text-sm text-indigo-700" onClick={() => void runAction("activate")} disabled={loading}>Approve & activate</button> : null}
+              {canActivate ? <button className="rounded border border-indigo-400 px-3 py-2 text-left text-sm text-indigo-700" onClick={() => setConfirmAction("activate")} disabled={loading}>Approve & activate</button> : null}
               {canWrite ? <button className="rounded border border-stone-300 px-3 py-2 text-left text-sm" onClick={() => void runAction("reject")} disabled={loading}>Reject to draft</button> : null}
-              {canArchive ? <button className="rounded border border-rose-300 px-3 py-2 text-left text-sm text-rose-700" onClick={() => void runAction("archive")} disabled={loading}>Archive</button> : null}
+              {canArchive ? <button className="rounded border border-rose-300 px-3 py-2 text-left text-sm text-rose-700" onClick={() => setConfirmAction("archive")} disabled={loading}>Archive</button> : null}
             </div>
+            {campaign?.key && confirmAction ? (
+              <div className="mt-3">
+                <ActivationActionConfirm
+                  type="campaign"
+                  entityKey={campaign.key}
+                  action={confirmAction}
+                  open={Boolean(confirmAction)}
+                  loading={loading}
+                  onConfirm={(preview) => void runAction(confirmAction, preview)}
+                  onCancel={() => setConfirmAction(null)}
+                />
+              </div>
+            ) : null}
           </article>
         </aside>
       </section>

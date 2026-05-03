@@ -30,6 +30,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/overview", label: "Overview" },
       { href: "/logs", label: "Logs" },
+      { href: "/observe/activation-map", label: "Activation Map" },
       { href: "/observe/assets", label: "Asset Health" },
       { href: "/execution/cache", label: "Realtime Cache" },
       { href: "/execution/orchestration", label: "Orchestration Policies" },
@@ -111,6 +112,7 @@ const isItemActive = (pathname: string, href: string) => pathname === href || (h
 const navPermissionByHref: Record<string, string> = {
   "/overview": "logs.read",
   "/logs": "logs.read",
+  "/observe/activation-map": "logs.read",
   "/observe/assets": "logs.read",
   "/execution/cache": "cache.read",
   "/execution/orchestration": "decision.read",

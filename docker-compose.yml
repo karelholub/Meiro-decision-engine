@@ -36,6 +36,15 @@ services:
       API_WRITE_KEY: local-write-key
       PROTECT_DECIDE: "false"
       API_RUNTIME_ROLE: all
+      MEIRO_PIPES_BASE_URL: ${MEIRO_PIPES_BASE_URL:-}
+      MEIRO_PIPES_TOKEN: ${MEIRO_PIPES_TOKEN:-}
+      MEIRO_PIPES_TOKEN_FILE: ${MEIRO_PIPES_TOKEN_FILE:-/run/secrets/deciengine/meiro_pipes_token}
+      MEIRO_PIPES_TIMEOUT_MS: ${MEIRO_PIPES_TIMEOUT_MS:-5000}
+      MEIRO_PIPES_CLI_COMMAND: ${MEIRO_PIPES_CLI_COMMAND:-mpcli}
+      MEIRO_PRISM_SOURCE_MODE: ${MEIRO_PRISM_SOURCE_MODE:-pipes_cli}
+      MPCLI_URL: ${MEIRO_PIPES_BASE_URL:-}
+      MPCLI_TOKEN: ${MEIRO_PIPES_TOKEN:-}
+      MPCLI_TOKEN_FILE: ${MEIRO_PIPES_TOKEN_FILE:-/run/secrets/deciengine/meiro_pipes_token}
       MEIRO_MODE: mock
       MEIRO_MCP_ENABLED: ${MEIRO_MCP_ENABLED:-false}
       MEIRO_MCP_COMMAND: ${MEIRO_MCP_COMMAND:-uvx}
@@ -43,6 +52,8 @@ services:
       MEIRO_DOMAIN: ${MEIRO_DOMAIN:-https://cdp.store.demo.meiro.io}
       MEIRO_USERNAME: ${MEIRO_USERNAME:-}
       MEIRO_PASSWORD: ${MEIRO_PASSWORD:-}
+      MEASUREMENT_API_BASE_URL: ${MEASUREMENT_API_BASE_URL:-http://host.docker.internal:8000}
+      MEASUREMENT_API_TIMEOUT_MS: ${MEASUREMENT_API_TIMEOUT_MS:-1500}
       REDIS_URL: redis://redis:6379
       REALTIME_CACHE_TTL_SECONDS: 60
       PROFILE_CACHE_TTL_SECONDS: 30
@@ -88,6 +99,8 @@ services:
         condition: service_healthy
     ports:
       - "3001:3001"
+    volumes:
+      - ./.secrets:/run/secrets/deciengine:ro
 
   ui:
     build:

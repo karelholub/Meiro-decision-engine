@@ -13,9 +13,20 @@ export interface InAppEventStreamPayload {
     appKey: string;
     placement: string;
     tracking: {
+      schema_version?: string;
+      source_system?: string;
       campaign_id: string;
       message_id: string;
       variant_id: string;
+      activation_campaign_id?: string;
+      decision_key?: string;
+      decision_stack_key?: string;
+      placement_key?: string;
+      template_key?: string;
+      content_block_id?: string;
+      offer_id?: string;
+      bundle_id?: string;
+      channel?: string;
       experiment_id?: string;
       experiment_version?: number;
       is_holdout?: boolean;
@@ -49,6 +60,17 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
   const campaignId = input.fields.campaign_id;
   const messageId = input.fields.message_id;
   const variantId = input.fields.variant_id;
+  const schemaVersion = input.fields.schema_version;
+  const sourceSystem = input.fields.source_system;
+  const activationCampaignId = input.fields.activation_campaign_id;
+  const decisionKey = input.fields.decision_key;
+  const decisionStackKey = input.fields.decision_stack_key;
+  const placementKey = input.fields.placement_key;
+  const templateKey = input.fields.template_key;
+  const contentBlockId = input.fields.content_block_id;
+  const offerId = input.fields.offer_id;
+  const bundleId = input.fields.bundle_id;
+  const channel = input.fields.channel;
   const experimentId = input.fields.experiment_id;
   const experimentVersionRaw = input.fields.experiment_version;
   const isHoldoutRaw = input.fields.is_holdout;
@@ -105,6 +127,17 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
         campaign_id: campaignId,
         message_id: messageId,
         variant_id: variantId,
+        ...(schemaVersion ? { schema_version: schemaVersion } : {}),
+        ...(sourceSystem ? { source_system: sourceSystem } : {}),
+        ...(activationCampaignId ? { activation_campaign_id: activationCampaignId } : {}),
+        ...(decisionKey ? { decision_key: decisionKey } : {}),
+        ...(decisionStackKey ? { decision_stack_key: decisionStackKey } : {}),
+        ...(placementKey ? { placement_key: placementKey } : {}),
+        ...(templateKey ? { template_key: templateKey } : {}),
+        ...(contentBlockId ? { content_block_id: contentBlockId } : {}),
+        ...(offerId ? { offer_id: offerId } : {}),
+        ...(bundleId ? { bundle_id: bundleId } : {}),
+        ...(channel ? { channel } : {}),
         ...(experimentId ? { experiment_id: experimentId } : {}),
         ...(experimentVersionRaw && Number.isFinite(Number(experimentVersionRaw))
           ? { experiment_version: Number.parseInt(experimentVersionRaw, 10) }
@@ -128,6 +161,41 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
 
 const processedMarkerKey = (streamMessageId: string): string => `inapp:events:processed:${streamMessageId}`;
 
+const buildActivationMeasurementContext = (entry: StreamEnvelope): Record<string, unknown> | null => {
+  const tracking = entry.payload.body.tracking;
+  const measurement = {
+    schema_version: tracking.schema_version,
+    source_system: tracking.source_system,
+    activation_campaign_id: tracking.activation_campaign_id,
+    campaign_id: tracking.campaign_id,
+    decision_key: tracking.decision_key,
+    decision_stack_key: tracking.decision_stack_key,
+    message_id: tracking.message_id,
+    variant_key: tracking.variant_id,
+    placement_key: tracking.placement_key,
+    template_key: tracking.template_key,
+    content_block_id: tracking.content_block_id,
+    offer_id: tracking.offer_id,
+    bundle_id: tracking.bundle_id,
+    channel: tracking.channel,
+    experiment_key: tracking.experiment_id,
+    experiment_version: tracking.experiment_version,
+    is_holdout: tracking.is_holdout,
+    allocation_id: tracking.allocation_id
+  };
+  const compact = Object.fromEntries(Object.entries(measurement).filter(([, value]) => value !== undefined && value !== ""));
+  return Object.keys(compact).length > 0 ? compact : null;
+};
+
+const buildContextJson = (entry: StreamEnvelope): Prisma.InputJsonValue => {
+  const base = isRecord(entry.payload.body.context) ? { ...entry.payload.body.context } : {};
+  const activationMeasurement = buildActivationMeasurementContext(entry);
+  if (activationMeasurement) {
+    base.activationMeasurement = activationMeasurement;
+  }
+  return Object.keys(base).length > 0 ? (base as Prisma.InputJsonValue) : {};
+};
+
 const toDbRow = (entry: StreamEnvelope): Prisma.InAppEventCreateManyInput => {
   const timestamp = entry.payload.body.ts ? new Date(entry.payload.body.ts) : new Date();
   const lookupValue = entry.payload.body.lookup?.value;
@@ -150,7 +218,7 @@ const toDbRow = (entry: StreamEnvelope): Prisma.InAppEventCreateManyInput => {
     profileId: entry.payload.body.profileId ?? null,
     lookupAttribute: entry.payload.body.lookup?.attribute ?? null,
     lookupValueHash: lookupHash,
-    contextJson: entry.payload.body.context ? (entry.payload.body.context as Prisma.InputJsonValue) : Prisma.JsonNull
+    contextJson: buildContextJson(entry)
   };
 };
 
@@ -179,7 +247,7 @@ const toExperimentExposureRow = (entry: StreamEnvelope): Record<string, unknown>
     eventType: entry.payload.body.eventType,
     messageId: entry.payload.body.tracking.message_id,
     campaignId: entry.payload.body.tracking.campaign_id,
-    context: entry.payload.body.context ? (entry.payload.body.context as Prisma.InputJsonValue) : Prisma.JsonNull
+    context: buildContextJson(entry)
   };
 };
 

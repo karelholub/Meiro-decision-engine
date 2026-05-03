@@ -17,6 +17,10 @@ import type {
   MeResponse,
   DevLoginProfile,
   ReleaseRecord,
+  ActivationEntityType,
+  ActivationActionPreviewResponse,
+  ActivationGraphResponse,
+  ActivationTimelineResponse,
   PipesCallbackConfigResponse,
   OrchestrationPolicyJson,
   OrchestrationPolicy
@@ -462,6 +466,22 @@ export const operationsApiClient = {
         method: "PUT",
         body: JSON.stringify({ assignments })
       })
+  },
+  activationGraph: {
+    get: (params: { type: ActivationEntityType; key: string; environment?: "DEV" | "STAGE" | "PROD" }) =>
+      apiFetch<ActivationGraphResponse>(`/v1/activation-graph${toQuery(params)}`)
+  },
+  activationActionPreview: {
+    get: (params: {
+      type: ActivationEntityType;
+      key: string;
+      action: "archive" | "activate" | "promote" | "release";
+      environment?: "DEV" | "STAGE" | "PROD";
+    }) => apiFetch<ActivationActionPreviewResponse>(`/v1/activation-action-preview${toQuery(params)}`)
+  },
+  activationTimeline: {
+    get: (params: { type: ActivationEntityType; key: string; environment?: "DEV" | "STAGE" | "PROD"; limit?: number }) =>
+      apiFetch<ActivationTimelineResponse>(`/v1/activation-timeline${toQuery(params)}`)
   },
   releases: {
     plan: (input: {

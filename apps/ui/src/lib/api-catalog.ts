@@ -66,10 +66,10 @@ export const catalogApiClient = {
           method: "POST",
           body: JSON.stringify(version ? { version } : {})
         }),
-      archive: (key: string) =>
+      archive: (key: string, acceptedPreview?: unknown) =>
         apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null }; archiveConsequence?: CatalogArchiveConsequence }>(`/v1/catalog/offers/${key}/archive`, {
           method: "POST",
-          body: JSON.stringify({})
+          body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
         }),
       validate: (input: Record<string, unknown>) =>
         apiFetch<{ valid: boolean; errors: string[]; warnings: string[] }>(`/v1/catalog/offers/validate`, {
@@ -123,10 +123,10 @@ export const catalogApiClient = {
           method: "POST",
           body: JSON.stringify(version ? { version } : {})
         }),
-      archive: (key: string) =>
+      archive: (key: string, acceptedPreview?: unknown) =>
         apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null }; archiveConsequence?: CatalogArchiveConsequence }>(`/v1/catalog/content/${key}/archive`, {
           method: "POST",
-          body: JSON.stringify({})
+          body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
         }),
       validate: (input: Record<string, unknown>) =>
         apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; requiredFields: string[]; localeKeys: string[] }>(
@@ -195,10 +195,10 @@ export const catalogApiClient = {
           method: "POST",
           body: JSON.stringify(version ? { version } : {})
         }),
-      archive: (key: string) =>
+      archive: (key: string, acceptedPreview?: unknown) =>
         apiFetch<{ archivedKey: string; archiveSafety?: { safeToArchive: boolean; activeReferenceCount: number; warning: string | null }; archiveConsequence?: CatalogArchiveConsequence }>(`/v1/catalog/bundles/${key}/archive`, {
           method: "POST",
-          body: JSON.stringify({})
+          body: JSON.stringify(acceptedPreview ? { acceptedPreview } : {})
         }),
       preview: (key: string, input: Record<string, unknown>) =>
         apiFetch<Record<string, unknown>>(`/v1/catalog/bundles/${key}/preview`, {
