@@ -331,6 +331,13 @@ export type InAppV2DecideResponse = {
     message_id: string;
     variant_id: string;
     activation_campaign_id?: string;
+    native_meiro_campaign_id?: string;
+    creative_asset_id?: string;
+    native_meiro_asset_id?: string;
+    offer_catalog_id?: string;
+    native_meiro_catalog_id?: string;
+    prism_source_id?: string;
+    imported_from?: string;
     decision_key?: string;
     decision_stack_key?: string;
     placement_key?: string;

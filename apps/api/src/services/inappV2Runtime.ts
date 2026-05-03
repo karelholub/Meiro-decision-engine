@@ -47,6 +47,13 @@ export interface InAppDecideResponse {
     message_id: string;
     variant_id: string;
     activation_campaign_id?: string;
+    native_meiro_campaign_id?: string;
+    creative_asset_id?: string;
+    native_meiro_asset_id?: string;
+    offer_catalog_id?: string;
+    native_meiro_catalog_id?: string;
+    prism_source_id?: string;
+    imported_from?: string;
     decision_key?: string;
     decision_stack_key?: string;
     placement_key?: string;
@@ -153,6 +160,29 @@ const isObject = (value: unknown): value is Record<string, unknown> => {
 };
 
 const hashSha256 = (value: string): string => sha256(value);
+
+const firstString = (record: Record<string, unknown>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+  return undefined;
+};
+
+const sourceMetadataFromTokenBindings = (value: unknown) => {
+  const record = isObject(value) ? value : {};
+  const metadata = {
+    native_meiro_campaign_id: firstString(record, ["native_meiro_campaign_id", "nativeMeiroCampaignId"]),
+    creative_asset_id: firstString(record, ["creative_asset_id", "creativeAssetId"]),
+    native_meiro_asset_id: firstString(record, ["native_meiro_asset_id", "nativeMeiroAssetId"]),
+    offer_catalog_id: firstString(record, ["offer_catalog_id", "offerCatalogId"]),
+    native_meiro_catalog_id: firstString(record, ["native_meiro_catalog_id", "nativeMeiroCatalogId"]),
+    prism_source_id: firstString(record, ["prism_source_id", "prismSourceId"]),
+    imported_from: firstString(record, ["imported_from", "importedFrom"])
+  };
+  return Object.values(metadata).some(Boolean) ? metadata : {};
+};
 
 const getValueByPath = (source: unknown, path: string): unknown => {
   return path.split(".").reduce<unknown>((current, segment) => {
@@ -1109,6 +1139,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
           : runtimeConfig.cacheTtlSeconds;
     const messageWindow = Math.floor(contextNow.getTime() / (Math.max(1, ttlSeconds) * 1000));
     const messageId = `msg_${selectedCampaign.key}_${selectedVariant.variantKey}_${messageWindow}`;
+    const campaignSourceMetadata = sourceMetadataFromTokenBindings(selectedCampaign.tokenBindingsJson);
 
     const payload: Record<string, unknown> = isObject(renderedPayload) ? { ...(renderedPayload as Record<string, unknown>) } : { value: renderedPayload };
     if (resolvedOffer?.valid) {
@@ -1172,6 +1203,7 @@ export const createInAppV2RuntimeService = (deps: InAppV2RuntimeDeps) => {
         message_id: messageId,
         variant_id: selectedVariant.variantKey,
         activation_campaign_id: selectedCampaign.key,
+        ...campaignSourceMetadata,
         ...(input.body.decisionKey ? { decision_key: input.body.decisionKey } : {}),
         ...(input.body.stackKey ? { decision_stack_key: input.body.stackKey } : {}),
         placement_key: input.body.placement,

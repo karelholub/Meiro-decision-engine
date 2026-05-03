@@ -30,6 +30,13 @@ export interface InAppV2EventBody {
     message_id: string;
     variant_id: string;
     activation_campaign_id?: string;
+    native_meiro_campaign_id?: string;
+    creative_asset_id?: string;
+    native_meiro_asset_id?: string;
+    offer_catalog_id?: string;
+    native_meiro_catalog_id?: string;
+    prism_source_id?: string;
+    imported_from?: string;
     decision_key?: string;
     decision_stack_key?: string;
     placement_key?: string;
@@ -114,6 +121,13 @@ export const createInAppV2EventsService = (deps: InAppV2EventsDeps) => {
         message_id: input.body.tracking.message_id,
         variant_id: input.body.tracking.variant_id,
         activation_campaign_id: input.body.tracking.activation_campaign_id ?? "",
+        native_meiro_campaign_id: input.body.tracking.native_meiro_campaign_id ?? "",
+        creative_asset_id: input.body.tracking.creative_asset_id ?? "",
+        native_meiro_asset_id: input.body.tracking.native_meiro_asset_id ?? "",
+        offer_catalog_id: input.body.tracking.offer_catalog_id ?? "",
+        native_meiro_catalog_id: input.body.tracking.native_meiro_catalog_id ?? "",
+        prism_source_id: input.body.tracking.prism_source_id ?? "",
+        imported_from: input.body.tracking.imported_from ?? "",
         decision_key: input.body.tracking.decision_key ?? "",
         decision_stack_key: input.body.tracking.decision_stack_key ?? "",
         placement_key: input.body.tracking.placement_key ?? "",
