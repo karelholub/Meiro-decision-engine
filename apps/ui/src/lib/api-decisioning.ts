@@ -26,6 +26,7 @@ import type {
   PipesPrismCheckResponse,
   PipesPrismFieldRegistryResponse,
   PipesPrismImportCandidatesResponse,
+  PipesPrismImportDraftsResponse,
   PipesPrismImportPreviewResponse,
   PipesPrismImportSnapshotResponse,
   PipesPrismMappingRecommendationsResponse,
@@ -300,6 +301,19 @@ export const decisioningApiClient = {
     prismFieldRegistry: () => apiFetch<PipesPrismFieldRegistryResponse>(`/v1/settings/pipes-prism/field-registry`),
     prismMappingRecommendations: () => apiFetch<PipesPrismMappingRecommendationsResponse>(`/v1/settings/pipes-prism/mapping-recommendations`),
     prismImportPreview: () => apiFetch<PipesPrismImportPreviewResponse>(`/v1/settings/pipes-prism/import-preview`),
+    prismImportDrafts: (input: {
+      selectedTargetKeys: string[];
+      defaults?: {
+        appKey?: string;
+        placementKey?: string;
+        templateKey?: string;
+        locale?: string;
+      };
+    }) =>
+      apiFetch<PipesPrismImportDraftsResponse>(`/v1/settings/pipes-prism/import-drafts`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
     getDecisionRequirements: (key: string) =>
       apiFetch<PipesRequirementsResponse>(`/v1/requirements/decision/${encodeURIComponent(key)}`),
     getStackRequirements: (key: string) =>

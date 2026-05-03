@@ -7,6 +7,7 @@ import {
   type PipesInlineEvaluateResponse,
   type PipesPrismCheckResponse,
   type PipesPrismImportCandidatesResponse,
+  type PipesPrismImportDraftsResponse,
   type PipesPrismImportPreviewResponse,
   type PipesPrismImportSnapshotResponse,
   type PipesPrismMappingRecommendationsResponse,
@@ -87,12 +88,20 @@ export default function PipesIntegrationPage() {
   const [prismSnapshot, setPrismSnapshot] = useState<PipesPrismImportSnapshotResponse | null>(null);
   const [prismMappings, setPrismMappings] = useState<PipesPrismMappingRecommendationsResponse | null>(null);
   const [prismImportPreview, setPrismImportPreview] = useState<PipesPrismImportPreviewResponse | null>(null);
+  const [prismImportDraftsResult, setPrismImportDraftsResult] = useState<PipesPrismImportDraftsResponse | null>(null);
   const [prismError, setPrismError] = useState<string | null>(null);
   const [prismChecking, setPrismChecking] = useState(false);
   const [prismLoadingCandidates, setPrismLoadingCandidates] = useState(false);
   const [prismSyncingSnapshot, setPrismSyncingSnapshot] = useState(false);
   const [prismLoadingMappings, setPrismLoadingMappings] = useState(false);
   const [prismLoadingImportPreview, setPrismLoadingImportPreview] = useState(false);
+  const [prismImportingDrafts, setPrismImportingDrafts] = useState(false);
+  const [prismImportDefaults, setPrismImportDefaults] = useState({
+    appKey: "meiro_store",
+    placementKey: "home_top",
+    templateKey: "banner_v1",
+    locale: "en"
+  });
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -151,6 +160,10 @@ export default function PipesIntegrationPage() {
   const evaluateEndpoint = useMemo(() => `${API_BASE_URL}/v1/evaluate`, []);
   const requirementsEndpoint = useMemo(() => `${API_BASE_URL}/v1/requirements/${requirementsMode}/:key`, [requirementsMode]);
   const pipesCliSourceActive = prismStatus?.sourceMode !== "meiro_mcp";
+  const prismCreateDraftKeys = useMemo(
+    () => prismImportPreview?.operations.filter((operation) => operation.action === "create_draft").map((operation) => operation.targetKey) ?? [],
+    [prismImportPreview]
+  );
 
   const runPrismCheck = async () => {
     if (prismStatus?.sourceMode !== "pipes_cli") {
@@ -245,6 +258,37 @@ export default function PipesIntegrationPage() {
       setPrismError(error instanceof Error ? error.message : "Failed to load Prism import preview");
     } finally {
       setPrismLoadingImportPreview(false);
+    }
+  };
+
+  const importPrismDrafts = async () => {
+    if (!pipesCliSourceActive) {
+      setPrismError("Pipes CLI draft import is disabled because MEIRO_PRISM_SOURCE_MODE is set to meiro_mcp.");
+      return;
+    }
+    if (!prismCreateDraftKeys.length) {
+      setPrismError("No create-draft operations are available in the current preview.");
+      return;
+    }
+    const confirmed = window.confirm(`Create ${prismCreateDraftKeys.length} local DRAFT records from the current Prism preview? Existing records will not be updated.`);
+    if (!confirmed) {
+      return;
+    }
+    setPrismImportingDrafts(true);
+    setPrismError(null);
+    setPrismImportDraftsResult(null);
+    try {
+      const response = await apiClient.pipes.prismImportDrafts({
+        selectedTargetKeys: prismCreateDraftKeys,
+        defaults: prismImportDefaults
+      });
+      setPrismImportDraftsResult(response);
+      const preview = await apiClient.pipes.prismImportPreview();
+      setPrismImportPreview(preview);
+    } catch (error) {
+      setPrismError(error instanceof Error ? error.message : "Failed to import Prism draft records");
+    } finally {
+      setPrismImportingDrafts(false);
     }
   };
 
@@ -605,6 +649,16 @@ export default function PipesIntegrationPage() {
                     {prismLoadingImportPreview ? "Loading..." : "Refresh preview"}
                   </Button>
                   {prismImportPreview ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void importPrismDrafts()}
+                      disabled={prismImportingDrafts || !pipesCliSourceActive || prismCreateDraftKeys.length === 0}
+                    >
+                      {prismImportingDrafts ? "Creating..." : `Create ${prismCreateDraftKeys.length} drafts`}
+                    </Button>
+                  ) : null}
+                  {prismImportPreview ? (
                     <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(prismImportPreview, null, 2))}>
                       Copy preview JSON
                     </Button>
@@ -613,6 +667,40 @@ export default function PipesIntegrationPage() {
               </div>
               {prismImportPreview ? (
                 <div className="mt-3 space-y-3">
+                  <div className="grid gap-2 md:grid-cols-4">
+                    <label className="flex flex-col gap-1">
+                      App
+                      <input
+                        value={prismImportDefaults.appKey}
+                        onChange={(event) => setPrismImportDefaults((current) => ({ ...current, appKey: event.target.value }))}
+                        className="rounded border border-stone-300 px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      Placement
+                      <input
+                        value={prismImportDefaults.placementKey}
+                        onChange={(event) => setPrismImportDefaults((current) => ({ ...current, placementKey: event.target.value }))}
+                        className="rounded border border-stone-300 px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      Template
+                      <input
+                        value={prismImportDefaults.templateKey}
+                        onChange={(event) => setPrismImportDefaults((current) => ({ ...current, templateKey: event.target.value }))}
+                        className="rounded border border-stone-300 px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      Locale
+                      <input
+                        value={prismImportDefaults.locale}
+                        onChange={(event) => setPrismImportDefaults((current) => ({ ...current, locale: event.target.value }))}
+                        className="rounded border border-stone-300 px-2 py-1 font-mono text-[11px]"
+                      />
+                    </label>
+                  </div>
                   <div className="grid gap-2 md:grid-cols-5">
                     <div className="rounded border border-stone-200 px-2 py-1.5">
                       <p className="text-[11px] text-stone-500">Operations</p>
@@ -672,6 +760,11 @@ export default function PipesIntegrationPage() {
                         <li key={warning}>{warning}</li>
                       ))}
                     </ul>
+                  ) : null}
+                  {prismImportDraftsResult ? (
+                    <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-800">
+                      Created {prismImportDraftsResult.counts.created} drafts, linked {prismImportDraftsResult.counts.linkedExisting} existing records, skipped {prismImportDraftsResult.counts.skipped}.
+                    </div>
                   ) : null}
                 </div>
               ) : (

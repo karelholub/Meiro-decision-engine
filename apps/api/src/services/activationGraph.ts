@@ -38,6 +38,18 @@ export interface ActivationGraphNode extends ActivationGraphEntityRef {
   lastServedAt: string | null;
   active: boolean;
   missing?: boolean;
+  sourceMetadata?: {
+    sourceSystem?: string;
+    nativeMeiroCampaignId?: string;
+    nativeMeiroAssetId?: string;
+    nativeMeiroCatalogId?: string;
+    activationCampaignId?: string;
+    creativeAssetId?: string;
+    offerCatalogId?: string;
+    channel?: string;
+    prismSourceId?: string;
+    importedFrom?: string;
+  };
 }
 
 export interface ActivationGraphEdge {
@@ -122,6 +134,44 @@ const iso = (value: unknown): string | null => {
   return null;
 };
 
+const firstString = (record: Record<string, unknown>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+  return undefined;
+};
+
+const sourceMetadataFromRow = (row: any | null | undefined): ActivationGraphNode["sourceMetadata"] | undefined => {
+  if (!row) return undefined;
+  const candidates = [row.tokenBindingsJson, row.metadataJson, row.tokenBindings].filter(isObject);
+  const merged = Object.assign({}, ...candidates) as Record<string, unknown>;
+  const sourceSystem = firstString(merged, ["source_system", "sourceSystem"]);
+  const nativeMeiroCampaignId = firstString(merged, ["native_meiro_campaign_id", "nativeMeiroCampaignId"]);
+  const nativeMeiroAssetId = firstString(merged, ["native_meiro_asset_id", "nativeMeiroAssetId"]);
+  const nativeMeiroCatalogId = firstString(merged, ["native_meiro_catalog_id", "nativeMeiroCatalogId"]);
+  const activationCampaignId = firstString(merged, ["activation_campaign_id", "activationCampaignId"]);
+  const creativeAssetId = firstString(merged, ["creative_asset_id", "creativeAssetId"]);
+  const offerCatalogId = firstString(merged, ["offer_catalog_id", "offerCatalogId"]);
+  const channel = firstString(merged, ["channel"]);
+  const prismSourceId = firstString(merged, ["prism_source_id", "prismSourceId"]);
+  const importedFrom = firstString(merged, ["imported_from", "importedFrom"]);
+  const metadata = {
+    sourceSystem,
+    nativeMeiroCampaignId,
+    nativeMeiroAssetId,
+    nativeMeiroCatalogId,
+    activationCampaignId,
+    creativeAssetId,
+    offerCatalogId,
+    channel,
+    prismSourceId,
+    importedFrom
+  };
+  return Object.values(metadata).some(Boolean) ? metadata : undefined;
+};
+
 export const collectActivationRefs = (value: unknown): ActivationGraphEntityRef[] => {
   const refs = new Map<string, ActivationGraphEntityRef>();
 
@@ -166,7 +216,8 @@ const makeNode = (environment: string, ref: ActivationGraphEntityRef, row: any |
   updatedAt: iso(row?.updatedAt ?? row?.createdAt),
   lastServedAt: null,
   active: row?.status === "ACTIVE" || ((ref.type === "template" || ref.type === "placement" || ref.type === "app") && Boolean(row)),
-  ...(row ? {} : { missing: true })
+  ...(row ? {} : { missing: true }),
+  ...(sourceMetadataFromRow(row) ? { sourceMetadata: sourceMetadataFromRow(row) } : {})
 });
 
 const latestByKey = <T extends { key: string }>(rows: T[]) => {

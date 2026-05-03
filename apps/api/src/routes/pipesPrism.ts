@@ -1,9 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { Prisma, type Environment, type PrismaClient } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 
 const PRISM_IMPORT_SNAPSHOT_KEY = "pipes-prism.importSnapshot";
 type PrismSourceMode = "pipes_cli" | "meiro_mcp";
+
+const importApplyBodySchema = z.object({
+  selectedTargetKeys: z.array(z.string().trim().min(1)).min(1),
+  defaults: z
+    .object({
+      appKey: z.string().trim().min(1).default("meiro_store"),
+      placementKey: z.string().trim().min(1).default("home_top"),
+      templateKey: z.string().trim().min(1).default("banner_v1"),
+      locale: z.string().trim().min(1).default("en")
+    })
+    .default({})
+});
 
 const normalizeBaseUrl = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
@@ -199,6 +212,10 @@ const slugify = (value: string) =>
     .slice(0, 64);
 
 const fallbackShortId = (value: string) => value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toLowerCase() || "item";
+
+const toInputJson = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
+
+const draftMetadata = (operation: { draft: Record<string, unknown> }) => asRecord(operation.draft.metadata) ?? {};
 
 const recommendedKey = (prefix: string, item: Record<string, unknown>, channel?: string | null) => {
   const id = firstString(item, ["id", "key", "name"]) ?? "unknown";
@@ -477,6 +494,170 @@ const buildImportPreview = async (input: { prisma: PrismaClient; environment: En
       "Preview only: no local records are created or changed.",
       "Write import should stay opt-in because local campaigns and assets need channel, placement, template, and payload choices."
     ]
+  };
+};
+
+const applyImportDrafts = async (input: {
+  prisma: PrismaClient;
+  environment: Environment;
+  snapshot: unknown;
+  selectedTargetKeys: string[];
+  defaults: { appKey: string; placementKey: string; templateKey: string; locale: string };
+}) => {
+  const selected = new Set(input.selectedTargetKeys);
+  const preview = await buildImportPreview({ prisma: input.prisma, environment: input.environment, snapshot: input.snapshot });
+  const selectedOperations = preview.operations.filter((operation) => selected.has(operation.targetKey));
+  const unknownKeys = input.selectedTargetKeys.filter((key) => !preview.operations.some((operation) => operation.targetKey === key));
+  const skipped = [
+    ...unknownKeys.map((key) => ({
+      targetKey: key,
+      action: "skipped",
+      reason: "Target key is not present in the current Prism import preview."
+    }))
+  ];
+
+  const [app, placement, template] = await Promise.all([
+    (input.prisma as any).inAppApplication.findFirst({ where: { environment: input.environment, key: input.defaults.appKey }, select: { key: true } }),
+    (input.prisma as any).inAppPlacement.findFirst({ where: { environment: input.environment, key: input.defaults.placementKey }, select: { key: true } }),
+    (input.prisma as any).inAppTemplate.findFirst({ where: { environment: input.environment, key: input.defaults.templateKey }, select: { key: true, schemaJson: true } })
+  ]);
+
+  if (!app || !placement || !template) {
+    return {
+      ok: false,
+      created: [],
+      linkedExisting: [],
+      skipped,
+      errors: [
+        ...(!app ? [`Default appKey '${input.defaults.appKey}' does not exist in ${input.environment}.`] : []),
+        ...(!placement ? [`Default placementKey '${input.defaults.placementKey}' does not exist in ${input.environment}.`] : []),
+        ...(!template ? [`Default templateKey '${input.defaults.templateKey}' does not exist in ${input.environment}.`] : [])
+      ]
+    };
+  }
+
+  const created: Array<{ targetType: string; targetKey: string; id: string; version?: number | null }> = [];
+  const linkedExisting: Array<{ targetType: string; targetKey: string; id: string; version?: number | null }> = [];
+
+  for (const operation of selectedOperations) {
+    if (operation.existing) {
+      linkedExisting.push({
+        targetType: operation.targetType,
+        targetKey: operation.targetKey,
+        id: operation.existing.id,
+        version: operation.existing.version
+      });
+      continue;
+    }
+
+    if (operation.targetType === "in_app_campaign") {
+      const metadata = draftMetadata(operation);
+      const createdCampaign = await (input.prisma as any).inAppCampaign.create({
+        data: {
+          environment: input.environment,
+          key: operation.targetKey,
+          name: operation.sourceName,
+          description: `Imported draft mapping from Prism campaign ${operation.sourceId}.`,
+          status: "DRAFT",
+          appKey: input.defaults.appKey,
+          placementKey: input.defaults.placementKey,
+          templateKey: input.defaults.templateKey,
+          priority: 0,
+          ttlSeconds: 3600,
+          eligibilityAudiencesAny: toInputJson([]),
+          tokenBindingsJson: toInputJson({
+            ...metadata,
+            source_system: "meiro_prism",
+            prism_source_id: operation.sourceId,
+            prism_source_name: operation.sourceName,
+            imported_from: "pipes_prism_preview"
+          })
+        },
+        select: { id: true, key: true }
+      });
+      created.push({ targetType: operation.targetType, targetKey: createdCampaign.key, id: createdCampaign.id, version: null });
+      continue;
+    }
+
+    if (operation.targetType === "content_block") {
+      const metadata = draftMetadata(operation);
+      const latest = await input.prisma.contentBlock.findFirst({
+        where: { environment: input.environment, key: operation.targetKey },
+        orderBy: { version: "desc" },
+        select: { version: true }
+      });
+      const createdContent = await input.prisma.contentBlock.create({
+        data: {
+          environment: input.environment,
+          key: operation.targetKey,
+          name: operation.sourceName,
+          description: `Imported draft mapping from Prism asset ${operation.sourceId}.`,
+          status: "DRAFT",
+          version: (latest?.version ?? 0) + 1,
+          tags: toInputJson(["meiro_prism", "prism_asset"]),
+          templateId: input.defaults.templateKey,
+          schemaJson: template.schemaJson ? toInputJson(template.schemaJson) : Prisma.JsonNull,
+          localesJson: toInputJson({
+            [input.defaults.locale]: {
+              title: operation.sourceName,
+              subtitle: "Imported Prism asset draft",
+              cta: "Open",
+              image: "",
+              deeplink: ""
+            }
+          }),
+          tokenBindings: toInputJson({
+            ...metadata,
+            source_system: "meiro_prism",
+            prism_source_id: operation.sourceId,
+            imported_from: "pipes_prism_preview"
+          })
+        },
+        select: { id: true, key: true, version: true }
+      });
+      created.push({ targetType: operation.targetType, targetKey: createdContent.key, id: createdContent.id, version: createdContent.version });
+      continue;
+    }
+
+    if (operation.targetType === "asset_bundle") {
+      const metadata = draftMetadata(operation);
+      const latest = await (input.prisma as any).assetBundle.findFirst({
+        where: { environment: input.environment, key: operation.targetKey },
+        orderBy: { version: "desc" },
+        select: { version: true }
+      });
+      const createdBundle = await (input.prisma as any).assetBundle.create({
+        data: {
+          environment: input.environment,
+          key: operation.targetKey,
+          name: operation.sourceName,
+          description: `Imported draft mapping from Prism catalog ${operation.sourceId}.`,
+          status: "DRAFT",
+          version: (latest?.version ?? 0) + 1,
+          templateKey: input.defaults.templateKey,
+          placementKeys: toInputJson([input.defaults.placementKey]),
+          channels: toInputJson([]),
+          locales: toInputJson([input.defaults.locale]),
+          tags: toInputJson(["meiro_prism", "prism_catalog"]),
+          metadataJson: toInputJson({
+            ...metadata,
+            source_system: "meiro_prism",
+            prism_source_id: operation.sourceId,
+            imported_from: "pipes_prism_preview"
+          })
+        },
+        select: { id: true, key: true, version: true }
+      });
+      created.push({ targetType: operation.targetType, targetKey: createdBundle.key, id: createdBundle.id, version: createdBundle.version });
+    }
+  }
+
+  return {
+    ok: true,
+    created,
+    linkedExisting,
+    skipped,
+    errors: []
   };
 };
 
@@ -856,6 +1037,48 @@ export const registerPipesPrismRoutes = async (deps: {
       updatedAt: row?.updatedAt?.toISOString() ?? null,
       syncedAt: firstString(asRecord(snapshot) ?? {}, ["syncedAt"]),
       ...preview
+    };
+  });
+
+  deps.app.post("/v1/settings/pipes-prism/import-drafts", { preHandler: deps.requireWriteAuth }, async (request, reply) => {
+    if (!requirePipesCliSource(reply)) return;
+    const environment = deps.resolveEnvironment?.(request, reply) ?? "DEV";
+    if (!environment) return;
+    if (!deps.prisma) {
+      return deps.buildResponseError(reply, 409, "Prism draft import storage is unavailable.");
+    }
+    const body = importApplyBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return deps.buildResponseError(reply, 400, "Invalid Prism draft import request.", body.error.flatten());
+    }
+    const row = await deps.prisma.appSetting.findFirst({
+      where: { environment, key: PRISM_IMPORT_SNAPSHOT_KEY }
+    });
+    const snapshot = row?.valueJson ?? null;
+    const result = await applyImportDrafts({
+      prisma: deps.prisma,
+      environment,
+      snapshot,
+      selectedTargetKeys: body.data.selectedTargetKeys,
+      defaults: body.data.defaults
+    });
+    if (!result.ok) {
+      return deps.buildResponseError(reply, 409, "Prism draft import cannot run with the current defaults.", result);
+    }
+
+    return {
+      environment,
+      sourceMode: deps.sourceMode,
+      updatedAt: row?.updatedAt?.toISOString() ?? null,
+      syncedAt: firstString(asRecord(snapshot) ?? {}, ["syncedAt"]),
+      defaults: body.data.defaults,
+      ...result,
+      counts: {
+        created: result.created.length,
+        linkedExisting: result.linkedExisting.length,
+        skipped: result.skipped.length,
+        errors: result.errors.length
+      }
     };
   });
 };

@@ -86,6 +86,7 @@ export function ActivationMeasurementPanel({
   const dataQuality = measurement?.evidence?.data_quality;
   const warnings = dataQuality?.warnings ?? [];
   const evidenceItems = evidence?.items ?? [];
+  const sourceMetadata = measurement?.sourceMetadata ?? evidence?.sourceMetadata ?? null;
 
   return (
     <PagePanel density="compact" className="space-y-3">
@@ -103,6 +104,23 @@ export function ActivationMeasurementPanel({
         <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
           {measurement.reason ?? "Measurement evidence is unavailable."}
         </p>
+      ) : null}
+      {sourceMetadata ? (
+        <div className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-medium">{sourceMetadata.sourceSystem ?? "external_source"}</span>
+            {sourceMetadata.channel ? <Badge size="dense" variant="neutral">{sourceMetadata.channel}</Badge> : null}
+            {sourceMetadata.importedFrom ? <Badge size="dense" variant="neutral">{sourceMetadata.importedFrom}</Badge> : null}
+          </div>
+          <div className="mt-1 grid gap-1 font-mono text-[11px] text-sky-950">
+            {sourceMetadata.activationCampaignId ? <span>activation_campaign_id={sourceMetadata.activationCampaignId}</span> : null}
+            {sourceMetadata.nativeMeiroCampaignId ? <span>native_meiro_campaign_id={sourceMetadata.nativeMeiroCampaignId}</span> : null}
+            {sourceMetadata.creativeAssetId ? <span>creative_asset_id={sourceMetadata.creativeAssetId}</span> : null}
+            {sourceMetadata.nativeMeiroAssetId ? <span>native_meiro_asset_id={sourceMetadata.nativeMeiroAssetId}</span> : null}
+            {sourceMetadata.offerCatalogId ? <span>offer_catalog_id={sourceMetadata.offerCatalogId}</span> : null}
+            {sourceMetadata.nativeMeiroCatalogId ? <span>native_meiro_catalog_id={sourceMetadata.nativeMeiroCatalogId}</span> : null}
+          </div>
+        </div>
       ) : null}
 
       {summary ? (

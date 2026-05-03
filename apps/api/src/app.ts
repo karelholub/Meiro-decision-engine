@@ -3745,8 +3745,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
   await registerMeasurementRoutes({
     app,
+    prisma,
     measurementApiBaseUrl: config.measurementApiBaseUrl,
     measurementApiTimeoutMs: config.measurementApiTimeoutMs ?? 1500,
+    resolveEnvironment,
     requireReadAuth: requirePermission("engage.campaign.read"),
     buildResponseError
   });

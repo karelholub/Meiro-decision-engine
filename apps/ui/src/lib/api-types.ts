@@ -236,6 +236,44 @@ export type PipesPrismImportPreviewResponse = {
   warnings: string[];
 };
 
+export type PipesPrismImportDraftsResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  sourceMode?: "pipes_cli" | "meiro_mcp";
+  updatedAt: string | null;
+  syncedAt: string | null;
+  defaults: {
+    appKey: string;
+    placementKey: string;
+    templateKey: string;
+    locale: string;
+  };
+  ok: boolean;
+  created: Array<{
+    targetType: string;
+    targetKey: string;
+    id: string;
+    version?: number | null;
+  }>;
+  linkedExisting: Array<{
+    targetType: string;
+    targetKey: string;
+    id: string;
+    version?: number | null;
+  }>;
+  skipped: Array<{
+    targetKey: string;
+    action: "skipped";
+    reason: string;
+  }>;
+  errors: string[];
+  counts: {
+    created: number;
+    linkedExisting: number;
+    skipped: number;
+    errors: number;
+  };
+};
+
 export type RealtimeCacheStatsResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   redisEnabled: boolean;
@@ -349,6 +387,7 @@ export type ActivationMeasurementSummary = {
     type: string;
     id: string;
   };
+  sourceMetadata?: ActivationSourceMetadata | null;
   period?: {
     date_from?: string | null;
     date_to?: string | null;
@@ -402,6 +441,7 @@ export type ActivationMeasurementEvidence = {
     type: string;
     id: string;
   };
+  sourceMetadata?: ActivationSourceMetadata | null;
   period?: {
     date_from?: string | null;
     date_to?: string | null;
@@ -423,6 +463,19 @@ export type ActivationMeasurementEvidence = {
     campaign_id: string;
     activation: Record<string, string | number | boolean>;
   }>;
+};
+
+export type ActivationSourceMetadata = {
+  sourceSystem?: string;
+  nativeMeiroCampaignId?: string;
+  nativeMeiroAssetId?: string;
+  nativeMeiroCatalogId?: string;
+  activationCampaignId?: string;
+  creativeAssetId?: string;
+  offerCatalogId?: string;
+  channel?: string;
+  prismSourceId?: string;
+  importedFrom?: string;
 };
 
 export type InAppV2EventsMonitorResponse = {
@@ -700,6 +753,7 @@ export type ActivationGraphNode = {
   lastServedAt: string | null;
   active: boolean;
   missing?: boolean;
+  sourceMetadata?: ActivationSourceMetadata;
 };
 
 export type ActivationGraphEdge = {

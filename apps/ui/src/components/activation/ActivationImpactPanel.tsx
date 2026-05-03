@@ -69,6 +69,23 @@ export function ActivationImpactPanel({ type, entityKey }: { type: ActivationEnt
 
       {graph ? (
         <>
+          {graph.rootNode.sourceMetadata ? (
+            <div className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-medium">{graph.rootNode.sourceMetadata.sourceSystem ?? "external_source"}</span>
+                {graph.rootNode.sourceMetadata.channel ? <Badge size="dense" variant="neutral">{graph.rootNode.sourceMetadata.channel}</Badge> : null}
+                {graph.rootNode.sourceMetadata.importedFrom ? <Badge size="dense" variant="neutral">{graph.rootNode.sourceMetadata.importedFrom}</Badge> : null}
+              </div>
+              <div className="mt-1 grid gap-1 font-mono text-[11px] text-sky-950">
+                {graph.rootNode.sourceMetadata.activationCampaignId ? <span>activation_campaign_id={graph.rootNode.sourceMetadata.activationCampaignId}</span> : null}
+                {graph.rootNode.sourceMetadata.nativeMeiroCampaignId ? <span>native_meiro_campaign_id={graph.rootNode.sourceMetadata.nativeMeiroCampaignId}</span> : null}
+                {graph.rootNode.sourceMetadata.creativeAssetId ? <span>creative_asset_id={graph.rootNode.sourceMetadata.creativeAssetId}</span> : null}
+                {graph.rootNode.sourceMetadata.nativeMeiroAssetId ? <span>native_meiro_asset_id={graph.rootNode.sourceMetadata.nativeMeiroAssetId}</span> : null}
+                {graph.rootNode.sourceMetadata.offerCatalogId ? <span>offer_catalog_id={graph.rootNode.sourceMetadata.offerCatalogId}</span> : null}
+                {graph.rootNode.sourceMetadata.nativeMeiroCatalogId ? <span>native_meiro_catalog_id={graph.rootNode.sourceMetadata.nativeMeiroCatalogId}</span> : null}
+              </div>
+            </div>
+          ) : null}
           <div className="grid grid-cols-3 gap-2">
             <div className="rounded-md border border-stone-200 bg-white px-2 py-1.5">
               <p className="text-[11px] text-stone-500">Deps</p>
