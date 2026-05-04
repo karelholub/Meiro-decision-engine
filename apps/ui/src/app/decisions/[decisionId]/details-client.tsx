@@ -28,6 +28,7 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<"activate" | "archive" | null>(null);
+  const [triagingEvidenceId, setTriagingEvidenceId] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -56,6 +57,30 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
   const canArchive = hasPermission("decision.archive");
   const canPromote = hasPermission("promotion.create");
   const measurementFeedbackEvidence = evidence.filter((item) => item.evidenceType === "measurement_feedback");
+
+  const triageMeasurementFeedback = async (
+    item: DecisionAuthoringEvidenceItem,
+    action: "accept" | "ignore" | "convert_to_policy_task"
+  ) => {
+    setTriagingEvidenceId(`${item.id}:${action}`);
+    setError(null);
+    setMessage(null);
+    try {
+      await apiClient.decisions.triageMeasurementFeedback(decisionId, item.id, { action });
+      setMessage(
+        action === "accept"
+          ? "MMM feedback accepted."
+          : action === "ignore"
+            ? "MMM feedback ignored."
+            : "MMM feedback marked as a policy task candidate."
+      );
+      await load();
+    } catch (triageError) {
+      setError(triageError instanceof Error ? triageError.message : "Failed to triage MMM feedback");
+    } finally {
+      setTriagingEvidenceId(null);
+    }
+  };
 
   const copyText = async (value: string, label: string) => {
     try {
@@ -186,6 +211,35 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
                       <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-800">{item.status}</span>
                     </div>
                     <p className="mt-1 text-stone-500">{new Date(item.createdAt).toLocaleString()}</p>
+                    {canWrite && item.status === "pending" ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          className="border-emerald-300 text-emerald-700"
+                          disabled={Boolean(triagingEvidenceId)}
+                          onClick={() => void triageMeasurementFeedback(item, "accept")}
+                        >
+                          {triagingEvidenceId === `${item.id}:accept` ? "Accepting..." : "Accept"}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={Boolean(triagingEvidenceId)}
+                          onClick={() => void triageMeasurementFeedback(item, "ignore")}
+                        >
+                          {triagingEvidenceId === `${item.id}:ignore` ? "Ignoring..." : "Ignore"}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={Boolean(triagingEvidenceId)}
+                          onClick={() => void triageMeasurementFeedback(item, "convert_to_policy_task")}
+                        >
+                          {triagingEvidenceId === `${item.id}:convert_to_policy_task` ? "Marking..." : "Policy task"}
+                        </Button>
+                      </div>
+                    ) : null}
                   </article>
                 ))}
               </div>

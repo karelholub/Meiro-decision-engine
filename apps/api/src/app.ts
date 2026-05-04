@@ -311,6 +311,11 @@ const reviewDecisionApprovalBodySchema = z.object({
   note: z.string().max(2_000).optional()
 });
 
+const triageMeasurementFeedbackBodySchema = z.object({
+  action: z.enum(["accept", "ignore", "convert_to_policy_task"]),
+  note: z.string().max(2_000).optional()
+});
+
 const decisionScenarioStatusSchema = z.enum(["pending", "pass", "fail"]);
 
 const decisionScenarioSuiteBodySchema = z.object({
@@ -5624,6 +5629,103 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
             evidenceId: updated.id,
             note: reviewNote,
             reviewedAt
+          })
+        }
+      });
+    }
+
+    return {
+      decisionId: decision.id,
+      evidence: serializeDecisionAuthoringEvidence(updated)
+    };
+  });
+
+  app.post("/v1/decisions/:id/evidence/:evidenceId/measurement-feedback/triage", { preHandler: requireWriteAuth }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        evidenceId: z.string().uuid()
+      })
+      .safeParse(request.params);
+    const body = triageMeasurementFeedbackBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return buildResponseError(reply, 400, "Invalid measurement feedback triage request", body.success ? undefined : body.error.flatten());
+    }
+
+    const decision = await prisma.decision.findFirst({
+      where: { id: params.data.id, environment }
+    });
+    if (!decision) {
+      return buildResponseError(reply, 404, "Decision not found");
+    }
+
+    const evidenceModel = (prisma as any).decisionAuthoringEvidence;
+    if (!evidenceModel?.findFirst || !evidenceModel?.update) {
+      return buildResponseError(reply, 501, "Decision authoring evidence storage is not available");
+    }
+
+    const existing = await evidenceModel.findFirst({
+      where: {
+        id: params.data.evidenceId,
+        decisionId: decision.id,
+        environment
+      }
+    });
+    if (!existing) {
+      return buildResponseError(reply, 404, "Measurement feedback evidence not found");
+    }
+    if (existing.evidenceType !== "measurement_feedback") {
+      return buildResponseError(reply, 400, "Evidence record is not measurement feedback");
+    }
+
+    const auth = await resolveAuthContext(request, reply);
+    const triagedAt = now().toISOString();
+    const triageStatus =
+      body.data.action === "accept" ? "accepted" : body.data.action === "ignore" ? "ignored" : "converted_to_policy_task";
+    const triageNote = body.data.note?.trim() ?? "";
+    const existingPayload = isPlainObject(existing.payloadJson) ? existing.payloadJson : {};
+    const updated = await evidenceModel.update({
+      where: { id: existing.id },
+      data: {
+        status: triageStatus,
+        summary:
+          body.data.action === "convert_to_policy_task"
+            ? `Policy task candidate from MMM feedback: ${existing.summary || decision.key}`
+            : `${triageStatus === "accepted" ? "Accepted" : "Ignored"} MMM feedback: ${existing.summary || decision.key}`,
+        payloadJson: toInputJson({
+          ...existingPayload,
+          triage: {
+            status: triageStatus,
+            action: body.data.action,
+            note: triageNote,
+            triagedAt,
+            triagedByUserId: auth?.userId ?? null,
+            triagedByEmail: auth?.email ?? null
+          }
+        })
+      }
+    });
+
+    const auditModel = (prisma as any).auditEvent;
+    if (auditModel?.create) {
+      await auditModel.create({
+        data: {
+          env: environment,
+          actorUserId: auth?.userId ?? null,
+          actorEmail: auth?.email ?? null,
+          action: `decision.measurement_feedback.${triageStatus}`,
+          entityType: "decision",
+          entityKey: decision.key,
+          entityVersion: existing.version ?? null,
+          metadata: toInputJson({
+            evidenceId: updated.id,
+            note: triageNote,
+            triagedAt
           })
         }
       });

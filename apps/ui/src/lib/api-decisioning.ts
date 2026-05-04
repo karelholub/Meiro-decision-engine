@@ -171,6 +171,21 @@ export const decisioningApiClient = {
         method: "POST",
         body: JSON.stringify(input)
       }),
+    triageMeasurementFeedback: (
+      decisionId: string,
+      evidenceId: string,
+      input: {
+        action: "accept" | "ignore" | "convert_to_policy_task";
+        note?: string;
+      }
+    ) =>
+      apiFetch<{ decisionId: string; evidence: DecisionAuthoringEvidenceResponse["items"][number] }>(
+        `/v1/decisions/${decisionId}/evidence/${evidenceId}/measurement-feedback/triage`,
+        {
+          method: "POST",
+          body: JSON.stringify(input)
+        }
+      ),
     previewActivation: (decisionId: string) =>
       apiFetch<ActivationPreviewResponse>(`/v1/decisions/${decisionId}/preview-activation`, {
         method: "POST",
