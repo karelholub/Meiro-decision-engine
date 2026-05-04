@@ -240,6 +240,16 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
                         </Button>
                       </div>
                     ) : null}
+                    {item.status === "converted_to_policy_task" ? (
+                      <ButtonLink
+                        className="mt-2"
+                        size="xs"
+                        variant="outline"
+                        href={`/execution/orchestration?recommendation=measurement_feedback&decisionKey=${encodeURIComponent(details.key)}&evidenceId=${encodeURIComponent(item.id)}&summary=${encodeURIComponent(item.summary || "MMM feedback")}`}
+                      >
+                        Open policy draft
+                      </ButtonLink>
+                    ) : null}
                   </article>
                 ))}
               </div>

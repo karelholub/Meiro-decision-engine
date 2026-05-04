@@ -143,6 +143,25 @@ export const createSegmentPressureCapRule = (input: {
   };
 };
 
+export const createMeasurementFeedbackReviewRule = (input: {
+  decisionKey: string;
+  evidenceId?: string | null;
+}): OrchestrationPolicyRule => {
+  const suffix = Date.now();
+  const normalizedDecisionKey = input.decisionKey.trim() || "decision";
+  return {
+    id: `mmm_feedback_review_${suffix}`,
+    type: "frequency_cap",
+    scope: "global",
+    appliesTo: {
+      actionTypes: ["inapp_message", "message"],
+      tagsAny: [`decision:${normalizedDecisionKey}`]
+    },
+    limits: { perDay: 1 },
+    reasonCode: input.evidenceId ? `MMM_FEEDBACK_${input.evidenceId.slice(0, 8)}` : "MMM_FEEDBACK_REVIEW"
+  };
+};
+
 export const createRuleFromTemplate = (templateId: PolicyTemplateId): OrchestrationPolicyRule => {
   const suffix = Date.now();
   if (templateId === "placement_pressure") {

@@ -24,6 +24,7 @@ import {
   HUMAN_DURATION_OPTIONS,
   POLICY_TEMPLATES,
   activePolicyForDraft,
+  createMeasurementFeedbackReviewRule,
   createSegmentPressureCapRule,
   createRuleFromTemplate,
   policyHasMeaningfulChange,
@@ -263,6 +264,30 @@ export default function OrchestrationPoliciesPage() {
       }
       setTab("caps");
       setMessage("Segment pressure policy draft created from the calendar. Review limits, save, then activate when ready.");
+    }
+    if (recommendation === "measurement_feedback") {
+      const decisionKey = params.get("decisionKey")?.trim() || "decision";
+      const evidenceId = params.get("evidenceId")?.trim() || null;
+      const summary = params.get("summary")?.trim() || "MMM feedback evidence";
+      const slug = decisionKey
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 48);
+      const rule = createMeasurementFeedbackReviewRule({ decisionKey, evidenceId });
+      setSelectedId(null);
+      setDraftKey(`mmm_feedback_${slug || "decision"}`);
+      setDraftName(`MMM feedback policy - ${decisionKey}`);
+      setDraftDescription(
+        `Drafted from MMM feedback evidence${evidenceId ? ` ${evidenceId}` : ""}. Source recommendation: ${summary}`
+      );
+      setDraftAppKey("");
+      setDraftStatus("DRAFT");
+      setDraftPolicyJson({ ...DEFAULT_POLICY, rules: [rule] });
+      setFallbackPayloadText("{}");
+      setPreviewTagsText(`decision:${decisionKey}`);
+      setTab("caps");
+      setMessage("MMM feedback policy draft created. Review limits and candidate tags before saving.");
     }
     return onEnvironmentChange(setEnvironment);
   }, []);
