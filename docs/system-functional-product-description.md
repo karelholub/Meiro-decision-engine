@@ -630,6 +630,8 @@ Capabilities include:
 - Configure timeout and max attempts.
 - Include or exclude debug and profile summary fields.
 - Configure PII allow-listing.
+- Prefill callback settings from the configured Meiro Pipes environment without exposing token values.
+- Save bearer auth from the API container's configured Pipes token when the operator chooses the Pipes defaults.
 - View recent callback deliveries.
 - Route failed callback delivery through DLQ.
 

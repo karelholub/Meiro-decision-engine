@@ -403,6 +403,7 @@ export const operationsApiClient = {
       includeDebug?: boolean;
       includeProfileSummary?: boolean;
       allowPiiKeys?: string[];
+      useConfiguredPipesToken?: boolean;
     }) =>
       apiFetch<PipesCallbackConfigResponse>(`/v1/settings/pipes-callback`, {
         method: "PUT",

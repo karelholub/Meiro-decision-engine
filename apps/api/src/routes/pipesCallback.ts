@@ -28,7 +28,8 @@ const putBodySchema = z
     maxAttempts: z.number().int().positive().max(20).optional(),
     includeDebug: z.boolean().optional(),
     includeProfileSummary: z.boolean().optional(),
-    allowPiiKeys: z.array(z.string().min(1)).optional()
+    allowPiiKeys: z.array(z.string().min(1)).optional(),
+    useConfiguredPipesToken: z.boolean().optional()
   })
   .superRefine((value, ctx) => {
     if (!value.isEnabled) {
@@ -52,6 +53,53 @@ const putBodySchema = z
 const testBodySchema = z.object({
   appKey: z.string().min(1).optional()
 });
+
+type PrismSourceMode = "pipes_cli" | "meiro_mcp";
+
+const normalizeBaseUrl = (value: string | undefined): string | null => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, "");
+};
+
+const redactUrl = (value: string | null): string | null => {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return value.replace(/(token|key|secret)=([^&]+)/gi, "$1=redacted");
+  }
+};
+
+const buildPipesPrefill = (input: { baseUrl?: string; token?: string; sourceMode?: PrismSourceMode }) => {
+  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  const tokenConfigured = Boolean(input.token?.trim());
+  const warnings: string[] = [];
+  if (!baseUrl) warnings.push("MEIRO_PIPES_BASE_URL is not configured in the API container.");
+  if (!tokenConfigured) warnings.push("MEIRO_PIPES_TOKEN or MEIRO_PIPES_TOKEN_FILE is not configured; bearer callback auth cannot be prefilled.");
+  if (input.sourceMode === "meiro_mcp") {
+    warnings.push("MEIRO_PRISM_SOURCE_MODE is meiro_mcp; callback delivery can still be configured, but Pipes CLI reads are disabled.");
+  }
+
+  return {
+    available: Boolean(baseUrl),
+    sourceMode: input.sourceMode ?? "pipes_cli",
+    activeSource: input.sourceMode === "meiro_mcp" ? "Meiro MCP" : "Pipes CLI",
+    baseUrl: redactUrl(baseUrl),
+    tokenConfigured,
+    callbackUrl: baseUrl ? `${baseUrl}/webhooks/decision-result` : "",
+    authType: tokenConfigured ? "bearer" : "none",
+    useConfiguredPipesToken: tokenConfigured,
+    mode: "always",
+    timeoutMs: 1500,
+    maxAttempts: 8,
+    includeDebug: false,
+    includeProfileSummary: true,
+    allowPiiKeys: [] as string[],
+    warnings
+  };
+};
 
 const serializeDeliveryItem = (item: {
   id: string;
@@ -84,6 +132,9 @@ export interface RegisterPipesCallbackRoutesDeps {
   requireWriteAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
   resolveEnvironment: (request: FastifyRequest, reply: FastifyReply) => Environment | null;
   buildResponseError: (reply: FastifyReply, statusCode: number, error: string, details?: unknown) => FastifyReply;
+  pipesBaseUrl?: string;
+  pipesToken?: string;
+  prismSourceMode?: PrismSourceMode;
 }
 
 export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRoutesDeps) => {
@@ -137,7 +188,12 @@ export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRou
       environment,
       source: effective.source,
       config: serializeCallbackConfig(effective.config),
-      recentDeliveries: recentDeliveries.map(serializeDeliveryItem)
+      recentDeliveries: recentDeliveries.map(serializeDeliveryItem),
+      pipesPrefill: buildPipesPrefill({
+        baseUrl: deps.pipesBaseUrl,
+        token: deps.pipesToken,
+        sourceMode: deps.prismSourceMode
+      })
     };
   });
 
@@ -164,6 +220,17 @@ export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRou
       }
     });
 
+    const configuredPipesToken = deps.pipesToken?.trim();
+    if (body.useConfiguredPipesToken && (body.authType !== "bearer" || !configuredPipesToken)) {
+      return deps.buildResponseError(reply, 400, "Configured Pipes token can only be used with bearer auth when MEIRO_PIPES_TOKEN is available.");
+    }
+
+    const resolvedAuthSecret = body.useConfiguredPipesToken
+      ? configuredPipesToken
+      : body.authSecret !== undefined
+        ? body.authSecret
+        : existing?.authSecret ?? null;
+
     const sharedData = {
       environment,
       appKey,
@@ -185,13 +252,13 @@ export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRou
           },
           data: {
             ...sharedData,
-            authSecret: body.authSecret !== undefined ? body.authSecret : existing.authSecret
+            authSecret: resolvedAuthSecret
           }
         })
       : await deps.prisma.pipesCallbackConfig.create({
           data: {
             ...sharedData,
-            authSecret: body.authSecret ?? null
+            authSecret: resolvedAuthSecret
           }
         });
 
@@ -207,7 +274,12 @@ export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRou
       config: {
         ...serializeCallbackConfig(effective.config),
         authSecret: maskSecret(saved.authSecret)
-      }
+      },
+      pipesPrefill: buildPipesPrefill({
+        baseUrl: deps.pipesBaseUrl,
+        token: deps.pipesToken,
+        sourceMode: deps.prismSourceMode
+      })
     };
   });
 

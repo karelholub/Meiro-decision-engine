@@ -29,6 +29,7 @@ export default function PipesCallbackSettingsPage() {
   const [callbackUrl, setCallbackUrl] = useState("");
   const [authType, setAuthType] = useState<"bearer" | "shared_secret" | "none">("bearer");
   const [authSecret, setAuthSecret] = useState("");
+  const [useConfiguredPipesToken, setUseConfiguredPipesToken] = useState(false);
   const [mode, setMode] = useState<"disabled" | "async_only" | "always">("async_only");
   const [timeoutMs, setTimeoutMs] = useState("1500");
   const [maxAttempts, setMaxAttempts] = useState("8");
@@ -37,6 +38,7 @@ export default function PipesCallbackSettingsPage() {
   const [allowPiiKeysCsv, setAllowPiiKeysCsv] = useState("");
   const [source, setSource] = useState<PipesCallbackConfigResponse["source"]>("fallback_default");
   const [deliveries, setDeliveries] = useState<PipesCallbackConfigResponse["recentDeliveries"]>([]);
+  const [pipesPrefill, setPipesPrefill] = useState<PipesCallbackConfigResponse["pipesPrefill"] | null>(null);
   const [dlqPendingCount, setDlqPendingCount] = useState<number | null>(null);
 
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -67,6 +69,7 @@ export default function PipesCallbackSettingsPage() {
     setCallbackUrl(response.config.callbackUrl);
     setAuthType(response.config.authType);
     setAuthSecret("");
+    setUseConfiguredPipesToken(false);
     setMode(response.config.mode);
     setTimeoutMs(String(response.config.timeoutMs));
     setMaxAttempts(String(response.config.maxAttempts));
@@ -74,6 +77,7 @@ export default function PipesCallbackSettingsPage() {
     setIncludeProfileSummary(response.config.includeProfileSummary);
     setAllowPiiKeysCsv(response.config.allowPiiKeys.join(", "));
     setDeliveries(response.recentDeliveries);
+    setPipesPrefill(response.pipesPrefill ?? null);
   };
 
   const load = async () => {
@@ -118,7 +122,8 @@ export default function PipesCallbackSettingsPage() {
         maxAttempts: Number(maxAttempts),
         includeDebug,
         includeProfileSummary,
-        allowPiiKeys: parseCsvList(allowPiiKeysCsv)
+        allowPiiKeys: parseCsvList(allowPiiKeysCsv),
+        useConfiguredPipesToken
       });
       hydrate(response);
       setFeedback("Pipes callback settings saved.");
@@ -127,6 +132,25 @@ export default function PipesCallbackSettingsPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const applyPipesPrefill = () => {
+    if (!pipesPrefill?.available) {
+      setFeedback("Pipes prefill is unavailable because MEIRO_PIPES_BASE_URL is not configured in the API container.");
+      return;
+    }
+    setIsEnabled(true);
+    setCallbackUrl(pipesPrefill.callbackUrl);
+    setAuthType(pipesPrefill.authType);
+    setAuthSecret("");
+    setUseConfiguredPipesToken(pipesPrefill.useConfiguredPipesToken);
+    setMode(pipesPrefill.mode);
+    setTimeoutMs(String(pipesPrefill.timeoutMs));
+    setMaxAttempts(String(pipesPrefill.maxAttempts));
+    setIncludeDebug(pipesPrefill.includeDebug);
+    setIncludeProfileSummary(pipesPrefill.includeProfileSummary);
+    setAllowPiiKeysCsv(pipesPrefill.allowPiiKeys.join(", "));
+    setFeedback("Pipes callback prefill applied. Save to persist it for this environment/app key.");
   };
 
   const sendTestCallback = async () => {
@@ -202,6 +226,38 @@ export default function PipesCallbackSettingsPage() {
         </Link>
       </PagePanel>
 
+      <PagePanel density="compact" className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Meiro Pipes prefill</h3>
+            <p className="text-sm text-stone-600">
+              Uses the configured Pipes environment to prepare decision-result callbacks for profile updates.
+            </p>
+          </div>
+          <Button variant="outline" onClick={applyPipesPrefill} disabled={!pipesPrefill?.available || loading}>
+            Use Pipes defaults
+          </Button>
+        </div>
+        <StatusChipsRow
+          chips={[
+            { label: "Pipes base URL", status: pipesPrefill?.available ? "ok" : "warn", detail: pipesPrefill?.baseUrl ?? "-" },
+            { label: "Token configured", status: pipesPrefill?.tokenConfigured ? "ok" : "warn" },
+            { label: "Source mode", status: pipesPrefill?.sourceMode === "meiro_mcp" ? "warn" : "ok", detail: pipesPrefill?.activeSource ?? "-" }
+          ]}
+        />
+        {pipesPrefill?.callbackUrl ? <p className="break-all text-sm">Suggested callback URL: {pipesPrefill.callbackUrl}</p> : null}
+        {pipesPrefill?.tokenConfigured ? (
+          <p className="text-sm text-stone-600">Bearer auth can be saved from the API container secret without exposing the token in the UI.</p>
+        ) : null}
+        {pipesPrefill?.warnings.length ? (
+          <ul className="space-y-1 text-sm text-amber-800">
+            {pipesPrefill.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
+      </PagePanel>
+
       <section className="panel space-y-3 p-3">
         <label className="flex flex-col gap-1 text-sm">
           App key (optional override)
@@ -251,11 +307,15 @@ export default function PipesCallbackSettingsPage() {
             Auth secret (write-only)
             <input
               value={authSecret}
-              onChange={(event) => setAuthSecret(event.target.value)}
+              onChange={(event) => {
+                setAuthSecret(event.target.value);
+                setUseConfiguredPipesToken(false);
+              }}
               className="rounded-md border border-stone-300 px-2 py-1 disabled:bg-stone-100"
               placeholder="leave blank to keep existing"
               disabled={!isEnabled}
             />
+            {useConfiguredPipesToken ? <span className="text-xs text-stone-500">Will save the configured Pipes token from the API container.</span> : null}
           </label>
 
           <label className="flex flex-col gap-1 text-sm">

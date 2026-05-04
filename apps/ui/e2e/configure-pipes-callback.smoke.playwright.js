@@ -8,7 +8,7 @@ test("configure pipes callback enable and send test", async ({ page }) => {
   await page.getByRole("button", { name: "Save" }).click();
 
   await page.getByRole("button", { name: "Send Test Callback" }).click();
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Send", exact: true }).click();
 
   await expect(page.getByText("HTTP status:")).toBeVisible();
 });

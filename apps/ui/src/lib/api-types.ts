@@ -1341,6 +1341,23 @@ export type PipesCallbackConfigResponse = {
     allowPiiKeys: string[];
     updatedAt: string;
   };
+  pipesPrefill?: {
+    available: boolean;
+    sourceMode: "pipes_cli" | "meiro_mcp";
+    activeSource: "Pipes CLI" | "Meiro MCP";
+    baseUrl: string | null;
+    tokenConfigured: boolean;
+    callbackUrl: string;
+    authType: "bearer" | "shared_secret" | "none";
+    useConfiguredPipesToken: boolean;
+    mode: "disabled" | "async_only" | "always";
+    timeoutMs: number;
+    maxAttempts: number;
+    includeDebug: boolean;
+    includeProfileSummary: boolean;
+    allowPiiKeys: string[];
+    warnings: string[];
+  };
   recentDeliveries: Array<{
     id: string;
     status: DlqStatus;

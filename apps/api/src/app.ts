@@ -3827,7 +3827,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         dlq: dlqProvider,
         requireWriteAuth,
         resolveEnvironment,
-        buildResponseError
+        buildResponseError,
+        pipesBaseUrl: config.meiroPipesBaseUrl,
+        pipesToken: config.meiroPipesToken,
+        prismSourceMode: config.meiroPrismSourceMode ?? "pipes_cli"
       });
       await registerPipesPrismRoutes({
         app,
