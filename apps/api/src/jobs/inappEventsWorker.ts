@@ -19,6 +19,13 @@ export interface InAppEventStreamPayload {
       message_id: string;
       variant_id: string;
       activation_campaign_id?: string;
+      native_meiro_campaign_id?: string;
+      creative_asset_id?: string;
+      native_meiro_asset_id?: string;
+      offer_catalog_id?: string;
+      native_meiro_catalog_id?: string;
+      prism_source_id?: string;
+      imported_from?: string;
       decision_key?: string;
       decision_stack_key?: string;
       placement_key?: string;
@@ -63,6 +70,13 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
   const schemaVersion = input.fields.schema_version;
   const sourceSystem = input.fields.source_system;
   const activationCampaignId = input.fields.activation_campaign_id;
+  const nativeMeiroCampaignId = input.fields.native_meiro_campaign_id;
+  const creativeAssetId = input.fields.creative_asset_id;
+  const nativeMeiroAssetId = input.fields.native_meiro_asset_id;
+  const offerCatalogId = input.fields.offer_catalog_id;
+  const nativeMeiroCatalogId = input.fields.native_meiro_catalog_id;
+  const prismSourceId = input.fields.prism_source_id;
+  const importedFrom = input.fields.imported_from;
   const decisionKey = input.fields.decision_key;
   const decisionStackKey = input.fields.decision_stack_key;
   const placementKey = input.fields.placement_key;
@@ -130,6 +144,13 @@ const parseStreamPayload = (input: { id: string; fields: Record<string, string> 
         ...(schemaVersion ? { schema_version: schemaVersion } : {}),
         ...(sourceSystem ? { source_system: sourceSystem } : {}),
         ...(activationCampaignId ? { activation_campaign_id: activationCampaignId } : {}),
+        ...(nativeMeiroCampaignId ? { native_meiro_campaign_id: nativeMeiroCampaignId } : {}),
+        ...(creativeAssetId ? { creative_asset_id: creativeAssetId } : {}),
+        ...(nativeMeiroAssetId ? { native_meiro_asset_id: nativeMeiroAssetId } : {}),
+        ...(offerCatalogId ? { offer_catalog_id: offerCatalogId } : {}),
+        ...(nativeMeiroCatalogId ? { native_meiro_catalog_id: nativeMeiroCatalogId } : {}),
+        ...(prismSourceId ? { prism_source_id: prismSourceId } : {}),
+        ...(importedFrom ? { imported_from: importedFrom } : {}),
         ...(decisionKey ? { decision_key: decisionKey } : {}),
         ...(decisionStackKey ? { decision_stack_key: decisionStackKey } : {}),
         ...(placementKey ? { placement_key: placementKey } : {}),
@@ -168,6 +189,13 @@ const buildActivationMeasurementContext = (entry: StreamEnvelope): Record<string
     source_system: tracking.source_system,
     activation_campaign_id: tracking.activation_campaign_id,
     campaign_id: tracking.campaign_id,
+    native_meiro_campaign_id: tracking.native_meiro_campaign_id,
+    creative_asset_id: tracking.creative_asset_id,
+    native_meiro_asset_id: tracking.native_meiro_asset_id,
+    offer_catalog_id: tracking.offer_catalog_id,
+    native_meiro_catalog_id: tracking.native_meiro_catalog_id,
+    prism_source_id: tracking.prism_source_id,
+    imported_from: tracking.imported_from,
     decision_key: tracking.decision_key,
     decision_stack_key: tracking.decision_stack_key,
     message_id: tracking.message_id,
