@@ -282,7 +282,7 @@ const acceptedPreviewBodySchema = z
 
 const decisionEvidenceBodySchema = z.object({
   version: z.number().int().positive().optional(),
-  evidenceType: z.enum(["scenario_test", "approval_request"]),
+  evidenceType: z.enum(["scenario_test", "approval_request", "measurement_feedback"]),
   status: z.enum(["passed", "failed", "pending", "approved", "rejected"]),
   summary: z.string().max(500).optional(),
   payload: z.record(z.unknown()).optional()

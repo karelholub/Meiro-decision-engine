@@ -45,14 +45,18 @@ const formatUnknownMetric = (value: unknown) => {
 
 export function ActivationMeasurementPanel({
   objectType,
-  objectId
+  objectId,
+  decisionId
 }: {
   objectType: MeasurementObjectType;
   objectId: string | null | undefined;
+  decisionId?: string;
 }) {
   const [measurement, setMeasurement] = useState<ActivationMeasurementSummary | null>(null);
   const [evidence, setEvidence] = useState<ActivationMeasurementEvidence | null>(null);
   const [feedbackImports, setFeedbackImports] = useState<ActivationFeedbackImportRunSummary[]>([]);
+  const [savingSignalId, setSavingSignalId] = useState<string | null>(null);
+  const [saveFeedbackMessage, setSaveFeedbackMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,6 +66,7 @@ export function ActivationMeasurementPanel({
       setMeasurement(null);
       setEvidence(null);
       setFeedbackImports([]);
+      setSaveFeedbackMessage(null);
       setError(null);
       return;
     }
@@ -112,6 +117,36 @@ export function ActivationMeasurementPanel({
   const sourceMetadata = measurement?.sourceMetadata ?? evidence?.sourceMetadata ?? null;
   const latestFeedback = feedbackImports[0];
   const latestSignals = latestFeedback?.signals ?? [];
+  const canSaveDecisionFeedback = objectType === "decision" && Boolean(decisionId);
+
+  const saveDecisionFeedback = async (signal: NonNullable<typeof latestSignals>[number], index: number) => {
+    if (!decisionId || !latestFeedback) return;
+    const signalKey = signal.signal_id ?? `${latestFeedback.id}-${index}`;
+    setSavingSignalId(signalKey);
+    setSaveFeedbackMessage(null);
+    setError(null);
+    try {
+      await apiClient.decisions.saveEvidence(decisionId, {
+        evidenceType: "measurement_feedback",
+        status: "pending",
+        summary: (signal.recommendation ?? `MMM feedback for ${objectType} ${objectId}`).slice(0, 500),
+        payload: {
+          source: "meiro_mmm_app",
+          importRunId: latestFeedback.id,
+          importedAt: latestFeedback.receivedAt,
+          object: signal.object ?? { type: objectType, id: objectId },
+          metrics: signal.metrics ?? {},
+          decisionEngineHint: signal.decision_engine_hint ?? {},
+          signal
+        }
+      });
+      setSaveFeedbackMessage("Saved MMM feedback as decision evidence.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save MMM feedback as evidence");
+    } finally {
+      setSavingSignalId(null);
+    }
+  };
 
   return (
     <PagePanel density="compact" className="space-y-3">
@@ -230,11 +265,12 @@ export function ActivationMeasurementPanel({
           {latestSignals.length ? (
             <ul className="space-y-1">
               {latestSignals.map((signal, index) => {
+                const signalKey = signal.signal_id ?? `${latestFeedback.id}-${index}`;
                 const metrics = Object.entries(signal.metrics ?? {})
                   .map(([key, value]) => [key, formatUnknownMetric(value)] as const)
                   .filter((entry): entry is readonly [string, string] => Boolean(entry[1]));
                 return (
-                  <li key={signal.signal_id ?? `${latestFeedback.id}-${index}`} className="rounded border border-emerald-200 bg-white px-2 py-1.5 text-xs">
+                  <li key={signalKey} className="rounded border border-emerald-200 bg-white px-2 py-1.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-medium text-stone-900">{signal.recommendation ?? signal.status ?? "Review measurement signal"}</span>
                       {signal.status ? <Badge size="dense" variant={statusTone(signal.status)}>{signal.status}</Badge> : null}
@@ -246,11 +282,23 @@ export function ActivationMeasurementPanel({
                         ))}
                       </div>
                     ) : null}
+                    {canSaveDecisionFeedback ? (
+                      <Button
+                        className="mt-2"
+                        size="xs"
+                        variant="outline"
+                        onClick={() => void saveDecisionFeedback(signal, index)}
+                        disabled={savingSignalId === signalKey}
+                      >
+                        {savingSignalId === signalKey ? "Saving..." : "Save as evidence"}
+                      </Button>
+                    ) : null}
                   </li>
                 );
               })}
             </ul>
           ) : null}
+          {saveFeedbackMessage ? <p className="text-xs text-emerald-800">{saveFeedbackMessage}</p> : null}
         </div>
       ) : null}
 

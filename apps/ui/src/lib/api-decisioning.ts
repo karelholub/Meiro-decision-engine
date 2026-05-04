@@ -128,7 +128,7 @@ export const decisioningApiClient = {
       decisionId: string,
       input: {
         version?: number;
-        evidenceType: "scenario_test" | "approval_request";
+        evidenceType: "scenario_test" | "approval_request" | "measurement_feedback";
         status: "passed" | "failed" | "pending" | "approved" | "rejected";
         summary?: string;
         payload?: Record<string, unknown>;

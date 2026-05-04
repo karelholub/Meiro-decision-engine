@@ -167,7 +167,7 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
         </div>
 
         <aside className="space-y-3">
-          <ActivationMeasurementPanel objectType="decision" objectId={details.key} />
+          <ActivationMeasurementPanel objectType="decision" objectId={details.key} decisionId={decisionId} />
           <ActivationImpactPanel type="decision" entityKey={details.key} />
           <ActivationTimelinePanel type="decision" entityKey={details.key} />
           <PagePanel density="compact">
