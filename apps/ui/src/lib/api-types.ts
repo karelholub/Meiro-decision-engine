@@ -472,6 +472,40 @@ export type ActivationMeasurementEvidence = {
   }>;
 };
 
+export type ActivationFeedbackImportSignal = {
+  signal_id?: string;
+  object?: {
+    type?: string;
+    id?: string;
+    label?: string;
+    [key: string]: unknown;
+  };
+  recommendation?: string;
+  status?: string;
+  metrics?: Record<string, unknown>;
+  decision_engine_hint?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type ActivationFeedbackImportRunSummary = {
+  id: string;
+  receivedAt: string;
+  schemaVersion: string;
+  generatedAt?: string;
+  generatedBy?: string;
+  source?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+  decision?: Record<string, unknown>;
+  signalCount: number;
+  objectTypes: string[];
+  objectIds: string[];
+  signals: ActivationFeedbackImportSignal[];
+};
+
+export type ActivationFeedbackImportRun = ActivationFeedbackImportRunSummary & {
+  payload?: Record<string, unknown>;
+};
+
 export type ActivationSourceMetadata = {
   sourceSystem?: string;
   nativeMeiroCampaignId?: string;

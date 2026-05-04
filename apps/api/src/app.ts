@@ -3750,6 +3750,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     measurementApiTimeoutMs: config.measurementApiTimeoutMs ?? 1500,
     resolveEnvironment,
     requireReadAuth: requirePermission("engage.campaign.read"),
+    requireWriteAuth,
     buildResponseError
   });
 

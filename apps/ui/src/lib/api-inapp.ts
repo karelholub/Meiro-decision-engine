@@ -18,6 +18,8 @@ import { apiFetch, apiFetchText, toQuery } from "./api-core";
 import type {
   InAppV2DecideResponse,
   InAppV2EventsMonitorResponse,
+  ActivationFeedbackImportRun,
+  ActivationFeedbackImportRunSummary,
   ActivationMeasurementEvidence,
   ActivationMeasurementSummary,
   ActivationAssetType,
@@ -316,7 +318,16 @@ export const inAppApiClient = {
       date_to?: string;
       conversion_key?: string;
       limit?: number;
-    }) => apiFetch<ActivationMeasurementEvidence>(`/v1/measurement/activation-evidence${toQuery(params)}`)
+    }) => apiFetch<ActivationMeasurementEvidence>(`/v1/measurement/activation-evidence${toQuery(params)}`),
+    activationFeedbackImports: (
+      params: {
+        object_type?: "campaign" | "decision" | "decision_stack" | "asset" | "offer" | "content" | "bundle" | "experiment" | "variant" | "placement" | "template";
+        object_id?: string;
+        limit?: number;
+      } = {}
+    ) => apiFetch<{ total: number; items: ActivationFeedbackImportRunSummary[] }>(`/v1/measurement/activation-feedback/imports${toQuery(params)}`),
+    activationFeedbackImport: (id: string) =>
+      apiFetch<{ item: ActivationFeedbackImportRun }>(`/v1/measurement/activation-feedback/imports/${encodeURIComponent(id)}`)
   },
   experiments: {
     list: (

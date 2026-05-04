@@ -1,5 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Environment, PrismaClient } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { z } from "zod";
 
 const activationMeasurementQuerySchema = z.object({
@@ -16,6 +19,60 @@ const activationEvidenceQuerySchema = activationMeasurementQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
+const activationFeedbackImportListQuerySchema = z.object({
+  object_type: z.string().min(1).optional(),
+  object_id: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(10)
+});
+
+const activationFeedbackSignalSchema = z
+  .object({
+    signal_id: z.string().min(1).optional(),
+    object: z
+      .object({
+        type: z.string().min(1).optional(),
+        id: z.string().min(1).optional(),
+        label: z.string().optional()
+      })
+      .passthrough()
+      .optional(),
+    recommendation: z.string().optional(),
+    status: z.string().optional(),
+    metrics: z.record(z.unknown()).optional(),
+    decision_engine_hint: z.record(z.unknown()).optional()
+  })
+  .passthrough();
+
+const activationFeedbackImportBodySchema = z
+  .object({
+    schema_version: z.string().min(1),
+    generated_at: z.string().optional(),
+    generated_by: z.string().optional(),
+    source: z.record(z.unknown()).optional(),
+    summary: z.record(z.unknown()).optional(),
+    decision: z.record(z.unknown()).optional(),
+    signals: z.array(activationFeedbackSignalSchema).default([])
+  })
+  .passthrough();
+
+type ActivationFeedbackImportPayload = z.infer<typeof activationFeedbackImportBodySchema>;
+
+type ActivationFeedbackImportRun = {
+  id: string;
+  receivedAt: string;
+  schemaVersion: string;
+  generatedAt?: string;
+  generatedBy?: string;
+  source?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+  decision?: Record<string, unknown>;
+  signalCount: number;
+  objectTypes: string[];
+  objectIds: string[];
+  signals: ActivationFeedbackImportPayload["signals"];
+  payload: ActivationFeedbackImportPayload;
+};
+
 export const registerMeasurementRoutes = async (deps: {
   app: FastifyInstance;
   prisma: PrismaClient;
@@ -23,8 +80,14 @@ export const registerMeasurementRoutes = async (deps: {
   measurementApiTimeoutMs: number;
   resolveEnvironment?: (request: FastifyRequest, reply: FastifyReply) => Environment | null;
   requireReadAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
+  requireWriteAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown> | unknown;
   buildResponseError: (reply: FastifyReply, statusCode: number, error: string, details?: unknown) => unknown;
 }) => {
+  const feedbackImportsPath = resolve(
+    process.cwd(),
+    process.env.ACTIVATION_FEEDBACK_IMPORTS_FILE ?? "apps/api/src/data/activation_feedback_imports.json"
+  );
+
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -52,6 +115,61 @@ export const registerMeasurementRoutes = async (deps: {
       importedFrom: firstString(record, ["imported_from", "importedFrom"])
     };
     return Object.values(metadata).some(Boolean) ? metadata : null;
+  };
+
+  const readFeedbackImports = async (): Promise<ActivationFeedbackImportRun[]> => {
+    try {
+      const raw = await readFile(feedbackImportsPath, "utf8");
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed?.runs) ? parsed.runs : [];
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+      throw error;
+    }
+  };
+
+  const writeFeedbackImports = async (runs: ActivationFeedbackImportRun[]) => {
+    await mkdir(dirname(feedbackImportsPath), { recursive: true });
+    await writeFile(feedbackImportsPath, `${JSON.stringify({ runs: runs.slice(0, 50) }, null, 2)}\n`, "utf8");
+  };
+
+  const summarizeFeedbackImport = (run: ActivationFeedbackImportRun) => ({
+    id: run.id,
+    receivedAt: run.receivedAt,
+    schemaVersion: run.schemaVersion,
+    generatedAt: run.generatedAt,
+    generatedBy: run.generatedBy,
+    source: run.source,
+    summary: run.summary,
+    decision: run.decision,
+    signalCount: run.signalCount,
+    objectTypes: run.objectTypes,
+    objectIds: run.objectIds,
+    signals: run.signals.slice(0, 5)
+  });
+
+  const buildFeedbackImportRun = (payload: ActivationFeedbackImportPayload): ActivationFeedbackImportRun => {
+    const objectTypes = Array.from(
+      new Set(payload.signals.map((signal) => signal.object?.type).filter((value): value is string => Boolean(value)))
+    );
+    const objectIds = Array.from(
+      new Set(payload.signals.map((signal) => signal.object?.id).filter((value): value is string => Boolean(value)))
+    );
+    return {
+      id: `afi_${Date.now()}_${randomUUID().slice(0, 8)}`,
+      receivedAt: new Date().toISOString(),
+      schemaVersion: payload.schema_version,
+      generatedAt: payload.generated_at,
+      generatedBy: payload.generated_by,
+      source: payload.source,
+      summary: payload.summary,
+      decision: payload.decision,
+      signalCount: payload.signals.length,
+      objectTypes,
+      objectIds,
+      signals: payload.signals,
+      payload
+    };
   };
 
   const resolveSourceMetadata = async (environment: Environment, objectType: string, objectId: string) => {
@@ -166,5 +284,58 @@ export const registerMeasurementRoutes = async (deps: {
 
   deps.app.get("/v1/measurement/activation-evidence", { preHandler: deps.requireReadAuth }, async (request, reply) => {
     return proxyMeasurementRequest(request, reply, activationEvidenceQuerySchema, "/api/measurement/activation-evidence");
+  });
+
+  deps.app.post("/v1/measurement/activation-feedback/import", { preHandler: deps.requireWriteAuth }, async (request, reply) => {
+    const parsed = activationFeedbackImportBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return deps.buildResponseError(reply, 400, "Invalid activation feedback import", parsed.error.flatten());
+    }
+    const run = buildFeedbackImportRun(parsed.data);
+    const existing = await readFeedbackImports();
+    await writeFeedbackImports([run, ...existing]);
+    return reply.code(202).send({
+      status: "accepted",
+      run: summarizeFeedbackImport(run),
+      summary: {
+        signal_count: run.signalCount,
+        object_types: run.objectTypes,
+        object_ids: run.objectIds
+      }
+    });
+  });
+
+  deps.app.get("/v1/measurement/activation-feedback/imports", { preHandler: deps.requireReadAuth }, async (request, reply) => {
+    const parsed = activationFeedbackImportListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+    const runs = await readFeedbackImports();
+    const filtered = runs.filter((run) => {
+      const objectTypeMatches = parsed.data.object_type
+        ? run.signals.some((signal) => signal.object?.type === parsed.data.object_type)
+        : true;
+      const objectIdMatches = parsed.data.object_id
+        ? run.signals.some((signal) => signal.object?.id === parsed.data.object_id)
+        : true;
+      return objectTypeMatches && objectIdMatches;
+    });
+    return {
+      total: filtered.length,
+      items: filtered.slice(0, parsed.data.limit).map(summarizeFeedbackImport)
+    };
+  });
+
+  deps.app.get("/v1/measurement/activation-feedback/imports/:id", { preHandler: deps.requireReadAuth }, async (request, reply) => {
+    const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) {
+      return deps.buildResponseError(reply, 400, "Invalid import id", params.error.flatten());
+    }
+    const runs = await readFeedbackImports();
+    const run = runs.find((item) => item.id === params.data.id);
+    if (!run) {
+      return deps.buildResponseError(reply, 404, "Activation feedback import not found");
+    }
+    return { item: run };
   });
 };
