@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { DecisionDetailsResponse, DecisionReportResponse } from "@decisioning/shared";
+import type { DecisionAuthoringEvidenceItem, DecisionDetailsResponse, DecisionReportResponse } from "@decisioning/shared";
 import { InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import {
@@ -24,18 +24,21 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
   const { hasPermission } = usePermissions();
   const [details, setDetails] = useState<DecisionDetailsResponse | null>(null);
   const [report, setReport] = useState<DecisionReportResponse | null>(null);
+  const [evidence, setEvidence] = useState<DecisionAuthoringEvidenceItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<"activate" | "archive" | null>(null);
 
   const load = async () => {
     try {
-      const [decision, reportResponse] = await Promise.all([
+      const [decision, reportResponse, evidenceResponse] = await Promise.all([
         apiClient.decisions.get(decisionId),
-        apiClient.decisions.report(decisionId)
+        apiClient.decisions.report(decisionId),
+        apiClient.decisions.evidence(decisionId).catch(() => ({ items: [] }))
       ]);
       setDetails(decision);
       setReport(reportResponse);
+      setEvidence(evidenceResponse.items ?? []);
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load decision details");
@@ -52,6 +55,7 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
   const canActivate = hasPermission("decision.activate");
   const canArchive = hasPermission("decision.archive");
   const canPromote = hasPermission("promotion.create");
+  const measurementFeedbackEvidence = evidence.filter((item) => item.evidenceType === "measurement_feedback");
 
   const copyText = async (value: string, label: string) => {
     try {
@@ -167,7 +171,26 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
         </div>
 
         <aside className="space-y-3">
-          <ActivationMeasurementPanel objectType="decision" objectId={details.key} decisionId={decisionId} />
+          <ActivationMeasurementPanel objectType="decision" objectId={details.key} decisionId={decisionId} onFeedbackEvidenceSaved={load} />
+          {measurementFeedbackEvidence.length ? (
+            <PagePanel density="compact">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-semibold">MMM feedback evidence</h3>
+                <span className="rounded-md border border-stone-200 px-2 py-1 text-xs text-stone-700">{measurementFeedbackEvidence.length}</span>
+              </div>
+              <div className="mt-2 space-y-2">
+                {measurementFeedbackEvidence.slice(0, 3).map((item) => (
+                  <article key={item.id} className="rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-stone-900">{item.summary || "MMM feedback"}</span>
+                      <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-800">{item.status}</span>
+                    </div>
+                    <p className="mt-1 text-stone-500">{new Date(item.createdAt).toLocaleString()}</p>
+                  </article>
+                ))}
+              </div>
+            </PagePanel>
+          ) : null}
           <ActivationImpactPanel type="decision" entityKey={details.key} />
           <ActivationTimelinePanel type="decision" entityKey={details.key} />
           <PagePanel density="compact">

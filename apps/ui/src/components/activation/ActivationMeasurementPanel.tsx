@@ -46,11 +46,13 @@ const formatUnknownMetric = (value: unknown) => {
 export function ActivationMeasurementPanel({
   objectType,
   objectId,
-  decisionId
+  decisionId,
+  onFeedbackEvidenceSaved
 }: {
   objectType: MeasurementObjectType;
   objectId: string | null | undefined;
   decisionId?: string;
+  onFeedbackEvidenceSaved?: () => void | Promise<void>;
 }) {
   const [measurement, setMeasurement] = useState<ActivationMeasurementSummary | null>(null);
   const [evidence, setEvidence] = useState<ActivationMeasurementEvidence | null>(null);
@@ -141,6 +143,7 @@ export function ActivationMeasurementPanel({
         }
       });
       setSaveFeedbackMessage("Saved MMM feedback as decision evidence.");
+      await onFeedbackEvidenceSaved?.();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save MMM feedback as evidence");
     } finally {
