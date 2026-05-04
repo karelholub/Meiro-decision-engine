@@ -75,8 +75,8 @@ export default function PipesCallbackSettingsPage() {
     setMaxAttempts(String(response.config.maxAttempts));
     setIncludeDebug(response.config.includeDebug);
     setIncludeProfileSummary(response.config.includeProfileSummary);
-    setAllowPiiKeysCsv(response.config.allowPiiKeys.join(", "));
-    setDeliveries(response.recentDeliveries);
+    setAllowPiiKeysCsv((response.config.allowPiiKeys ?? []).join(", "));
+    setDeliveries(response.recentDeliveries ?? []);
     setPipesPrefill(response.pipesPrefill ?? null);
   };
 

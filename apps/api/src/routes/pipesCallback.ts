@@ -275,6 +275,7 @@ export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRou
         ...serializeCallbackConfig(effective.config),
         authSecret: maskSecret(saved.authSecret)
       },
+      recentDeliveries: [],
       pipesPrefill: buildPipesPrefill({
         baseUrl: deps.pipesBaseUrl,
         token: deps.pipesToken,
