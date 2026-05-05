@@ -90,6 +90,18 @@ export function DecisionRowActions({
           >
             Export JSON
           </button>
+          <Link
+            href={`/simulate?decisionId=${encodeURIComponent(summary.decisionId)}&decisionKey=${encodeURIComponent(summary.key)}`}
+            className="block rounded px-2 py-1 text-sm hover:bg-stone-100"
+          >
+            Simulate
+          </Link>
+          <Link
+            href={`/execution/precompute?decisionKey=${encodeURIComponent(summary.key)}`}
+            className="block rounded px-2 py-1 text-sm hover:bg-stone-100"
+          >
+            Precompute
+          </Link>
           <button
             type="button"
             className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-stone-100 disabled:cursor-not-allowed disabled:text-stone-400"

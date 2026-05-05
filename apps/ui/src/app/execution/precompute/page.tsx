@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { Button } from "../../../components/ui/button";
 import {
@@ -86,6 +87,12 @@ export default function PrecomputeRunsPage() {
       return;
     }
     const params = new URLSearchParams(window.location.search);
+    const decisionKey = params.get("decisionKey") ?? params.get("decision");
+    const stackKey = params.get("stackKey") ?? params.get("stack");
+    if (decisionKey || stackKey) {
+      setMode(stackKey ? "stack" : "decision");
+      setKey((stackKey ?? decisionKey ?? "").trim());
+    }
     const segment = params.get("segment") ?? params.get("segmentId") ?? params.get("audienceKey") ?? params.get("audience");
     if (segment) {
       const normalized = segment.startsWith("meiro_segment:") ? segment.slice("meiro_segment:".length) : segment;
@@ -214,7 +221,35 @@ export default function PrecomputeRunsPage() {
         density="compact"
         title="Precompute Runs"
         description={`Batch decision result generation for high-volume activations. Environment: ${environment}.`}
+        meta={<MeiroSourceBadge showLinks />}
       />
+
+      {key.trim() ? (
+        <PagePanel density="compact" className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Prepared activation target</h3>
+            <p className="text-sm text-stone-700">
+              {mode} <span className="font-mono">{key.trim()}</span>
+              {cohortType === "segment" && segmentValue.trim() ? <> for audience <span className="font-mono">{segmentValue.trim()}</span></> : null}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-sm">
+            <Link
+              className="rounded-md border border-stone-300 px-3 py-1.5 hover:bg-stone-100"
+              href={
+                mode === "decision"
+                  ? `/simulate?decisionKey=${encodeURIComponent(key.trim())}`
+                  : `/simulate?stackKey=${encodeURIComponent(key.trim())}`
+              }
+            >
+              Simulate
+            </Link>
+            <Link className="rounded-md border border-stone-300 px-3 py-1.5 hover:bg-stone-100" href="/settings/integrations/pipes-callback">
+              Check callback
+            </Link>
+          </div>
+        </PagePanel>
+      ) : null}
 
       <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
         <FieldLabel className="flex flex-col gap-1">

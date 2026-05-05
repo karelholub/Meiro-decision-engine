@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "../../../components/ui/status-badges";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { EmptyState, InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
@@ -1428,6 +1429,7 @@ export default function CampaignCalendarPage() {
         eyebrow="Engage"
         title="Campaign Calendar"
         description="Plan campaign windows, approvals, asset usage, overlap, and pressure across placements."
+        meta={<MeiroSourceBadge compact showLinks />}
         actions={
           <>
             <ButtonLink size="sm" href="/engage/campaigns">Campaign inventory</ButtonLink>

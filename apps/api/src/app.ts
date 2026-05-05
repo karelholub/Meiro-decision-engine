@@ -483,6 +483,9 @@ const profileUpsertBodySchema = z.object({
   attributes: z.record(z.unknown()).optional(),
   sourceTs: z.string().datetime().optional()
 });
+const pipesProfilePreviewQuerySchema = z.object({
+  profileId: z.string().min(1)
+});
 
 const reportQuerySchema = z.object({
   from: z.string().datetime().optional(),
@@ -1528,6 +1531,48 @@ const resolveEnvironment = (request: FastifyRequest, reply: FastifyReply): Envir
 };
 
 const PROFILE_CACHE_MAX_ITEMS = 500;
+const PROFILE_UPSERT_RECENT_LIMIT = 20;
+
+type ProfileUpsertEventStatus = "ok" | "unauthorized" | "invalid_body" | "error";
+
+interface ProfileUpsertRecentEvent {
+  ts: string;
+  status: ProfileUpsertEventStatus;
+  environment: Environment;
+  requestId: string | null;
+  profileIdHash: string | null;
+  appKey: string | null;
+  sourceTs: string | null;
+  segmentsCount: number | null;
+  attributeCount: number | null;
+  error: string | null;
+}
+
+interface ProfileUpsertStats {
+  attempts: number;
+  succeeded: number;
+  unauthorized: number;
+  invalidBody: number;
+  errors: number;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastProfileIdHash: string | null;
+  recent: ProfileUpsertRecentEvent[];
+}
+
+const createProfileUpsertStats = (): ProfileUpsertStats => ({
+  attempts: 0,
+  succeeded: 0,
+  unauthorized: 0,
+  invalidBody: 0,
+  errors: 0,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  lastProfileIdHash: null,
+  recent: []
+});
 
 interface CachedProfileEntry {
   profile: EngineProfile;
@@ -1721,7 +1766,9 @@ const createDecideAuth = (input: {
   };
 };
 
-const createPipesAuth = (config: AppConfig) => {
+type PipesAuthRejectedHook = (input: { request: FastifyRequest }) => void;
+
+const createPipesAuth = (config: AppConfig, onRejected?: PipesAuthRejectedHook) => {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const writeKeyConfigured = typeof config.apiWriteKey === "string" && config.apiWriteKey.length > 0;
     const pipesSecretConfigured = typeof config.pipesSharedSecret === "string" && config.pipesSharedSecret.length > 0;
@@ -1736,6 +1783,7 @@ const createPipesAuth = (config: AppConfig) => {
     const pipesKeyMatch = pipesSecretConfigured && suppliedPipesKey === config.pipesSharedSecret;
 
     if (!writeKeyMatch && !pipesKeyMatch) {
+      onRejected?.({ request });
       return buildResponseError(reply, 401, "Unauthorized");
     }
   };
@@ -2530,6 +2578,56 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       }
     });
   const profileCache = new ProfileCache(PROFILE_CACHE_MAX_ITEMS, profileCacheTtlSeconds * 1000);
+  const profileUpsertStatsByEnvironment: Record<Environment, ProfileUpsertStats> = {
+    [Environment.DEV]: createProfileUpsertStats(),
+    [Environment.STAGE]: createProfileUpsertStats(),
+    [Environment.PROD]: createProfileUpsertStats()
+  };
+  const recordProfileUpsertEvent = (event: ProfileUpsertRecentEvent) => {
+    const stats = profileUpsertStatsByEnvironment[event.environment];
+    stats.attempts += 1;
+    stats.lastAttemptAt = event.ts;
+    if (event.status === "ok") {
+      stats.succeeded += 1;
+      stats.lastSuccessAt = event.ts;
+      stats.lastProfileIdHash = event.profileIdHash;
+    } else {
+      stats.lastFailureAt = event.ts;
+      if (event.status === "unauthorized") {
+        stats.unauthorized += 1;
+      } else if (event.status === "invalid_body") {
+        stats.invalidBody += 1;
+      } else {
+        stats.errors += 1;
+      }
+    }
+    stats.recent.unshift(event);
+    if (stats.recent.length > PROFILE_UPSERT_RECENT_LIMIT) {
+      stats.recent.length = PROFILE_UPSERT_RECENT_LIMIT;
+    }
+  };
+  const buildProfileUpsertEvent = (input: {
+    request: FastifyRequest;
+    environment: Environment;
+    status: ProfileUpsertEventStatus;
+    profileId?: string;
+    appKey?: string | null;
+    sourceTs?: string | null;
+    segmentsCount?: number | null;
+    attributeCount?: number | null;
+    error?: string | null;
+  }): ProfileUpsertRecentEvent => ({
+    ts: now().toISOString(),
+    status: input.status,
+    environment: input.environment,
+    requestId: typeof input.request.id === "string" ? input.request.id : null,
+    profileIdHash: input.profileId ? hashSha256(input.profileId) : null,
+    appKey: input.appKey ?? null,
+    sourceTs: input.sourceTs ?? null,
+    segmentsCount: input.segmentsCount ?? null,
+    attributeCount: input.attributeCount ?? null,
+    error: input.error ?? null
+  });
   const realtimeCacheStats = {
     hits: 0,
     misses: 0,
@@ -3376,7 +3474,22 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     config,
     resolveAuthContext
   });
-  const requirePipesAuth = createPipesAuth(config);
+  const requirePipesAuth = createPipesAuth(config, ({ request }) => {
+    if (!request.url.startsWith("/v1/profiles/upsert")) {
+      return;
+    }
+    const normalized = getRawEnvironment(request).toUpperCase();
+    const parsed = environmentSchema.safeParse(normalized);
+    const environment = parsed.success ? parsed.data : Environment.DEV;
+    recordProfileUpsertEvent(
+      buildProfileUpsertEvent({
+        request,
+        environment,
+        status: "unauthorized",
+        error: "Unauthorized"
+      })
+    );
+  });
   const precomputeRunner = createPrecomputeRunner({
     app,
     prisma,
@@ -8084,75 +8197,193 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
       const parsed = profileUpsertBodySchema.safeParse(request.body);
       if (!parsed.success) {
+        recordProfileUpsertEvent(
+          buildProfileUpsertEvent({
+            request,
+            environment,
+            status: "invalid_body",
+            error: "Invalid body"
+          })
+        );
         return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
       }
 
-      const profile: EngineProfile = {
-        profileId: parsed.data.profileId,
-        attributes: parsed.data.attributes ?? {},
-        audiences: parsed.data.segments ?? [],
-        consents: []
-      };
-      const attributeKeys = Object.keys(profile.attributes)
-        .map((key) => key.trim())
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right));
+      try {
+        const profile: EngineProfile = {
+          profileId: parsed.data.profileId,
+          attributes: parsed.data.attributes ?? {},
+          audiences: parsed.data.segments ?? [],
+          consents: []
+        };
+        const attributeKeys = Object.keys(profile.attributes)
+          .map((key) => key.trim())
+          .filter(Boolean)
+          .sort((left, right) => left.localeCompare(right));
 
-      const warmedCacheKeys: string[] = [];
-      const candidateRequiredSets = [[], attributeKeys];
-      for (const requiredAttributes of candidateRequiredSets) {
-        const profileCacheKey = buildProfileCacheKey({
-          environment,
-          profileId: profile.profileId,
-          requiredAttributes
-        });
-        profileCache.set(profileCacheKey, profile);
-        warmedCacheKeys.push(profileCacheKey);
-        if (cache.enabled) {
-          await cache.setJson(profileCacheKey, profile, profileCacheTtlSeconds);
+        const warmedCacheKeys: string[] = [];
+        const candidateRequiredSets = [[], attributeKeys];
+        for (const requiredAttributes of candidateRequiredSets) {
+          const profileCacheKey = buildProfileCacheKey({
+            environment,
+            profileId: profile.profileId,
+            requiredAttributes
+          });
+          profileCache.set(profileCacheKey, profile);
+          warmedCacheKeys.push(profileCacheKey);
+          if (cache.enabled) {
+            await cache.setJson(profileCacheKey, profile, profileCacheTtlSeconds);
+          }
         }
-      }
 
-      if (cache.enabled) {
-        const hashedProfileId = hashSha256(profile.profileId);
-        await cache.setJson(
-          `deci:pipes:segments:v1:${environment}:${hashedProfileId}`,
-          {
-            profileIdHash: hashedProfileId,
-            segments: profile.audiences,
+        if (cache.enabled) {
+          const hashedProfileId = hashSha256(profile.profileId);
+          await cache.setJson(
+            `deci:pipes:segments:v1:${environment}:${hashedProfileId}`,
+            {
+              profileIdHash: hashedProfileId,
+              segments: profile.audiences,
+              appKey: parsed.data.appKey ?? null,
+              sourceTs: parsed.data.sourceTs ?? null,
+              updatedAt: now().toISOString()
+            },
+            profileCacheTtlSeconds
+          );
+        }
+
+        const invalidation = await invalidateRealtimeCache({
+          environment,
+          payload: {
+            scope: "profile",
+            profileId: profile.profileId,
+            reasons: ["pipes_profile_upsert"]
+          },
+          cache
+        });
+
+        recordProfileUpsertEvent(
+          buildProfileUpsertEvent({
+            request,
+            environment,
+            status: "ok",
+            profileId: profile.profileId,
             appKey: parsed.data.appKey ?? null,
             sourceTs: parsed.data.sourceTs ?? null,
-            updatedAt: now().toISOString()
-          },
-          profileCacheTtlSeconds
+            segmentsCount: profile.audiences.length,
+            attributeCount: attributeKeys.length
+          })
         );
-      }
 
-      const invalidation = await invalidateRealtimeCache({
-        environment,
-        payload: {
-          scope: "profile",
+        return {
+          status: "ok",
           profileId: profile.profileId,
-          reasons: ["pipes_profile_upsert"]
-        },
-        cache
-      });
-
-      return {
-        status: "ok",
-        profileId: profile.profileId,
-        environment,
-        segments: profile.audiences,
-        updatedAttributes: attributeKeys,
-        sourceTs: parsed.data.sourceTs ?? null,
-        cache: {
-          warmedEntries: warmedCacheKeys.length,
-          invalidatedRealtimeKeys: invalidation.deletedKeys
-        },
-        recomputeEnqueued: false
-      };
+          environment,
+          segments: profile.audiences,
+          updatedAttributes: attributeKeys,
+          sourceTs: parsed.data.sourceTs ?? null,
+          cache: {
+            warmedEntries: warmedCacheKeys.length,
+            invalidatedRealtimeKeys: invalidation.deletedKeys
+          },
+          recomputeEnqueued: false
+        };
+      } catch (upsertError) {
+        const errorMessage = upsertError instanceof Error ? upsertError.message : "Profile upsert failed";
+        app.log.error({ err: upsertError, environment }, "Profile upsert failed");
+        recordProfileUpsertEvent(
+          buildProfileUpsertEvent({
+            request,
+            environment,
+            status: "error",
+            profileId: parsed.data.profileId,
+            appKey: parsed.data.appKey ?? null,
+            sourceTs: parsed.data.sourceTs ?? null,
+            error: errorMessage
+          })
+        );
+        return buildResponseError(reply, 500, "Profile upsert failed");
+      }
     }
   );
+
+  app.get("/v1/profiles/upsert/status", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const stats = profileUpsertStatsByEnvironment[environment];
+    return {
+      environment,
+      cache: {
+        redisEnabled: cache.enabled,
+        ttlSeconds: profileCacheTtlSeconds,
+        inMemoryMaxEntries: PROFILE_CACHE_MAX_ITEMS
+      },
+      totals: {
+        attempts: stats.attempts,
+        succeeded: stats.succeeded,
+        unauthorized: stats.unauthorized,
+        invalidBody: stats.invalidBody,
+        errors: stats.errors
+      },
+      lastAttemptAt: stats.lastAttemptAt,
+      lastSuccessAt: stats.lastSuccessAt,
+      lastFailureAt: stats.lastFailureAt,
+      lastProfileIdHash: stats.lastProfileIdHash,
+      recent: stats.recent
+    };
+  });
+
+  app.get("/v1/settings/pipes-prism/profile-preview", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const query = pipesProfilePreviewQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return buildResponseError(reply, 400, "Invalid query", query.error.flatten());
+    }
+
+    const profileId = query.data.profileId.trim();
+    const profileCacheKey = buildProfileCacheKey({
+      environment,
+      profileId,
+      requiredAttributes: []
+    });
+    const localCached = profileCache.get(profileCacheKey);
+    const redisCached = localCached ?? (await cache.getJson<EngineProfile>(profileCacheKey));
+
+    if (!redisCached) {
+      return {
+        environment,
+        source: "cached_pipes_profile" as const,
+        profile: null,
+        cacheKey: profileCacheKey,
+        status: "missing" as const,
+        message:
+          "No cached Pipes profile was found. Send a Pipes profile callback to /v1/profiles/upsert or use inline profile JSON for this simulation."
+      };
+    }
+
+    if (!localCached) {
+      profileCache.set(profileCacheKey, redisCached);
+    }
+
+    return {
+      environment,
+      source: "cached_pipes_profile" as const,
+      profile: {
+        profileId: redisCached.profileId,
+        attributes: redisCached.attributes ?? {},
+        audiences: redisCached.audiences ?? [],
+        consents: redisCached.consents ?? []
+      },
+      cacheKey: profileCacheKey,
+      status: "ready" as const,
+      message: "Loaded cached Pipes profile."
+    };
+  });
 
   app.post("/v1/simulate", async (request, reply) => {
     const environment = resolveEnvironment(request, reply);

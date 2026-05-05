@@ -10,6 +10,7 @@ import {
 } from "../../../components/meiro/MeiroIntelligenceCards";
 import { MeiroProfileSearch } from "../../../components/meiro/MeiroProfileSearch";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
@@ -125,6 +126,7 @@ export default function MeiroActivationWorkbenchPage() {
             ? `Operational layer for ${apiStatus.domain ?? "Meiro CDP"} as ${apiStatus.username ?? "configured user"}.`
             : "Campaign, audience, metadata, and governance intelligence connected to Meiro CDP."
         }
+        meta={<MeiroSourceBadge showLinks />}
         actions={
           <>
             <ButtonLink size="sm" href="/engage/calendar" variant="outline">

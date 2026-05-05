@@ -363,6 +363,23 @@ export const isFromDecisionEngineHeader = (headers: Record<string, unknown>): bo
   return parseBooleanHeader(headers["x-from-decision-engine"]);
 };
 
+const toDecisionEngineCollectEventType = (input: {
+  mode: "eligibility_only" | "full";
+  eligible: boolean;
+  result: { actionType: string; payload: Record<string, unknown> } | null;
+}): "eligibility_check" | "inapp_message" | "personalize" | "decision_action" => {
+  if (input.mode === "eligibility_only" || !input.eligible || !input.result) {
+    return "eligibility_check";
+  }
+  if (input.result.actionType === "inapp_message" || input.result.actionType === "message") {
+    return "inapp_message";
+  }
+  if (input.result.actionType === "personalize") {
+    return "personalize";
+  }
+  return "decision_action";
+};
+
 export const buildDeliveryTaskPayload = (input: {
   config: EffectivePipesCallbackConfig;
   deliveryId: string;
@@ -398,6 +415,11 @@ export const buildDeliveryTaskPayload = (input: {
   };
   now: Date;
 }): Record<string, unknown> => {
+  const eventType = toDecisionEngineCollectEventType({
+    mode: input.mode,
+    eligible: input.eligible,
+    result: input.result
+  });
   const requestPayload: Record<string, unknown> = {
     mode: input.mode,
     identity: {
@@ -457,7 +479,34 @@ export const buildDeliveryTaskPayload = (input: {
     }
   }
 
-  return redactCallbackValue(payload, input.config.allowPiiKeys) as Record<string, unknown>;
+  return {
+    event_type: eventType,
+    event_time: input.now.toISOString(),
+    event_payload: redactCallbackValue(
+      {
+        event_id: input.deliveryId,
+        delivery_id: input.deliveryId,
+        correlation_id: input.correlationId,
+        source_system: DECISION_ENGINE_SOURCE,
+        schema_version: "decision_engine_collect.v1",
+        environment: input.environment,
+        app_key: input.appKey ?? null,
+        customer_id: input.profile.profileId,
+        profile_id: input.profile.profileId,
+        decision_key: input.decisionKey ?? null,
+        decision_stack_key: input.stackKey ?? null,
+        placement_key: typeof input.context.placement === "string" ? input.context.placement : null,
+        action_type: input.result?.actionType ?? "noop",
+        eligible: input.eligible,
+        reasons: input.reasons,
+        request: requestPayload,
+        response: payload.response,
+        meta: payload.meta,
+        ...(payload.debug ? { debug: payload.debug } : {})
+      },
+      input.config.allowPiiKeys
+    )
+  };
 };
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;

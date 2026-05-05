@@ -28,6 +28,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Observe",
     hint: "Heartbeat, logs, and execution health",
     items: [
+      { href: "/meiro-workspace", label: "Meiro Workspace" },
       { href: "/overview", label: "Overview" },
       { href: "/logs", label: "Logs" },
       { href: "/observe/activation-map", label: "Activation Map" },
@@ -110,6 +111,7 @@ const isPathInSection = (pathname: string, href: string) => pathname === href ||
 const isItemActive = (pathname: string, href: string) => pathname === href || (href !== "/catalog" && pathname.startsWith(`${href}/`));
 
 const navPermissionByHref: Record<string, string> = {
+  "/meiro-workspace": "decision.read",
   "/overview": "logs.read",
   "/logs": "logs.read",
   "/observe/activation-map": "logs.read",

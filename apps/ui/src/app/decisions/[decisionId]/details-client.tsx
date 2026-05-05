@@ -19,6 +19,7 @@ import { ActivationActionConfirm } from "../../../components/activation/Activati
 import { ActivationImpactPanel } from "../../../components/activation/ActivationImpactPanel";
 import { ActivationMeasurementPanel } from "../../../components/activation/ActivationMeasurementPanel";
 import { ActivationTimelinePanel } from "../../../components/activation/ActivationTimelinePanel";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 
 export default function DecisionDetailsClient({ decisionId }: { decisionId: string }) {
   const { hasPermission } = usePermissions();
@@ -124,10 +125,13 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
         title={details.name}
         description={<>Key: <span className="font-mono">{details.key}</span> ({details.environment})</>}
         meta={
-          <span className="flex flex-wrap gap-1">
-            <StatusBadge status={(draft?.status ?? active?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "ARCHIVED"} />
-            {draft ? <HasDraftBadge /> : null}
-          </span>
+          <div className="flex flex-wrap gap-2">
+            <span className="flex flex-wrap gap-1">
+              <StatusBadge status={(draft?.status ?? active?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "ARCHIVED"} />
+              {draft ? <HasDraftBadge /> : null}
+            </span>
+            <MeiroSourceBadge compact showLinks />
+          </div>
         }
         actions={
           <>
@@ -191,7 +195,52 @@ export default function DecisionDetailsClient({ decisionId }: { decisionId: stri
           <PagePanel density="compact">
             <h3 className="font-semibold">Preview</h3>
             <p className="mt-2 text-sm text-stone-700">Use simulator for step-by-step preview and evaluation traces.</p>
-            <ButtonLink className="mt-2" href="/simulate" size="sm" variant="outline">Open simulator</ButtonLink>
+            <ButtonLink
+              className="mt-2"
+              href={`/simulate?decisionId=${encodeURIComponent(decisionId)}&decisionKey=${encodeURIComponent(details.key)}`}
+              size="sm"
+              variant="outline"
+            >
+              Open simulator
+            </ButtonLink>
+          </PagePanel>
+
+          <PagePanel density="compact">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">Meiro activation workflow</h3>
+                <p className="mt-1 text-sm text-stone-700">
+                  Run this decision against the active Pipes source, warm audience results, and verify callback delivery.
+                </p>
+              </div>
+              <MeiroSourceBadge compact />
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <ButtonLink
+                size="sm"
+                variant="outline"
+                href={`/simulate?decisionId=${encodeURIComponent(decisionId)}&decisionKey=${encodeURIComponent(details.key)}`}
+              >
+                Simulate
+              </ButtonLink>
+              <ButtonLink
+                size="sm"
+                variant="outline"
+                href={`/execution/precompute?decisionKey=${encodeURIComponent(details.key)}`}
+              >
+                Precompute
+              </ButtonLink>
+              <ButtonLink size="sm" variant="outline" href="/settings/integrations/pipes-callback">
+                Callback
+              </ButtonLink>
+              <ButtonLink
+                size="sm"
+                variant="outline"
+                href={`/observe/activation-map?type=decision&key=${encodeURIComponent(details.key)}`}
+              >
+                Impact map
+              </ButtonLink>
+            </div>
           </PagePanel>
         </div>
 

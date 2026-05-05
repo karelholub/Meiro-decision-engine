@@ -88,7 +88,7 @@ const buildPipesPrefill = (input: { baseUrl?: string; token?: string; sourceMode
     activeSource: input.sourceMode === "meiro_mcp" ? "Meiro MCP" : "Pipes CLI",
     baseUrl: redactUrl(baseUrl),
     tokenConfigured,
-    callbackUrl: baseUrl ? `${baseUrl}/webhooks/decision-result` : "",
+    callbackUrl: baseUrl ? `${baseUrl}/collect/decision-engine-actions` : "",
     authType: tokenConfigured ? "bearer" : "none",
     useConfiguredPipesToken: tokenConfigured,
     mode: "always",

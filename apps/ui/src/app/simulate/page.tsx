@@ -12,10 +12,11 @@ import type {
 import { parseLegacyKey } from "@decisioning/shared";
 import { InlineError } from "../../components/ui/app-state";
 import { MeiroProfileSearch } from "../../components/meiro/MeiroProfileSearch";
+import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import { Button } from "../../components/ui/button";
 import { FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 import { DependenciesPanel } from "../../components/registry/DependenciesPanel";
-import { ApiError, apiClient, type InAppV2DecideResponse } from "../../lib/api";
+import { ApiError, apiClient, type InAppV2DecideResponse, type PipesPrismStatusResponse } from "../../lib/api";
 import { useAppEnumSettings } from "../../lib/app-enum-settings";
 import type { DependencyItem } from "../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
@@ -130,6 +131,10 @@ export default function SimulatePage() {
   const [meiroWbsValue, setMeiroWbsValue] = useState("");
   const [meiroWbsCategoryId, setMeiroWbsCategoryId] = useState("accessories");
   const [meiroWbsLoading, setMeiroWbsLoading] = useState(false);
+  const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
+  const [pipesFieldCounts, setPipesFieldCounts] = useState<{ attributes: number; audiences: number } | null>(null);
+  const [pipesProfileId, setPipesProfileId] = useState("p-1001");
+  const [pipesProfileLoading, setPipesProfileLoading] = useState(false);
 
   const [inAppAppKey, setInAppAppKey] = useState("meiro_store");
   const [inAppPlacement, setInAppPlacement] = useState("home_top");
@@ -155,6 +160,9 @@ export default function SimulatePage() {
   const [error, setError] = useState<string | null>(null);
   const [saveProfileNotice, setSaveProfileNotice] = useState<string | null>(null);
   const { settings: enumSettings } = useAppEnumSettings();
+  const isPipesSource = prismStatus?.sourceMode === "pipes_cli";
+  const profileIdLabel = isPipesSource ? "cached Pipes profileId" : "profileId";
+  const lookupModeLabel = isPipesSource ? "WBS lookup (legacy)" : "WBS lookup";
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -200,17 +208,19 @@ export default function SimulatePage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [decisionResponse, stackResponse, inAppAppsResponse, inAppPlacementsResponse] = await Promise.all([
+        const [decisionResponse, stackResponse, inAppAppsResponse, inAppPlacementsResponse, pipesStatusResponse] = await Promise.all([
           apiClient.decisions.list({ status: "ACTIVE", limit: 100, page: 1 }),
           apiClient.stacks.list({ status: "ACTIVE", limit: 100, page: 1 }),
           apiClient.inapp.apps.list(),
-          apiClient.inapp.placements.list()
+          apiClient.inapp.placements.list(),
+          apiClient.pipes.prismStatus().catch(() => null)
         ]);
 
         setDecisions(decisionResponse.items);
         setStacks(stackResponse.items);
         setInAppApps(inAppAppsResponse.items);
         setInAppPlacements(inAppPlacementsResponse.items);
+        setPrismStatus(pipesStatusResponse);
         setDecisionId((current) => current || decisionResponse.items[0]?.decisionId || "");
         setDecisionKey((current) => current || decisionResponse.items[0]?.key || "");
         setStackKey((current) => current || stackResponse.items[0]?.key || "");
@@ -223,6 +233,30 @@ export default function SimulatePage() {
 
     void load();
   }, [environment]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (prismStatus?.sourceMode !== "pipes_cli") {
+        setPipesFieldCounts(null);
+        return;
+      }
+      try {
+        const response = await apiClient.pipes.prismFieldRegistry();
+        if (!cancelled) {
+          setPipesFieldCounts(response.counts);
+        }
+      } catch {
+        if (!cancelled) {
+          setPipesFieldCounts(null);
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [prismStatus?.sourceMode, environment]);
 
   useEffect(() => {
     if (inAppAppKey && !inAppApps.some((item) => item.key === inAppAppKey)) {
@@ -275,6 +309,43 @@ export default function SimulatePage() {
 
   useEffect(() => {
     const search = new URLSearchParams(window.location.search);
+    const queryDecisionId = search.get("decisionId");
+    const queryDecisionKey = search.get("decisionKey") ?? search.get("decision");
+    const queryStackKey = search.get("stackKey") ?? search.get("stack");
+    const queryAppKey = search.get("appKey");
+    const queryPlacement = search.get("placement") ?? search.get("placementKey");
+    const queryProfileId = search.get("profileId");
+    const queryLookupAttribute = search.get("lookupAttribute");
+    const queryLookupValue = search.get("lookupValue");
+    if (queryDecisionId || queryDecisionKey) {
+      setSimulatorType("decision");
+      if (queryDecisionId) setDecisionId(queryDecisionId);
+      if (queryDecisionKey) setDecisionKey(queryDecisionKey);
+    }
+    if (queryStackKey) {
+      setSimulatorType("stack");
+      setStackKey(queryStackKey);
+    }
+    if (queryAppKey || queryPlacement) {
+      setSimulatorType("inapp");
+      if (queryAppKey) setInAppAppKey(queryAppKey);
+      if (queryPlacement) setInAppPlacement(queryPlacement);
+    }
+    if (queryProfileId) {
+      setExecutionMode("decide");
+      setDecideLookupMode("profileId");
+      setProfileId(queryProfileId);
+      setStackProfileId(queryProfileId);
+      setInAppProfileId(queryProfileId);
+      setPipesProfileId(queryProfileId);
+    }
+    if (queryLookupAttribute && queryLookupValue) {
+      setExecutionMode("decide");
+      setDecideLookupMode("lookup");
+      setLookupAttribute(queryLookupAttribute);
+      setLookupValue(queryLookupValue);
+    }
+
     const logId = search.get("logId");
     const rawLogType = search.get("logType");
     const logType = rawLogType === "inapp" || rawLogType === "stack" ? rawLogType : "decision";
@@ -534,6 +605,45 @@ export default function SimulatePage() {
     }
   };
 
+  const importPipesProfile = async () => {
+    const profileIdInput = pipesProfileId.trim();
+    if (!profileIdInput) {
+      setError("Pipes profileId is required.");
+      return;
+    }
+
+    setPipesProfileLoading(true);
+    setError(null);
+    setSaveProfileNotice(null);
+    try {
+      const response = await apiClient.pipes.prismProfilePreview(profileIdInput);
+      if (!response.profile) {
+        setError(response.message);
+        return;
+      }
+      const profile: SimulationProfile = {
+        profileId: response.profile.profileId,
+        attributes: {
+          ...response.profile.attributes,
+          deciengine_profile_source: response.source
+        },
+        audiences: response.profile.audiences,
+        consents: response.profile.consents
+      };
+      importMeiroProfile(profile);
+      setProfileId(profile.profileId);
+      setStackProfileId(profile.profileId);
+      setInAppProfileId(profile.profileId);
+      setSaveProfileNotice(
+        `Imported cached Pipes profile ${profile.profileId} with ${profile.audiences.length} audience reference(s).`
+      );
+    } catch (lookupError) {
+      setError(lookupError instanceof Error ? lookupError.message : "Pipes profile import failed");
+    } finally {
+      setPipesProfileLoading(false);
+    }
+  };
+
   const reasonDiff = useMemo(() => {
     if (!previousDecisionResult || !decisionResult) {
       return null;
@@ -712,6 +822,7 @@ export default function SimulatePage() {
         density="compact"
         title="Simulator"
         description={<>Decision simulation and in-app runtime preview in <strong>{environment}</strong>.</>}
+        meta={<MeiroSourceBadge showLinks />}
       />
 
       <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -719,7 +830,7 @@ export default function SimulatePage() {
           Simulator mode
           <select
             value={simulatorType}
-            onChange={(event) => setSimulatorType(event.target.value as "decision" | "inapp")}
+            onChange={(event) => setSimulatorType(event.target.value as "decision" | "stack" | "inapp")}
             className={inputClassName}
           >
             <option value="decision">Decision</option>
@@ -738,7 +849,7 @@ export default function SimulatePage() {
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
                 <option value="simulate">Simulate (inline profile)</option>
-                <option value="decide">Decide API (profileId/WBS lookup)</option>
+                <option value="decide">{isPipesSource ? "Decide API (cached Pipes profileId)" : "Decide API (profileId/WBS lookup)"}</option>
               </select>
             </label>
 
@@ -822,44 +933,77 @@ export default function SimulatePage() {
                     </select>
                   </label>
                 ) : null}
-                <div className="md:col-span-2 lg:col-span-3">
-                  <MeiroProfileSearch onImportProfile={importMeiroProfile} />
-                </div>
-                <div className="md:col-span-2 lg:col-span-3 rounded-md border border-stone-200 bg-white p-3">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-stone-800">Live Meiro WBS profile</p>
-                      <p className="text-xs text-stone-600">Import returned attributes and exact segment IDs from the configured Meiro CDP instance.</p>
+                {isPipesSource ? (
+                  <div className="md:col-span-2 lg:col-span-3 rounded-md border border-stone-200 bg-white p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-stone-800">Pipes cached profile</p>
+                        <p className="text-xs text-stone-600">
+                          Import an EngineProfile warmed by Pipes callbacks.{" "}
+                          {pipesFieldCounts
+                            ? `${pipesFieldCounts.attributes} attributes and ${pipesFieldCounts.audiences} audiences are available in the Pipes field registry.`
+                            : "Field registry metadata loads from Pipes when available."}
+                        </p>
+                      </div>
+                      <Button size="sm" variant="outline" onClick={() => void importPipesProfile()} disabled={pipesProfileLoading}>
+                        {pipesProfileLoading ? "Importing..." : "Import Pipes profile"}
+                      </Button>
                     </div>
-                    <Button size="sm" variant="outline" onClick={() => void importMeiroWbsProfile()} disabled={meiroWbsLoading}>
-                      {meiroWbsLoading ? "Importing..." : "Import WBS profile"}
-                    </Button>
-                  </div>
-                  <div className="grid gap-2 md:grid-cols-[180px_1fr_180px]">
                     <label className="flex flex-col gap-1 text-xs text-stone-600">
-                      Attribute
-                      <input className={inputClassName} value={meiroWbsAttribute} onChange={(event) => setMeiroWbsAttribute(event.target.value)} />
-                    </label>
-                    <label className="flex flex-col gap-1 text-xs text-stone-600">
-                      Value
+                      Profile ID
                       <input
                         className={inputClassName}
-                        value={meiroWbsValue}
-                        onChange={(event) => setMeiroWbsValue(event.target.value)}
-                        placeholder="customer identifier allowed by WBS"
+                        value={pipesProfileId}
+                        onChange={(event) => setPipesProfileId(event.target.value)}
+                        placeholder="profileId previously upserted by Pipes"
                       />
                     </label>
-                    <label className="flex flex-col gap-1 text-xs text-stone-600">
-                      Category ID
-                      <input
-                        className={inputClassName}
-                        value={meiroWbsCategoryId}
-                        onChange={(event) => setMeiroWbsCategoryId(event.target.value)}
-                        placeholder="optional"
-                      />
-                    </label>
+                    <p className="mt-2 text-xs text-stone-600">
+                      Missing profiles need to arrive through `/v1/profiles/upsert` first; this keeps Simulator aligned with the active Pipes source.
+                    </p>
                   </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="md:col-span-2 lg:col-span-3">
+                      <MeiroProfileSearch onImportProfile={importMeiroProfile} />
+                    </div>
+                    <div className="md:col-span-2 lg:col-span-3 rounded-md border border-stone-200 bg-white p-3">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-stone-800">Live Meiro WBS profile</p>
+                          <p className="text-xs text-stone-600">Import returned attributes and exact segment IDs from the configured Meiro CDP instance.</p>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => void importMeiroWbsProfile()} disabled={meiroWbsLoading}>
+                          {meiroWbsLoading ? "Importing..." : "Import WBS profile"}
+                        </Button>
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-[180px_1fr_180px]">
+                        <label className="flex flex-col gap-1 text-xs text-stone-600">
+                          Attribute
+                          <input className={inputClassName} value={meiroWbsAttribute} onChange={(event) => setMeiroWbsAttribute(event.target.value)} />
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-stone-600">
+                          Value
+                          <input
+                            className={inputClassName}
+                            value={meiroWbsValue}
+                            onChange={(event) => setMeiroWbsValue(event.target.value)}
+                            placeholder="customer identifier allowed by WBS"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-stone-600">
+                          Category ID
+                          <input
+                            className={inputClassName}
+                            value={meiroWbsCategoryId}
+                            onChange={(event) => setMeiroWbsCategoryId(event.target.value)}
+                            placeholder="optional"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <>
@@ -870,14 +1014,14 @@ export default function SimulatePage() {
                     onChange={(event) => setDecideLookupMode(event.target.value as "profileId" | "lookup")}
                     className="rounded-md border border-stone-300 px-2 py-1"
                   >
-                    <option value="profileId">profileId</option>
-                    <option value="lookup">WBS lookup</option>
+                    <option value="profileId">{profileIdLabel}</option>
+                    <option value="lookup">{lookupModeLabel}</option>
                   </select>
                 </label>
 
                 {decideLookupMode === "profileId" ? (
                   <label className="flex flex-col gap-1 text-sm">
-                    profileId
+                    {profileIdLabel}
                     <input
                       value={profileId}
                       onChange={(event) => setProfileId(event.target.value)}
@@ -955,14 +1099,14 @@ export default function SimulatePage() {
                 onChange={(event) => setStackLookupMode(event.target.value as "profileId" | "lookup")}
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
-                <option value="profileId">profileId</option>
-                <option value="lookup">WBS lookup</option>
+                <option value="profileId">{profileIdLabel}</option>
+                <option value="lookup">{lookupModeLabel}</option>
               </select>
             </label>
 
             {stackLookupMode === "profileId" ? (
               <label className="flex flex-col gap-1 text-sm">
-                profileId
+                {profileIdLabel}
                 <input
                   value={stackProfileId}
                   onChange={(event) => setStackProfileId(event.target.value)}
@@ -1058,14 +1202,14 @@ export default function SimulatePage() {
                 onChange={(event) => setInAppLookupMode(event.target.value as "profileId" | "lookup")}
                 className="rounded-md border border-stone-300 px-2 py-1"
               >
-                <option value="profileId">profileId</option>
-                <option value="lookup">WBS lookup</option>
+                <option value="profileId">{profileIdLabel}</option>
+                <option value="lookup">{lookupModeLabel}</option>
               </select>
             </label>
 
             {inAppLookupMode === "profileId" ? (
               <label className="flex flex-col gap-1 text-sm">
-                profileId
+                {profileIdLabel}
                 <input
                   value={inAppProfileId}
                   onChange={(event) => setInAppProfileId(event.target.value)}

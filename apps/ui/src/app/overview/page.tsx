@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
+import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import { Card } from "../../components/ui/card";
 import { InlineError } from "../../components/ui/app-state";
 import { PageHeader } from "../../components/ui/page";
@@ -213,7 +214,12 @@ export default function OverviewPage() {
         eyebrow="Governed Activation"
         title="Operational Heartbeat"
         description={`System status, delivery reliability, and recent activation activity for ${environment}.`}
-        meta={`Last refreshed: ${lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleString() : "Not loaded yet"}`}
+        meta={
+          <div className="flex flex-wrap gap-2">
+            <span>Last refreshed: {lastRefreshedAt ? new Date(lastRefreshedAt).toLocaleString() : "Not loaded yet"}</span>
+            <MeiroSourceBadge compact showLinks />
+          </div>
+        }
       />
 
       {error ? <InlineError title="Heartbeat partially unavailable" description={error} /> : null}

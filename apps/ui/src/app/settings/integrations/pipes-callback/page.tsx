@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { MeiroSourceBadge } from "../../../../components/meiro/MeiroSourceBadge";
 import { apiClient, type PipesCallbackConfigResponse } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 import { Button } from "../../../../components/ui/button";
@@ -207,6 +208,7 @@ export default function PipesCallbackSettingsPage() {
         density="compact"
         title="Pipes Callback Settings"
         description={`Configure Governed Activation callback delivery (${environment}). Effective source: ${source}`}
+        meta={<MeiroSourceBadge compact />}
       />
 
       <PagePanel density="compact" className="space-y-2">
@@ -231,7 +233,7 @@ export default function PipesCallbackSettingsPage() {
           <div>
             <h3 className="font-semibold">Meiro Pipes prefill</h3>
             <p className="text-sm text-stone-600">
-              Uses the configured Pipes environment to prepare decision-result callbacks for profile updates.
+              Uses the configured Pipes environment to send decision-engine action events into the Pipes collect endpoint.
             </p>
           </div>
           <Button variant="outline" onClick={applyPipesPrefill} disabled={!pipesPrefill?.available || loading}>

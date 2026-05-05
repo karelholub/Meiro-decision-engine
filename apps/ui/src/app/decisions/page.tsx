@@ -9,6 +9,7 @@ import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../l
 import { usePermissions } from "../../lib/permissions";
 import { Button } from "../../components/ui/button";
 import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
+import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import {
   DecisionViewToggle,
   DecisionsCompactTable,
@@ -30,6 +31,7 @@ export default function DecisionsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(true);
+  const [showDemoFixtures, setShowDemoFixtures] = useState(false);
   const [sortBy, setSortBy] = useState<DecisionSortField>("updated");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [view, setView] = useState<DecisionListView>("expanded");
@@ -87,14 +89,22 @@ export default function DecisionsPage() {
 
   const summaries = useMemo(() => buildDecisionSummaries(items), [items]);
 
+  const productionSummaries = useMemo(() => {
+    if (showDemoFixtures) {
+      return summaries;
+    }
+    const fixturePattern = /(^|[_\-\s])(demo|test|e2e|fixture|sample|wizard_e2e|playground)([_\-\s]|$)/i;
+    return summaries.filter((item) => !fixturePattern.test(`${item.key} ${item.name}`));
+  }, [showDemoFixtures, summaries]);
+
   useEffect(() => {
-    setView(resolveDecisionListView(environment, summaries.length));
-  }, [environment, summaries.length]);
+    setView(resolveDecisionListView(environment, productionSummaries.length));
+  }, [environment, productionSummaries.length]);
 
   const displayedSummaries = useMemo(() => {
-    const filtered = showArchived ? summaries : summaries.filter((item) => item.status !== "ARCHIVED_ONLY");
+    const filtered = showArchived ? productionSummaries : productionSummaries.filter((item) => item.status !== "ARCHIVED_ONLY");
     return sortDecisionSummaries(filtered, sortBy, sortDirection);
-  }, [showArchived, sortBy, sortDirection, summaries]);
+  }, [showArchived, sortBy, sortDirection, productionSummaries]);
 
   const resetCreateForm = () => {
     setCreateKey("");
@@ -184,7 +194,8 @@ export default function DecisionsPage() {
       <PageHeader
         density="compact"
         title="Decisions"
-        description={`Search, filter, and manage decision versions in ${environment}.`}
+        description={`Search, filter, and manage production decision versions in ${environment}.`}
+        meta={<MeiroSourceBadge showLinks />}
         actions={
           hasPermission("decision.activate") ? (
             <Link href="/decisions/approvals" className="rounded-md border border-stone-300 px-3 py-1 text-sm">
@@ -225,6 +236,11 @@ export default function DecisionsPage() {
         <label className="inline-flex items-center gap-2 text-sm">
           <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
           Show archived
+        </label>
+
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={showDemoFixtures} onChange={(event) => setShowDemoFixtures(event.target.checked)} />
+          Show demo/test
         </label>
 
         <FieldLabel className="flex flex-col gap-1">

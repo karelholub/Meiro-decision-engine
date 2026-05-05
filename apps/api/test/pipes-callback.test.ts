@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDeliveryTaskPayload,
   computeDeliveryId,
   deliverCallbackTask,
   redactCallbackValue,
@@ -25,6 +26,82 @@ const baseConfig: EffectivePipesCallbackConfig = {
 };
 
 describe("pipes callback", () => {
+  it("builds Pipes collect payloads with decision-engine event types", () => {
+    const payload = buildDeliveryTaskPayload({
+      config: baseConfig,
+      deliveryId: "delivery-1",
+      correlationId: "corr-1",
+      environment: "DEV",
+      appKey: "storefront",
+      mode: "full",
+      decisionKey: "homepage_offer",
+      profile: {
+        profileId: "profile-1",
+        attributes: { email: "alex@example.com" },
+        audiences: ["vip"],
+        consents: []
+      },
+      context: { placement: "homepage_hero" },
+      eligible: true,
+      result: { actionType: "inapp_message", payload: { contentKey: "hero_offer" } },
+      reasons: [],
+      missingFields: [],
+      typeIssues: [],
+      meta: {
+        latencyMs: {
+          total: 12,
+          engine: 8
+        }
+      },
+      now: new Date("2026-05-04T13:00:00.000Z")
+    });
+
+    expect(payload.event_type).toBe("inapp_message");
+    expect(payload.event_time).toBe("2026-05-04T13:00:00.000Z");
+    expect(payload.event_payload).toMatchObject({
+      event_id: "delivery-1",
+      customer_id: "profile-1",
+      profile_id: "profile-1",
+      source_system: "decision-engine",
+      schema_version: "decision_engine_collect.v1",
+      decision_key: "homepage_offer",
+      placement_key: "homepage_hero",
+      action_type: "inapp_message",
+      eligible: true
+    });
+  });
+
+  it("uses eligibility_check for eligibility-only callback payloads", () => {
+    const payload = buildDeliveryTaskPayload({
+      config: baseConfig,
+      deliveryId: "delivery-2",
+      correlationId: "corr-2",
+      environment: "DEV",
+      mode: "eligibility_only",
+      profile: {
+        profileId: "profile-2",
+        attributes: {},
+        audiences: [],
+        consents: []
+      },
+      context: {},
+      eligible: true,
+      result: null,
+      reasons: [],
+      missingFields: [],
+      typeIssues: [],
+      meta: {
+        latencyMs: {
+          total: 3,
+          engine: 2
+        }
+      },
+      now: new Date("2026-05-04T13:00:00.000Z")
+    });
+
+    expect(payload.event_type).toBe("eligibility_check");
+  });
+
   it("computes deterministic delivery ids within the same bucket", () => {
     const a = computeDeliveryId({
       environment: "DEV",

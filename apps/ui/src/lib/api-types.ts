@@ -119,6 +119,52 @@ export type PipesPrismFieldRegistryResponse = {
   };
 };
 
+export type PipesPrismProfilePreviewResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  source: "cached_pipes_profile";
+  profile: {
+    profileId: string;
+    attributes: Record<string, unknown>;
+    audiences: string[];
+    consents: string[];
+  } | null;
+  cacheKey: string;
+  status: "ready" | "missing";
+  message: string;
+};
+
+export type ProfileUpsertStatusResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  cache: {
+    redisEnabled: boolean;
+    ttlSeconds: number;
+    inMemoryMaxEntries: number;
+  };
+  totals: {
+    attempts: number;
+    succeeded: number;
+    unauthorized: number;
+    invalidBody: number;
+    errors: number;
+  };
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastProfileIdHash: string | null;
+  recent: Array<{
+    ts: string;
+    status: "ok" | "unauthorized" | "invalid_body" | "error";
+    environment: "DEV" | "STAGE" | "PROD";
+    requestId: string | null;
+    profileIdHash: string | null;
+    appKey: string | null;
+    sourceTs: string | null;
+    segmentsCount: number | null;
+    attributeCount: number | null;
+    error: string | null;
+  }>;
+};
+
 export type PipesPrismMappingRecommendationsResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   sourceMode?: "pipes_cli" | "meiro_mcp";

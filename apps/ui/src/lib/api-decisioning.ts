@@ -25,12 +25,14 @@ import { apiFetch, toQuery } from "./api-core";
 import type {
   PipesPrismCheckResponse,
   PipesPrismFieldRegistryResponse,
+  PipesPrismProfilePreviewResponse,
   PipesPrismImportCandidatesResponse,
   PipesPrismImportDraftsResponse,
   PipesPrismImportPreviewResponse,
   PipesPrismImportSnapshotResponse,
   PipesPrismMappingRecommendationsResponse,
   PipesPrismStatusResponse,
+  ProfileUpsertStatusResponse,
   PipesRequirementsResponse,
   PipesInlineEvaluateResponse
 } from "./api-types";
@@ -314,6 +316,9 @@ export const decisioningApiClient = {
         method: "POST"
     }),
     prismFieldRegistry: () => apiFetch<PipesPrismFieldRegistryResponse>(`/v1/settings/pipes-prism/field-registry`),
+    profileUpsertStatus: () => apiFetch<ProfileUpsertStatusResponse>(`/v1/profiles/upsert/status`),
+    prismProfilePreview: (profileId: string) =>
+      apiFetch<PipesPrismProfilePreviewResponse>(`/v1/settings/pipes-prism/profile-preview${toQuery({ profileId })}`),
     prismMappingRecommendations: () => apiFetch<PipesPrismMappingRecommendationsResponse>(`/v1/settings/pipes-prism/mapping-recommendations`),
     prismImportPreview: () => apiFetch<PipesPrismImportPreviewResponse>(`/v1/settings/pipes-prism/import-preview`),
     prismImportDrafts: (input: {
