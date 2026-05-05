@@ -276,17 +276,20 @@ export default function MeiroWorkspacePage() {
     <section className="space-y-4">
       <PageHeader
         density="compact"
-        eyebrow="Meiro"
-        title="Decision Workspace"
-        description={`One guided path from internal Pipes audiences and cached profiles to simulation, precompute, callback delivery, and measurement review in ${environment}.`}
+        eyebrow="Meiro / Pipes"
+        title="Audiences & Profiles"
+        description={`Select an internal Pipes audience, verify cached profile membership, then simulate or precompute decision results in ${environment}.`}
         meta={<MeiroSourceBadge showLinks />}
         actions={
           <>
             <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh"}
             </Button>
+            <ButtonLink size="sm" variant="outline" href="/engage/calendar">
+              Calendar
+            </ButtonLink>
             <ButtonLink size="sm" variant="outline" href="/settings/integrations/pipes">
-              Source setup
+              Pipes setup
             </ButtonLink>
           </>
         }
@@ -326,9 +329,9 @@ export default function MeiroWorkspacePage() {
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <PagePanel density="compact" className="space-y-4">
           <div>
-            <h3 className="font-semibold">Run a Meiro decision flow</h3>
+            <h3 className="font-semibold">Run an audience decision flow</h3>
             <p className="mt-1 text-sm text-stone-700">
-              Select a production decision and a Pipes audience, then simulate or warm precomputed results.
+              Pick the audience first, then use the same profile set for campaign simulation, precompute, and callback delivery checks.
             </p>
           </div>
 

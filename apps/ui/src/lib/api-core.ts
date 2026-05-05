@@ -5,6 +5,25 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
 const API_USER_EMAIL = process.env.NEXT_PUBLIC_USER_EMAIL;
 export const USER_EMAIL_STORAGE_KEY = "decisioning_user_email";
 
+const localHostnames = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+const resolveApiBaseUrl = () => {
+  if (typeof window === "undefined") {
+    return API_BASE_URL;
+  }
+  try {
+    const configured = new URL(API_BASE_URL);
+    const pageHost = window.location.hostname;
+    if (localHostnames.has(configured.hostname) && pageHost && !localHostnames.has(pageHost)) {
+      configured.hostname = pageHost;
+      return configured.toString().replace(/\/$/, "");
+    }
+  } catch {
+    return API_BASE_URL;
+  }
+  return API_BASE_URL;
+};
+
 const getStoredUserEmail = (): string | null => {
   if (typeof window === "undefined") {
     return null;
@@ -63,7 +82,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
   headers.set("X-ENV", getEnvironment());
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
     ...init,
     headers,
     cache: "no-store"
@@ -92,7 +111,7 @@ export async function apiFetchText(path: string, init?: RequestInit): Promise<st
   }
   headers.set("X-ENV", getEnvironment());
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
     ...init,
     headers,
     cache: "no-store"
