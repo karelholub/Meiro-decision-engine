@@ -14,8 +14,10 @@ import {
 } from "../../../components/ui/operational-table";
 import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { EndsSoonBadge, StatusBadge } from "../../../components/ui/status-badges";
+import { MeiroAudienceWorkflowPanel } from "../../../components/meiro/MeiroAudienceWorkflowPanel";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { apiClient } from "../../../lib/api";
+import { readStoredMeiroAudience, storeMeiroAudience } from "../../../lib/meiro-audience-context";
 import { usePermissions } from "../../../lib/permissions";
 import {
   defaultColumns,
@@ -49,6 +51,7 @@ export default function CampaignInventoryPage() {
   const [viewsOpen, setViewsOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
   const [prefs, setPrefs] = useState(defaultPrefs());
+  const [audienceKey, setAudienceKey] = useState("");
 
   useEffect(() => {
     const loaded = loadInventoryPrefs();
@@ -58,11 +61,17 @@ export default function CampaignInventoryPage() {
     if (activeView) {
       setFilters(activeView.filters);
     }
+    const params = new URLSearchParams(window.location.search);
+    setAudienceKey(params.get("audienceKey") ?? params.get("audience") ?? params.get("segment") ?? readStoredMeiroAudience());
   }, []);
 
   useEffect(() => {
     saveInventoryPrefs({ ...prefs, sort });
   }, [prefs, sort]);
+
+  useEffect(() => {
+    storeMeiroAudience(audienceKey);
+  }, [audienceKey]);
 
   const loadPage = async (cursor: string | null, reset = false) => {
     setLoading(true);
@@ -167,6 +176,10 @@ export default function CampaignInventoryPage() {
   };
 
   const activeColumns = prefs.columns;
+  const createCampaignHref = audienceKey
+    ? `/engage/campaigns/new/edit?appKey=meiro_store&placementKey=home_top&audienceKey=${encodeURIComponent(audienceKey)}`
+    : "/engage/campaigns/new/edit";
+  const calendarHref = audienceKey ? `/engage/calendar?audienceKey=${encodeURIComponent(audienceKey)}` : "/engage/calendar";
 
   return (
     <div className="space-y-4">
@@ -178,8 +191,8 @@ export default function CampaignInventoryPage() {
         meta={<MeiroSourceBadge showLinks />}
         actions={
           <>
-            <ButtonLink size="sm" href="/engage/calendar" variant="default">Open calendar</ButtonLink>
-            {canWrite ? <ButtonLink size="sm" href="/engage/campaigns/new/edit">Create campaign</ButtonLink> : null}
+            <ButtonLink size="sm" href={calendarHref} variant="default">Open calendar</ButtonLink>
+            {canWrite ? <ButtonLink size="sm" href={createCampaignHref}>Create campaign</ButtonLink> : null}
             <Button size="sm" variant="outline" onClick={() => void loadPage(null, true)} disabled={loading}>Refresh</Button>
           </>
         }
@@ -187,6 +200,7 @@ export default function CampaignInventoryPage() {
 
       {error ? <InlineError title="Campaign inventory unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
+      <MeiroAudienceWorkflowPanel audience={audienceKey} currentStep="campaigns" onClear={() => setAudienceKey("")} />
 
       <FilterPanel density="compact">
         <div className="grid gap-x-2 gap-y-2 md:grid-cols-6">

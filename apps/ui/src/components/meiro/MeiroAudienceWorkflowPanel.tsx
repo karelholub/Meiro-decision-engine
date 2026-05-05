@@ -1,0 +1,82 @@
+"use client";
+
+import Link from "next/link";
+import { ButtonLink } from "../ui/button";
+import { PagePanel } from "../ui/page";
+import { normalizeMeiroAudienceRef, stripMeiroAudiencePrefix } from "../../lib/meiro-audience-context";
+import { MeiroAudienceContextStrip } from "./MeiroAudienceContextStrip";
+
+type AudienceWorkflowStep = "audiences" | "calendar" | "campaigns" | "control" | "simulate" | "precompute" | "callback";
+
+type MeiroAudienceWorkflowPanelProps = {
+  audience: string;
+  currentStep?: AudienceWorkflowStep;
+  onClear?: () => void;
+  className?: string;
+};
+
+const stepClassName = (active: boolean) =>
+  `rounded-md border px-3 py-2 text-sm ${
+    active ? "border-sky-300 bg-sky-50 text-sky-900" : "border-stone-200 bg-stone-50 text-stone-700"
+  }`;
+
+export function MeiroAudienceWorkflowPanel({ audience, currentStep, onClear, className = "" }: MeiroAudienceWorkflowPanelProps) {
+  const normalizedAudience = normalizeMeiroAudienceRef(audience);
+  const audienceKey = stripMeiroAudiencePrefix(normalizedAudience);
+  const audienceParam = audienceKey ? `?audienceKey=${encodeURIComponent(audienceKey)}` : "";
+  const fullAudienceParam = normalizedAudience ? `?audienceKey=${encodeURIComponent(normalizedAudience)}` : "";
+
+  const hrefs = {
+    audiences: `/engage/audiences${audienceParam}`,
+    calendar: `/engage/calendar${fullAudienceParam}`,
+    campaign: normalizedAudience
+      ? `/engage/campaigns/new/edit?appKey=meiro_store&placementKey=home_top&audienceKey=${encodeURIComponent(normalizedAudience)}`
+      : "/engage/campaigns/new/edit?appKey=meiro_store&placementKey=home_top",
+    simulate: normalizedAudience ? `/simulate?audienceKey=${encodeURIComponent(normalizedAudience)}` : "/simulate",
+    precompute: normalizedAudience ? `/execution/precompute?segment=${encodeURIComponent(normalizedAudience)}` : "/execution/precompute",
+    callback: "/settings/integrations/pipes-callback"
+  };
+
+  return (
+    <PagePanel density="compact" className={`space-y-3 ${className}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-stone-900">Pipes audience workflow</p>
+          <p className="mt-1 text-sm text-stone-700">
+            {normalizedAudience
+              ? "This page is using the selected Pipes audience for planning, activation, simulation, and precompute handoff."
+              : "Select a Pipes audience to carry one segment through planning, activation, simulation, and precompute."}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <ButtonLink size="sm" variant="outline" href={hrefs.audiences}>
+            Audiences
+          </ButtonLink>
+          <ButtonLink size="sm" href={hrefs.campaign}>
+            Create campaign
+          </ButtonLink>
+        </div>
+      </div>
+
+      <MeiroAudienceContextStrip audience={normalizedAudience} onClear={onClear} />
+
+      <div className="grid gap-2 md:grid-cols-6">
+        <WorkflowLink active={currentStep === "audiences"} href={hrefs.audiences} label="Profiles" detail="Verify cache" />
+        <WorkflowLink active={currentStep === "calendar"} href={hrefs.calendar} label="Calendar" detail="Plan pressure" />
+        <WorkflowLink active={currentStep === "campaigns" || currentStep === "control"} href={hrefs.campaign} label="Create" detail="Campaign" />
+        <WorkflowLink active={currentStep === "simulate"} href={hrefs.simulate} label="Simulate" detail="Decision fit" />
+        <WorkflowLink active={currentStep === "precompute"} href={hrefs.precompute} label="Precompute" detail="Warm results" />
+        <WorkflowLink active={currentStep === "callback"} href={hrefs.callback} label="Callback" detail="Deliver profile" />
+      </div>
+    </PagePanel>
+  );
+}
+
+function WorkflowLink({ active, href, label, detail }: { active: boolean; href: string; label: string; detail: string }) {
+  return (
+    <Link className={stepClassName(active)} href={href}>
+      <span className="block font-medium">{label}</span>
+      <span className="mt-0.5 block text-xs opacity-80">{detail}</span>
+    </Link>
+  );
+}

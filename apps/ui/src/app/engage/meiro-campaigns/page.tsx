@@ -6,6 +6,7 @@ import { InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
+import { MeiroAudienceWorkflowPanel } from "../../../components/meiro/MeiroAudienceWorkflowPanel";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { apiClient, type MeiroCampaignChannel, type MeiroCampaignRecord } from "../../../lib/api";
@@ -117,6 +118,10 @@ export default function MeiroCampaignControlPage() {
   const activeChannel = channelOptions.find((option) => option.value === channel) ?? { value: "email", label: "Email", description: "Newsletter and broadcast sends" };
   const selectedSegmentRefs = selectedOperationalDetail?.segmentRefs ?? [];
   const firstOperationalSegment = selectedSegmentRefs[0] ?? activationSegmentIds[0] ?? null;
+  const workflowAudience = activationSegmentIds[0] ?? segmentInput;
+  const calendarHref = workflowAudience
+    ? `/engage/calendar?sourceType=meiro_campaign&audienceKey=${encodeURIComponent(workflowAudience)}`
+    : "/engage/calendar?sourceType=meiro_campaign";
 
   const loadCampaigns = async (preferredId = selectedId) => {
     setLoading(true);
@@ -330,7 +335,7 @@ export default function MeiroCampaignControlPage() {
             <ButtonLink size="sm" href="/engage/meiro-workbench" variant="outline">
               Workbench
             </ButtonLink>
-            <ButtonLink size="sm" href="/engage/calendar?sourceType=meiro_campaign" variant="outline">
+            <ButtonLink size="sm" href={calendarHref} variant="outline">
               Calendar
             </ButtonLink>
             <Button size="sm" variant="outline" onClick={() => void onRefresh()} disabled={loading}>
@@ -343,6 +348,15 @@ export default function MeiroCampaignControlPage() {
 
       {error ? <InlineError title="Meiro campaign control unavailable" description={error} /> : null}
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{message}</div> : null}
+      <MeiroAudienceWorkflowPanel
+        audience={workflowAudience}
+        currentStep="control"
+        onClear={() => {
+          setActivationSegmentIds([]);
+          setSegmentInput("");
+          storeMeiroAudience("");
+        }}
+      />
 
       <section className="grid gap-3 md:grid-cols-6">
         <MetricCard label="Loaded" value={controlSummary.total} detail={`${activeChannel.label} campaigns`} />
