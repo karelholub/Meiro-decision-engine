@@ -8,6 +8,7 @@ import { SignalChip } from "../../components/ui/badge";
 import { Button, ButtonLink } from "../../components/ui/button";
 import { MetricCard } from "../../components/ui/card";
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
+import { MeiroAudienceContextStrip } from "../../components/meiro/MeiroAudienceContextStrip";
 import { MeiroSegmentPicker } from "../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import {
@@ -19,6 +20,7 @@ import {
   type ProfileUpsertStatusResponse
 } from "../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience } from "../../lib/meiro-audience-context";
 
 type RunItem = {
   runKey: string;
@@ -70,6 +72,18 @@ export default function MeiroWorkspacePage() {
   useEffect(() => {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const requestedAudience = params.get("audienceKey") ?? params.get("audience") ?? params.get("segment");
+    const nextAudience = requestedAudience ? normalizeMeiroAudienceRef(requestedAudience) : readStoredMeiroAudience();
+    if (nextAudience) {
+      setSelectedAudience(nextAudience);
+    }
   }, []);
 
   const load = async () => {
@@ -141,6 +155,10 @@ export default function MeiroWorkspacePage() {
       cancelled = true;
     };
   }, [selectedAudienceRef, profileUpsertStatus?.lastSuccessAt]);
+
+  useEffect(() => {
+    storeMeiroAudience(selectedAudienceRef);
+  }, [selectedAudienceRef]);
 
   const precomputeHref = useMemo(() => {
     const params = new URLSearchParams();
@@ -297,6 +315,7 @@ export default function MeiroWorkspacePage() {
 
       {error ? <InlineError title="Workspace unavailable" description={error} /> : null}
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{message}</div> : null}
+      <MeiroAudienceContextStrip audience={selectedAudienceRef} onClear={() => setSelectedAudience("")} />
       {loading ? <LoadingState title="Loading Meiro workspace" /> : null}
 
       <section className="grid gap-3 md:grid-cols-4">

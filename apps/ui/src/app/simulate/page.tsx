@@ -11,6 +11,7 @@ import type {
 } from "@decisioning/shared";
 import { parseLegacyKey } from "@decisioning/shared";
 import { InlineError } from "../../components/ui/app-state";
+import { MeiroAudienceContextStrip } from "../../components/meiro/MeiroAudienceContextStrip";
 import { MeiroProfileSearch } from "../../components/meiro/MeiroProfileSearch";
 import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import { Button } from "../../components/ui/button";
@@ -20,6 +21,7 @@ import { ApiError, apiClient, type InAppV2DecideResponse, type PipesPrismStatusR
 import { useAppEnumSettings } from "../../lib/app-enum-settings";
 import type { DependencyItem } from "../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
+import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience } from "../../lib/meiro-audience-context";
 import { useRegistry } from "../../lib/registry";
 
 const CUSTOM_LOOKUP_ATTRIBUTE = "__custom_lookup_attribute__";
@@ -135,6 +137,7 @@ export default function SimulatePage() {
   const [pipesFieldCounts, setPipesFieldCounts] = useState<{ attributes: number; audiences: number } | null>(null);
   const [pipesProfileId, setPipesProfileId] = useState("p-1001");
   const [pipesProfileLoading, setPipesProfileLoading] = useState(false);
+  const [selectedAudienceContext, setSelectedAudienceContext] = useState("");
 
   const [inAppAppKey, setInAppAppKey] = useState("meiro_store");
   const [inAppPlacement, setInAppPlacement] = useState("home_top");
@@ -168,6 +171,22 @@ export default function SimulatePage() {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const requestedAudience = params.get("audienceKey") ?? params.get("audience") ?? params.get("segment");
+    const nextAudience = requestedAudience ? normalizeMeiroAudienceRef(requestedAudience) : readStoredMeiroAudience();
+    if (nextAudience) {
+      setSelectedAudienceContext(nextAudience);
+    }
+  }, []);
+
+  useEffect(() => {
+    storeMeiroAudience(selectedAudienceContext);
+  }, [selectedAudienceContext]);
 
   const selectedSavedProfile = useMemo(
     () => savedProfiles.find((profile) => profile.profileId === savedProfileId) ?? defaultSavedProfile,
@@ -644,6 +663,29 @@ export default function SimulatePage() {
     }
   };
 
+  const applyAudienceToProfileJson = () => {
+      const audience = normalizeMeiroAudienceRef(selectedAudienceContext);
+      if (!audience) {
+        return;
+      }
+    try {
+      const parsedProfile = profileInputMode === "json" ? toSimulationProfile(JSON.parse(profileJson)) : selectedSavedProfile;
+      if (!parsedProfile) {
+        setError("Profile JSON must include a profileId before applying the selected audience.");
+        return;
+      }
+      const nextProfile: SimulationProfile = {
+        ...parsedProfile,
+        audiences: [...new Set([...parsedProfile.audiences, audience])]
+      };
+      setProfileJson(pretty(nextProfile));
+      setProfileInputMode("json");
+      setSaveProfileNotice(`Prepared simulation profile with ${audience}.`);
+    } catch {
+      setError("Profile JSON is invalid; fix it before applying the selected audience.");
+    }
+  };
+
   const reasonDiff = useMemo(() => {
     if (!previousDecisionResult || !decisionResult) {
       return null;
@@ -825,6 +867,14 @@ export default function SimulatePage() {
         meta={<MeiroSourceBadge showLinks />}
       />
 
+      <MeiroAudienceContextStrip
+        audience={selectedAudienceContext}
+        onClear={() => {
+          setSelectedAudienceContext("");
+          storeMeiroAudience("");
+        }}
+      />
+
       <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">
           Simulator mode
@@ -947,6 +997,9 @@ export default function SimulatePage() {
                       </div>
                       <Button size="sm" variant="outline" onClick={() => void importPipesProfile()} disabled={pipesProfileLoading}>
                         {pipesProfileLoading ? "Importing..." : "Import Pipes profile"}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={applyAudienceToProfileJson} disabled={!selectedAudienceContext.trim()}>
+                        Use audience in profile
                       </Button>
                     </div>
                     <label className="flex flex-col gap-1 text-xs text-stone-600">

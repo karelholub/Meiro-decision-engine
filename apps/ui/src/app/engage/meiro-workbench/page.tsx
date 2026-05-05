@@ -9,6 +9,7 @@ import {
   MeiroSegmentUsageList
 } from "../../../components/meiro/MeiroIntelligenceCards";
 import { MeiroProfileSearch } from "../../../components/meiro/MeiroProfileSearch";
+import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { InlineError } from "../../../components/ui/app-state";
@@ -23,6 +24,7 @@ import {
   type MeiroCampaignLoadResult,
   type MeiroMetadataSnapshot
 } from "../../../lib/meiro-intelligence";
+import { readStoredMeiroAudience, storeMeiroAudience } from "../../../lib/meiro-audience-context";
 
 const channels: MeiroCampaignChannel[] = ["email", "push", "whatsapp"];
 
@@ -102,6 +104,19 @@ export default function MeiroActivationWorkbenchPage() {
     void loadWorkbench();
   }, []);
 
+  useEffect(() => {
+    const storedAudience = readStoredMeiroAudience();
+    if (storedAudience) {
+      setSelectedSegmentId(storedAudience);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedSegmentId.trim()) {
+      storeMeiroAudience(selectedSegmentId);
+    }
+  }, [selectedSegmentId]);
+
   const summary = useMemo(() => summarizeMeiroWorkbench(campaignResults, metadata), [campaignResults, metadata]);
   const channelSummary = useMemo(() => summarizeMeiroChannels(campaignResults), [campaignResults]);
   const segmentUsage = useMemo(() => summarizeMeiroSegmentUsage(campaignResults, metadata.segments.items), [campaignResults, metadata.segments.items]);
@@ -143,6 +158,13 @@ export default function MeiroActivationWorkbenchPage() {
       />
 
       {error ? <InlineError title="Meiro workbench unavailable" description={error} /> : null}
+      <MeiroAudienceContextStrip
+        audience={selectedSegmentId}
+        onClear={() => {
+          setSelectedSegmentId("");
+          storeMeiroAudience("");
+        }}
+      />
 
       <FilterPanel density="compact">
         <div className="grid gap-3 md:grid-cols-[180px_1fr_1fr]">

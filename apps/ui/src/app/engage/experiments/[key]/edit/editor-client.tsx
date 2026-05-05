@@ -8,12 +8,14 @@ import { EditorActionBar } from "../../../../../components/ui/editor-action-bar"
 import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
 import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { StatusBadge } from "../../../../../components/ui/status-badges";
+import { MeiroAudienceContextStrip } from "../../../../../components/meiro/MeiroAudienceContextStrip";
 import { MeiroSegmentPicker } from "../../../../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../../../../components/meiro/MeiroSourceBadge";
 import { fieldRegistry } from "../../../../../components/decision-builder/field-registry";
 import { apiClient } from "../../../../../lib/api";
 import { useAppEnumSettings } from "../../../../../lib/app-enum-settings";
 import { validateExperimentDependencies } from "../../../../../lib/dependencies";
+import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience } from "../../../../../lib/meiro-audience-context";
 import { usePermissions } from "../../../../../lib/permissions";
 import { useRegistry } from "../../../../../lib/registry";
 import {
@@ -110,8 +112,19 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
         setAdvancedJsonText(pretty(response.item.experimentJson));
       } else {
         const empty = createEmptyExperimentForm();
-        setForm(empty);
-        setAdvancedJsonText(pretty(formToExperimentJson(empty)));
+        const params = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+        const requestedAudience = params.get("audienceKey") ?? params.get("audience") ?? params.get("segment") ?? readStoredMeiroAudience();
+        const next = requestedAudience
+          ? {
+              ...empty,
+              population: {
+                ...empty.population,
+                audiencesAny: [normalizeMeiroAudienceRef(requestedAudience)]
+              }
+            }
+          : empty;
+        setForm(next);
+        setAdvancedJsonText(pretty(formToExperimentJson(next)));
       }
       setError(null);
     } catch (loadError) {
@@ -355,6 +368,12 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
     setAudienceDraft("");
   };
 
+  useEffect(() => {
+    if (form.population.audiencesAny[0]) {
+      storeMeiroAudience(form.population.audiencesAny[0]);
+    }
+  }, [form.population.audiencesAny]);
+
   return (
     <div className="space-y-4">
       <header className="rounded-lg border border-stone-200 bg-white p-4">
@@ -483,6 +502,14 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
                   ) : (
                     <p className="mt-2 text-xs text-amber-700">No population audience selected; experiment applies to all eligible profiles.</p>
                   )}
+                  <MeiroAudienceContextStrip
+                    className="mt-2"
+                    audience={form.population.audiencesAny[0] ?? ""}
+                    onClear={() => {
+                      setForm((current) => ({ ...current, population: { ...current.population, audiencesAny: [] } }));
+                      storeMeiroAudience("");
+                    }}
+                  />
                 </div>
                 <ConditionBuilder title="Eligibility conditions" rows={form.population.attributes} onChange={(rows) => setForm((current) => ({ ...current, population: { ...current.population, attributes: rows } }))} registry={fieldRegistry} pathPrefix="population.attributes" />
               </div>

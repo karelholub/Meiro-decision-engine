@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { StatusBadge } from "../../../components/ui/status-badges";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
+import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
 import { EmptyState, InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import { MetricCard } from "../../../components/ui/card";
@@ -25,6 +26,7 @@ import {
   type ProfileAudienceReadinessResponse
 } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
+import { readStoredMeiroAudience, storeMeiroAudience } from "../../../lib/meiro-audience-context";
 import { activationAssetTypeOptions, activationChannelFilterOptions, campaignCreationHref } from "../../../components/catalog/activationAssetConfig";
 import {
   addMonths,
@@ -975,7 +977,7 @@ export default function CampaignCalendarPage() {
     setChannel(params.get("channel") ?? "");
     setReadiness(params.get("readiness") ?? "");
     setSourceType(params.get("sourceType") ?? "");
-    setAudienceKey(params.get("audienceKey") ?? params.get("audience") ?? "");
+    setAudienceKey(params.get("audienceKey") ?? params.get("audience") ?? readStoredMeiroAudience());
     setOverlapRisk(params.get("overlapRisk") ?? "");
     setPressureRisk(params.get("pressureRisk") ?? "");
     setPressureSignal(params.get("pressureSignal") ?? "");
@@ -1050,6 +1052,10 @@ export default function CampaignCalendarPage() {
     return () => {
       cancelled = true;
     };
+  }, [audienceKey]);
+
+  useEffect(() => {
+    storeMeiroAudience(audienceKey);
   }, [audienceKey]);
 
   useEffect(() => {
@@ -1515,6 +1521,7 @@ export default function CampaignCalendarPage() {
           {message}
         </div>
       ) : null}
+      <MeiroAudienceContextStrip audience={audienceKey} onClear={() => setAudienceKey("")} />
 
       {recentReviewPacks.length > 0 ? (
         <PagePanel className="border-stone-200 bg-white">

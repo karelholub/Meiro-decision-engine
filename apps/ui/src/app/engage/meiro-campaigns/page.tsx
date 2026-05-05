@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
+import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { apiClient, type MeiroCampaignChannel, type MeiroCampaignRecord } from "../../../lib/api";
@@ -16,6 +17,7 @@ import {
   summarizeMeiroCampaignControl,
   type MeiroRiskLevel
 } from "../../../lib/meiro-intelligence";
+import { readStoredMeiroAudience, storeMeiroAudience, stripMeiroAudiencePrefix } from "../../../lib/meiro-audience-context";
 import { usePermissions } from "../../../lib/permissions";
 
 const channelOptions: Array<{ value: MeiroCampaignChannel; label: string; description: string }> = [
@@ -150,7 +152,7 @@ export default function MeiroCampaignControlPage() {
     const params = new URLSearchParams(window.location.search);
     const nextChannel = params.get("channel");
     const campaignId = params.get("campaignId");
-    const segment = params.get("segment") ?? params.get("audienceKey") ?? params.get("audience");
+    const segment = params.get("segment") ?? params.get("audienceKey") ?? params.get("audience") ?? readStoredMeiroAudience();
     if (isMeiroCampaignChannel(nextChannel)) {
       setChannel(nextChannel);
     }
@@ -159,8 +161,15 @@ export default function MeiroCampaignControlPage() {
     }
     if (segment) {
       setActivationSegmentIds(normalizeSegmentInput(segment));
+      setSegmentInput(stripMeiroAudiencePrefix(segment));
     }
   }, []);
+
+  useEffect(() => {
+    if (activationSegmentIds[0]) {
+      storeMeiroAudience(activationSegmentIds[0]);
+    }
+  }, [activationSegmentIds]);
 
   useEffect(() => {
     void loadCampaigns();
@@ -568,6 +577,14 @@ export default function MeiroCampaignControlPage() {
 
               <div className="space-y-2 rounded-md border border-stone-200 p-3">
                 <p className="text-sm font-semibold text-stone-800">Manual activation</p>
+                <MeiroAudienceContextStrip
+                  audience={activationSegmentIds[0] ?? segmentInput}
+                  onClear={() => {
+                    setActivationSegmentIds([]);
+                    setSegmentInput("");
+                    storeMeiroAudience("");
+                  }}
+                />
                 {selectedSegmentRefs.length > 0 ? (
                   <div className="rounded-md border border-sky-200 bg-sky-50 p-2 text-xs text-sky-800">
                     Campaign payload references: {selectedSegmentRefs.map((ref) => `meiro_segment:${ref}`).join(", ")}

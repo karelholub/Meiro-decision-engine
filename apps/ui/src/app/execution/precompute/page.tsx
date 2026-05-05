@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
+import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
 import { Button } from "../../../components/ui/button";
 import {
   OperationalTableShell,
@@ -15,6 +16,7 @@ import {
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
+import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience, stripMeiroAudiencePrefix } from "../../../lib/meiro-audience-context";
 
 type RunItem = {
   runKey: string;
@@ -93,9 +95,9 @@ export default function PrecomputeRunsPage() {
       setMode(stackKey ? "stack" : "decision");
       setKey((stackKey ?? decisionKey ?? "").trim());
     }
-    const segment = params.get("segment") ?? params.get("segmentId") ?? params.get("audienceKey") ?? params.get("audience");
+    const segment = params.get("segment") ?? params.get("segmentId") ?? params.get("audienceKey") ?? params.get("audience") ?? readStoredMeiroAudience();
     if (segment) {
-      const normalized = segment.startsWith("meiro_segment:") ? segment.slice("meiro_segment:".length) : segment;
+      const normalized = stripMeiroAudiencePrefix(segment);
       setCohortType("segment");
       setSegmentSource("meiro");
       setSegmentAttribute("audience");
@@ -117,6 +119,12 @@ export default function PrecomputeRunsPage() {
       );
     }
   }, []);
+
+  useEffect(() => {
+    if (cohortType === "segment" && segmentSource === "meiro") {
+      storeMeiroAudience(segmentValue);
+    }
+  }, [cohortType, segmentSource, segmentValue]);
 
   const loadRuns = async (manual = false, preserveMessage = false) => {
     setLoadingRuns(true);
@@ -222,6 +230,14 @@ export default function PrecomputeRunsPage() {
         title="Precompute Runs"
         description={`Batch decision result generation for high-volume activations. Environment: ${environment}.`}
         meta={<MeiroSourceBadge showLinks />}
+      />
+
+      <MeiroAudienceContextStrip
+        audience={cohortType === "segment" && segmentSource === "meiro" ? normalizeMeiroAudienceRef(segmentValue) : ""}
+        onClear={() => {
+          setSegmentValue("");
+          storeMeiroAudience("");
+        }}
       />
 
       {key.trim() ? (

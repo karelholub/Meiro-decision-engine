@@ -13,6 +13,7 @@ import { parseLegacyKey, toLegacyKey } from "@decisioning/shared";
 import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
 import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { ActivationAssetPicker } from "../../../../../components/catalog/ActivationAssetPicker";
+import { MeiroAudienceContextStrip } from "../../../../../components/meiro/MeiroAudienceContextStrip";
 import { MeiroSegmentPicker } from "../../../../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../../../../components/meiro/MeiroSourceBadge";
 import { SignalChip } from "../../../../../components/ui/badge";
@@ -29,6 +30,7 @@ import { PageHeader, PagePanel, inputClassName } from "../../../../../components
 import { apiClient, type ActivationAssetChannel, type ActivationLibraryItem, type ProfileAudienceReadinessResponse } from "../../../../../lib/api";
 import { validateCampaignDependencies } from "../../../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
+import { readStoredMeiroAudience, storeMeiroAudience } from "../../../../../lib/meiro-audience-context";
 import { usePermissions } from "../../../../../lib/permissions";
 import { useRegistry } from "../../../../../lib/registry";
 
@@ -293,7 +295,14 @@ export default function InAppCampaignEditPage() {
     setLoading(true);
     let loadMessage: string | null = null;
     try {
-      await registry.loadAll();
+      try {
+        await registry.loadAll();
+      } catch (registryError) {
+        if (!isCreateMode) {
+          throw registryError;
+        }
+        loadMessage = "Registry is unavailable. Audience context and URL defaults were still applied; app, placement, template, and assets can be selected after the API recovers.";
+      }
       if (isCreateMode) {
         const createParams = readCreateQueryParams();
         const assetType = queryValue(createParams, "assetType");
@@ -338,7 +347,7 @@ export default function InAppCampaignEditPage() {
         setCapsPerWeek("");
         setStartAt(toDatetimeLocal(queryValue(createParams, "startAt") || null));
         setEndAt(toDatetimeLocal(queryValue(createParams, "endAt") || null));
-        setEligibilityAudiencesAny(requestedAudience ? normalizeAudienceRef(requestedAudience) : "");
+        setEligibilityAudiencesAny(requestedAudience ? normalizeAudienceRef(requestedAudience) : readStoredMeiroAudience());
         setVariants([
           {
             variantKey: "A",
@@ -447,6 +456,12 @@ export default function InAppCampaignEditPage() {
       cancelled = true;
     };
   }, [eligibilityAudienceList.join("|"), environment]);
+
+  useEffect(() => {
+    if (eligibilityAudienceList[0]) {
+      storeMeiroAudience(eligibilityAudienceList[0]);
+    }
+  }, [eligibilityAudienceList]);
 
   const versionDiffPreview = useMemo(() => {
     const latest = versions[0];
@@ -1012,6 +1027,13 @@ export default function InAppCampaignEditPage() {
                 Audiences
               </ButtonLink>
             </div>
+            <MeiroAudienceContextStrip
+              audience={eligibilityAudienceList[0] ?? ""}
+              onClear={() => {
+                setEligibilityAudiencesAny("");
+                storeMeiroAudience("");
+              }}
+            />
             <div className="grid gap-2 md:grid-cols-[1fr_auto]">
               <MeiroSegmentPicker value={audienceDraft} onChange={setAudienceDraft} placeholder="Search or select a Pipes audience" />
               <div className="flex items-start">
