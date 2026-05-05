@@ -307,6 +307,7 @@ export default function InAppCampaignEditPage() {
         const requestedAppKey = queryValue(createParams, "appKey");
         const requestedPlacementKey = queryValue(createParams, "placementKey");
         const requestedTemplateKey = queryValue(createParams, "templateKey");
+        const requestedAudience = queryValue(createParams, "audienceKey") || queryValue(createParams, "audience") || queryValue(createParams, "segment");
         setCampaign(null);
         setVersions([]);
         setAuditLogs([]);
@@ -337,7 +338,7 @@ export default function InAppCampaignEditPage() {
         setCapsPerWeek("");
         setStartAt(toDatetimeLocal(queryValue(createParams, "startAt") || null));
         setEndAt(toDatetimeLocal(queryValue(createParams, "endAt") || null));
-        setEligibilityAudiencesAny("");
+        setEligibilityAudiencesAny(requestedAudience ? normalizeAudienceRef(requestedAudience) : "");
         setVariants([
           {
             variantKey: "A",

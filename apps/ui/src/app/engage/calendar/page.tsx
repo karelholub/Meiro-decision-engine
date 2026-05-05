@@ -21,7 +21,8 @@ import {
   type CampaignCalendarReviewPackRecord,
   type CampaignCalendarSavedViewRecord,
   type CampaignSchedulePreviewResponse,
-  type MeiroMcpSegment
+  type MeiroMcpSegment,
+  type ProfileAudienceReadinessResponse
 } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
 import { activationAssetTypeOptions, activationChannelFilterOptions, campaignCreationHref } from "../../../components/catalog/activationAssetConfig";
@@ -80,6 +81,14 @@ const campaignDate = (value: string | null) => (value ? new Date(value).toLocale
 
 const segmentPressurePolicyHref = (segment: CalendarSegmentCoverageItem, target: { maxDailyTouches: number; maxWeeklyTouches: number }) =>
   `/execution/orchestration?recommendation=segment_pressure&audienceKey=${encodeURIComponent(segment.audienceKey)}&segmentName=${encodeURIComponent(segment.name)}&maxDay=${encodeURIComponent(String(target.maxDailyTouches))}&maxWeek=${encodeURIComponent(String(target.maxWeeklyTouches))}`;
+
+const normalizeAudienceRef = (value: string) => {
+  const trimmed = value.trim();
+  return trimmed && !trimmed.startsWith("meiro_segment:") ? `meiro_segment:${trimmed}` : trimmed;
+};
+
+const createCampaignFromAudienceHref = (audienceKey: string) =>
+  `/engage/campaigns/new/edit?audienceKey=${encodeURIComponent(normalizeAudienceRef(audienceKey))}&appKey=meiro_store&placementKey=home_top`;
 
 const checkClassName = (status: CampaignCalendarItem["planningReadiness"]["checks"][number]["status"]) => {
   if (status === "passed") return "border-emerald-200 bg-emerald-50 text-emerald-800";
@@ -322,6 +331,7 @@ function CampaignCalendarDrawer({
   const actionOptions = calendarCampaignActionOptions(item, actionPermissions);
   const primaryTarget = item.drilldownTargets.find((target) => target.type === "campaign" || target.type === "meiro_campaign") ?? item.drilldownTargets[0];
   const primaryHref = primaryTarget?.href ?? `/engage/campaigns/${item.campaignId}`;
+  const firstAudienceKey = item.audienceKeys[0] ?? "";
 
   return (
     <Drawer
@@ -338,6 +348,11 @@ function CampaignCalendarDrawer({
             <Button type="button" onClick={() => onEditSchedule(item)}>
               Edit schedule
             </Button>
+          ) : null}
+          {firstAudienceKey ? (
+            <ButtonLink href={`/execution/precompute?segment=${encodeURIComponent(firstAudienceKey)}&appKey=${encodeURIComponent(item.appKey)}&placement=${encodeURIComponent(item.placementKey)}`} variant="outline">
+              Precompute audience
+            </ButtonLink>
           ) : null}
         </>
       }
@@ -385,6 +400,16 @@ function CampaignCalendarDrawer({
           <p className="text-xs uppercase tracking-wide text-stone-500">Audience</p>
           <p className="mt-2 text-sm">{item.audienceSummary ?? "All eligible profiles"}</p>
           {item.audienceKeys.length > 1 ? <p className="mt-1 text-xs text-stone-500">{item.audienceKeys.join(", ")}</p> : null}
+          {firstAudienceKey ? (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              <Link className="text-sky-700 hover:underline" href={`/engage/calendar?audienceKey=${encodeURIComponent(firstAudienceKey)}`}>
+                Filter calendar
+              </Link>
+              <Link className="text-sky-700 hover:underline" href={createCampaignFromAudienceHref(firstAudienceKey)}>
+                Create related campaign
+              </Link>
+            </div>
+          ) : null}
         </div>
         <div className="rounded-md border border-stone-200 p-3">
           <p className="text-xs uppercase tracking-wide text-stone-500">Priority and caps</p>
@@ -635,6 +660,9 @@ function SegmentCoverageDrawer({
           <ButtonLink href={`/execution/precompute?segment=${encodeURIComponent(segment.audienceKey)}`} variant="outline">
             Precompute
           </ButtonLink>
+          <ButtonLink href={createCampaignFromAudienceHref(segment.audienceKey)} variant="outline">
+            Create campaign
+          </ButtonLink>
           {segment.status === "over" ? (
             <ButtonLink href={policyHref} variant="outline">
               Draft cap
@@ -767,6 +795,8 @@ export default function CampaignCalendarPage() {
   const [readiness, setReadiness] = useState("");
   const [sourceType, setSourceType] = useState("");
   const [audienceKey, setAudienceKey] = useState("");
+  const [audienceReadiness, setAudienceReadiness] = useState<ProfileAudienceReadinessResponse | null>(null);
+  const [audienceReadinessLoading, setAudienceReadinessLoading] = useState(false);
   const [overlapRisk, setOverlapRisk] = useState("");
   const [pressureRisk, setPressureRisk] = useState("");
   const [pressureSignal, setPressureSignal] = useState("");
@@ -990,6 +1020,37 @@ export default function CampaignCalendarPage() {
     const params = calendarShareParams({ view, swimlane, from: range.from, filters, segmentTarget: segmentCoverageTarget });
     window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
   }, [urlReady, view, swimlane, range.from.toISOString(), status, appKey, placementKey, assetKey, assetType, channel, readiness, sourceType, audienceKey, overlapRisk, pressureRisk, pressureSignal, needsAttentionOnly, includeArchived, segmentCoverageTarget]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadReadiness = async () => {
+      const audience = normalizeAudienceRef(audienceKey);
+      if (!audience) {
+        setAudienceReadiness(null);
+        setAudienceReadinessLoading(false);
+        return;
+      }
+      setAudienceReadinessLoading(true);
+      try {
+        const response = await apiClient.pipes.audienceReadiness(audience);
+        if (!cancelled) {
+          setAudienceReadiness(response);
+        }
+      } catch {
+        if (!cancelled) {
+          setAudienceReadiness(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setAudienceReadinessLoading(false);
+        }
+      }
+    };
+    void loadReadiness();
+    return () => {
+      cancelled = true;
+    };
+  }, [audienceKey]);
 
   useEffect(() => {
     if (!urlReady) return;
@@ -1945,6 +2006,31 @@ export default function CampaignCalendarPage() {
             Audience
             <MeiroSegmentPicker value={audienceKey} onChange={setAudienceKey} placeholder="audience key or Meiro segment id" />
           </FieldLabel>
+          {audienceKey.trim() ? (
+            <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm md:col-span-2">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium text-stone-900">Pipes audience readiness</p>
+                  <p className="truncate font-mono text-xs text-stone-600">{normalizeAudienceRef(audienceKey)}</p>
+                  <p className="mt-1 text-xs text-stone-600">
+                    {audienceReadinessLoading
+                      ? "Checking cached profile membership..."
+                      : audienceReadiness
+                        ? `${audienceReadiness.matchingProfiles} cached member(s) / ${audienceReadiness.cache.uniqueProfiles} cached profiles`
+                        : "Readiness unavailable"}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <ButtonLink size="xs" variant="outline" href={`/execution/precompute?segment=${encodeURIComponent(normalizeAudienceRef(audienceKey))}`}>
+                    Precompute
+                  </ButtonLink>
+                  <ButtonLink size="xs" variant="outline" href={createCampaignFromAudienceHref(audienceKey)}>
+                    Create campaign
+                  </ButtonLink>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <FieldLabel>
             Asset key
             <input className={inputClassName} value={assetKey} onChange={(event) => setAssetKey(event.target.value)} placeholder="asset, offer, or bundle key" />
@@ -2154,6 +2240,9 @@ export default function CampaignCalendarPage() {
                   </Link>
                   <Link className="underline decoration-current/40 underline-offset-2" href={`/execution/precompute?segment=${encodeURIComponent(segment.audienceKey)}`}>
                     Precompute
+                  </Link>
+                  <Link className="underline decoration-current/40 underline-offset-2" href={createCampaignFromAudienceHref(segment.audienceKey)}>
+                    Create campaign
                   </Link>
                   <Link
                     className="underline decoration-current/40 underline-offset-2"
