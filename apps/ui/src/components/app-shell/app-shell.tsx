@@ -13,6 +13,7 @@ import { ButtonLink } from "../ui/button";
 type NavItem = {
   href: string;
   label: string;
+  section?: string;
 };
 
 type NavGroup = {
@@ -68,17 +69,17 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Engage",
     hint: "In-app campaign lifecycle",
     items: [
-      { href: "/engage/meiro-workbench", label: "Meiro Workbench" },
-      { href: "/engage/calendar", label: "Campaign Calendar" },
-      { href: "/engage/campaigns", label: "Campaign Inventory" },
-      { href: "/engage/meiro-campaigns", label: "Meiro Campaign Control" },
-      { href: "/engage/experiments", label: "Experiments" },
-      { href: "/engage/apps", label: "Apps" },
-      { href: "/engage/placements", label: "Placements" },
-      { href: "/engage/templates", label: "Templates" },
-      { href: "/engage/reports", label: "Reports" },
-      { href: "/engage/events", label: "Events" },
-      { href: "/engage/tools", label: "Tools" }
+      { href: "/engage/meiro-workbench", label: "Workbench", section: "Plan & launch" },
+      { href: "/engage/calendar", label: "Calendar", section: "Plan & launch" },
+      { href: "/engage/campaigns", label: "Campaigns", section: "Plan & launch" },
+      { href: "/engage/meiro-campaigns", label: "Meiro Control", section: "Plan & launch" },
+      { href: "/engage/experiments", label: "Experiments", section: "Plan & launch" },
+      { href: "/engage/apps", label: "Apps", section: "Setup" },
+      { href: "/engage/placements", label: "Placements", section: "Setup" },
+      { href: "/engage/templates", label: "Templates", section: "Setup" },
+      { href: "/engage/reports", label: "Reports", section: "Analyze & debug" },
+      { href: "/engage/events", label: "Events", section: "Analyze & debug" },
+      { href: "/engage/tools", label: "Tools", section: "Analyze & debug" }
     ]
   },
   {
@@ -346,17 +347,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
                 {open ? (
                   <div className="space-y-1 pl-9">
-                    {group.items.map((item) => {
+                    {group.items.map((item, index) => {
                       const active = isItemActive(pathname, item.href);
+                      const showSection = Boolean(item.section && item.section !== group.items[index - 1]?.section);
                       return (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          className={cn("nav-link block rounded-md px-4 py-2 text-base transition", active && "nav-active font-medium")}
-                          onClick={() => setSidebarOpen(false)}
-                        >
-                          {item.label}
-                        </Link>
+                        <div key={item.href} className={showSection ? "pt-2 first:pt-0" : undefined}>
+                          {showSection ? <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-wide text-stone-500">{item.section}</p> : null}
+                          <Link
+                            href={item.href}
+                            className={cn("nav-link block rounded-md px-4 py-2 text-base transition", active && "nav-active font-medium")}
+                            onClick={() => setSidebarOpen(false)}
+                          >
+                            {item.label}
+                          </Link>
+                        </div>
                       );
                     })}
                   </div>
