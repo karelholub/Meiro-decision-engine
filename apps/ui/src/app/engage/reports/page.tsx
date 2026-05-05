@@ -14,6 +14,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { apiClient } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 
@@ -124,7 +125,7 @@ export default function InAppReportsPage() {
 
   return (
     <section className="space-y-4">
-      <PageHeader density="compact" title="Engage Reports" description={`Overview metrics and variant performance in ${environment}.`} />
+      <PageHeader density="compact" title="Engage Reports" description={`Overview metrics and variant performance in ${environment}.`} meta={<MeiroSourceBadge showLinks />} />
 
       <FilterPanel density="compact" className="grid gap-x-2 gap-y-2 md:grid-cols-5">
         <FieldLabel className="flex flex-col gap-1">

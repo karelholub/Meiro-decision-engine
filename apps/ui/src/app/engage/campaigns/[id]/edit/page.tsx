@@ -13,6 +13,9 @@ import { parseLegacyKey, toLegacyKey } from "@decisioning/shared";
 import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
 import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { ActivationAssetPicker } from "../../../../../components/catalog/ActivationAssetPicker";
+import { MeiroSegmentPicker } from "../../../../../components/meiro/MeiroSegmentPicker";
+import { MeiroSourceBadge } from "../../../../../components/meiro/MeiroSourceBadge";
+import { SignalChip } from "../../../../../components/ui/badge";
 import { EditorActionBar } from "../../../../../components/ui/editor-action-bar";
 import { Button, ButtonLink } from "../../../../../components/ui/button";
 import {
@@ -23,7 +26,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../../../components/ui/operational-table";
 import { PageHeader, PagePanel, inputClassName } from "../../../../../components/ui/page";
-import { apiClient, type ActivationAssetChannel, type ActivationLibraryItem } from "../../../../../lib/api";
+import { apiClient, type ActivationAssetChannel, type ActivationLibraryItem, type ProfileAudienceReadinessResponse } from "../../../../../lib/api";
 import { validateCampaignDependencies } from "../../../../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../../lib/environment";
 import { usePermissions } from "../../../../../lib/permissions";
@@ -215,6 +218,8 @@ export default function InAppCampaignEditPage() {
   const [startAt, setStartAt] = useState("");
   const [endAt, setEndAt] = useState("");
   const [eligibilityAudiencesAny, setEligibilityAudiencesAny] = useState("");
+  const [audienceDraft, setAudienceDraft] = useState("");
+  const [audienceReadiness, setAudienceReadiness] = useState<Record<string, ProfileAudienceReadinessResponse | null>>({});
 
   const [variants, setVariants] = useState<VariantEditor[]>([]);
   const [bindings, setBindings] = useState<BindingEditor[]>([]);
@@ -244,6 +249,30 @@ export default function InAppCampaignEditPage() {
     () => inferActivationChannelFromContext(templateRef?.key, placementRef?.key),
     [templateRef?.key, placementRef?.key]
   );
+  const eligibilityAudienceList = useMemo(
+    () =>
+      eligibilityAudiencesAny
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
+    [eligibilityAudiencesAny]
+  );
+  const normalizeAudienceRef = (value: string) => {
+    const trimmed = value.trim();
+    return trimmed && !trimmed.startsWith("meiro_segment:") ? `meiro_segment:${trimmed}` : trimmed;
+  };
+  const addEligibilityAudience = (value = audienceDraft) => {
+    const audience = normalizeAudienceRef(value);
+    if (!audience) {
+      return;
+    }
+    const next = [...new Set([...eligibilityAudienceList, audience])];
+    setEligibilityAudiencesAny(next.join(", "));
+    setAudienceDraft("");
+  };
+  const removeEligibilityAudience = (audience: string) => {
+    setEligibilityAudiencesAny(eligibilityAudienceList.filter((item) => item !== audience).join(", "));
+  };
 
   const selectActivationAsset = (item: ActivationLibraryItem) => {
     if (item.runtimeRef.contentKey) {
@@ -394,6 +423,29 @@ export default function InAppCampaignEditPage() {
   useEffect(() => {
     void load();
   }, [campaignId, environment]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadReadiness = async () => {
+      const next: Record<string, ProfileAudienceReadinessResponse | null> = {};
+      await Promise.all(
+        eligibilityAudienceList.map(async (audience) => {
+          try {
+            next[audience] = await apiClient.pipes.audienceReadiness(audience);
+          } catch {
+            next[audience] = null;
+          }
+        })
+      );
+      if (!cancelled) {
+        setAudienceReadiness(next);
+      }
+    };
+    void loadReadiness();
+    return () => {
+      cancelled = true;
+    };
+  }, [eligibilityAudienceList.join("|"), environment]);
 
   const versionDiffPreview = useMemo(() => {
     const latest = versions[0];
@@ -701,6 +753,7 @@ export default function InAppCampaignEditPage() {
             ? `Create a new campaign draft in ${environment}`
             : `Campaign: ${campaign?.name ?? "-"} (${campaign?.key ?? "-"}) in ${environment}`
         }
+        meta={<MeiroSourceBadge showLinks />}
         actions={<ButtonLink href="/engage/campaigns" size="sm" variant="outline">Back</ButtonLink>}
       />
 
@@ -948,14 +1001,49 @@ export default function InAppCampaignEditPage() {
               className="rounded-md border border-stone-300 px-2 py-1"
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm md:col-span-3">
-            Eligibility Audiences (comma separated)
-            <input
-              value={eligibilityAudiencesAny}
-              onChange={(event) => setEligibilityAudiencesAny(event.target.value)}
-              className="rounded-md border border-stone-300 px-2 py-1"
-            />
-          </label>
+          <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-3 md:col-span-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-stone-900">Pipes audience eligibility</p>
+                <p className="text-xs text-stone-600">Select audiences from the active Pipes registry and verify cached profile membership before activation.</p>
+              </div>
+              <ButtonLink size="xs" variant="outline" href="/meiro-workspace">
+                Workspace
+              </ButtonLink>
+            </div>
+            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+              <MeiroSegmentPicker value={audienceDraft} onChange={setAudienceDraft} placeholder="Search or select a Pipes audience" />
+              <div className="flex items-start">
+                <Button size="sm" type="button" variant="outline" onClick={() => addEligibilityAudience()} disabled={!audienceDraft.trim()}>
+                  Add audience
+                </Button>
+              </div>
+            </div>
+            {eligibilityAudienceList.length > 0 ? (
+              <div className="space-y-2">
+                {eligibilityAudienceList.map((audience) => {
+                  const readiness = audienceReadiness[audience];
+                  const ready = Boolean(readiness && readiness.matchingProfiles > 0);
+                  return (
+                    <div key={audience} className="grid gap-2 rounded-md border border-stone-200 bg-white px-2 py-1.5 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <div className="min-w-0">
+                        <p className="truncate font-mono text-xs text-stone-800">{audience}</p>
+                        <p className="text-xs text-stone-500">
+                          {readiness ? `${readiness.matchingProfiles} cached member(s) / ${readiness.cache.uniqueProfiles} cached profiles` : "Readiness unavailable"}
+                        </p>
+                      </div>
+                      <SignalChip tone={ready ? "success" : "warning"}>{ready ? "Precompute-ready" : "Needs profile sync"}</SignalChip>
+                      <button type="button" className="text-xs text-rose-700 hover:underline" onClick={() => removeEligibilityAudience(audience)}>
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-amber-700">No audience selected. Campaign applies to all profiles unless profile rules constrain it elsewhere.</p>
+            )}
+          </div>
 
             <label className="flex flex-col gap-1 text-sm md:col-span-3">
             Description

@@ -6,6 +6,7 @@ import { InlineError } from "../../../components/ui/app-state";
 import { Button, ButtonLink } from "../../../components/ui/button";
 import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { apiClient, type MeiroCampaignChannel, type MeiroCampaignRecord } from "../../../lib/api";
 import { DEFAULT_CAMPAIGN_TYPES, campaignTypeLabel, campaignTypeTag, normalizeCampaignType } from "../../../lib/campaign-taxonomy";
 import {
@@ -328,7 +329,7 @@ export default function MeiroCampaignControlPage() {
             </Button>
           </>
         }
-        meta={apiStatus?.ok ? "Meiro API connection verified for this session." : "Connection status is checked when campaigns load."}
+        meta={<MeiroSourceBadge showLinks />}
       />
 
       {error ? <InlineError title="Meiro campaign control unavailable" description={error} /> : null}

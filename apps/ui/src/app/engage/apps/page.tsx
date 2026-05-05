@@ -14,6 +14,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 
 export default function InAppApplicationsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -69,7 +70,7 @@ export default function InAppApplicationsPage() {
 
   return (
     <section className="space-y-4">
-      <PageHeader density="compact" title="App Inventory" description="Manage app keys for in-app routing." meta={`Environment: ${environment}`} />
+      <PageHeader density="compact" title="App Inventory" description="Manage app keys for in-app routing." meta={<MeiroSourceBadge showLinks />} />
 
       <FilterPanel density="compact" className="!space-y-0 flex items-center gap-2">
         <Button size="sm" onClick={() => setShowCreate((prev) => !prev)}>

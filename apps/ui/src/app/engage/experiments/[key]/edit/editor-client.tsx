@@ -8,6 +8,8 @@ import { EditorActionBar } from "../../../../../components/ui/editor-action-bar"
 import { DependenciesPanel } from "../../../../../components/registry/DependenciesPanel";
 import { RefSelect } from "../../../../../components/registry/RefSelect";
 import { StatusBadge } from "../../../../../components/ui/status-badges";
+import { MeiroSegmentPicker } from "../../../../../components/meiro/MeiroSegmentPicker";
+import { MeiroSourceBadge } from "../../../../../components/meiro/MeiroSourceBadge";
 import { fieldRegistry } from "../../../../../components/decision-builder/field-registry";
 import { apiClient } from "../../../../../lib/api";
 import { useAppEnumSettings } from "../../../../../lib/app-enum-settings";
@@ -56,6 +58,7 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
   const [details, setDetails] = useState<ExperimentDetails | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("builder");
   const [activeStep, setActiveStep] = useState<StepId>("basics");
+  const [audienceDraft, setAudienceDraft] = useState("");
   const [form, setForm] = useState<ExperimentDraftForm>(createEmptyExperimentForm());
   const [advancedJsonText, setAdvancedJsonText] = useState("{}\n");
   const [advancedWarning, setAdvancedWarning] = useState<string | null>(null);
@@ -336,6 +339,21 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
 
   const containsAdvancedOnlyFields = hasAdvancedOnlyFields(form.advancedExtras);
   const dependencyItems = useMemo(() => validateExperimentDependencies(registry, formToExperimentJson(form)), [registry, form]);
+  const addPopulationAudience = () => {
+    const trimmed = audienceDraft.trim();
+    if (!trimmed) {
+      return;
+    }
+    const audience = trimmed.startsWith("meiro_segment:") ? trimmed : `meiro_segment:${trimmed}`;
+    setForm((current) => ({
+      ...current,
+      population: {
+        ...current.population,
+        audiencesAny: [...new Set([...current.population.audiencesAny, audience])]
+      }
+    }));
+    setAudienceDraft("");
+  };
 
   return (
     <div className="space-y-4">
@@ -344,6 +362,9 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
           <div>
             <h2 className="text-xl font-semibold">Experiment Editor</h2>
             <p className="text-sm text-stone-600">Focused builder for {isCreateMode ? "new experiment" : details?.key ?? experimentKey}.</p>
+            <div className="mt-2">
+              <MeiroSourceBadge showLinks />
+            </div>
           </div>
           <div className="flex gap-2">
             <StatusBadge status={(details?.status ?? "DRAFT") as "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED"} />
@@ -437,9 +458,32 @@ export default function ExperimentEditorClient({ experimentKey }: { experimentKe
 
             {activeStep === "population" ? (
               <div className="space-y-3">
-                <label className="block text-sm">Audiences (comma separated)
-                  <input className="mt-1 w-full rounded border border-stone-300 px-2 py-1" value={form.population.audiencesAny.join(", ")} onChange={(event) => setForm((current) => ({ ...current, population: { ...current.population, audiencesAny: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) } }))} />
-                </label>
+                <div className="rounded border border-stone-200 bg-stone-50 p-3">
+                  <p className="text-sm font-semibold text-stone-900">Pipes audience population</p>
+                  <p className="text-xs text-stone-600">Pick experiment audiences from the active Pipes registry.</p>
+                  <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+                    <MeiroSegmentPicker value={audienceDraft} onChange={setAudienceDraft} placeholder="Search or select a Pipes audience" />
+                    <button className="rounded border border-stone-300 px-3 py-2 text-sm" type="button" onClick={addPopulationAudience} disabled={!audienceDraft.trim()}>
+                      Add audience
+                    </button>
+                  </div>
+                  {form.population.audiencesAny.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {form.population.audiencesAny.map((audience) => (
+                        <button
+                          key={audience}
+                          type="button"
+                          className="rounded border border-stone-200 bg-white px-2 py-0.5 font-mono text-xs text-stone-700"
+                          onClick={() => setForm((current) => ({ ...current, population: { ...current.population, audiencesAny: current.population.audiencesAny.filter((item) => item !== audience) } }))}
+                        >
+                          {audience} x
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-amber-700">No population audience selected; experiment applies to all eligible profiles.</p>
+                  )}
+                </div>
                 <ConditionBuilder title="Eligibility conditions" rows={form.population.attributes} onChange={(rows) => setForm((current) => ({ ...current, population: { ...current.population, attributes: rows } }))} registry={fieldRegistry} pathPrefix="population.attributes" />
               </div>
             ) : null}

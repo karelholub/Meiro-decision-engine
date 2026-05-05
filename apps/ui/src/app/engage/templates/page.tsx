@@ -14,6 +14,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 
 const defaultSchema = {
   type: "object",
@@ -102,6 +103,7 @@ export default function InAppTemplatesPage() {
         density="compact"
         title="Template Inventory"
         description="Define template schemas and validate required fields before campaign activation."
+        meta={<MeiroSourceBadge showLinks />}
       />
 
       <FilterPanel density="compact" className="!space-y-0 flex items-center gap-2">

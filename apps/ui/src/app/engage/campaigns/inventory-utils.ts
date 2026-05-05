@@ -14,6 +14,7 @@ export type CampaignInventoryColumns = {
   status: boolean;
   appKey: boolean;
   placement: boolean;
+  audiences: boolean;
   variants: boolean;
   holdout: boolean;
   schedule: boolean;
@@ -50,6 +51,7 @@ export const defaultColumns = (): CampaignInventoryColumns => ({
   status: true,
   appKey: true,
   placement: true,
+  audiences: true,
   variants: true,
   holdout: true,
   schedule: true,

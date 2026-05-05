@@ -14,6 +14,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, FilterPanel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 
 export default function InAppPlacementsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
@@ -77,7 +78,7 @@ export default function InAppPlacementsPage() {
         density="compact"
         title="Placement Inventory"
         description="Configure placement keys, template allow-lists, and TTL defaults."
-        meta={`Environment: ${environment}`}
+        meta={<MeiroSourceBadge showLinks />}
       />
 
       <FilterPanel density="compact" className="!space-y-0 flex items-center gap-2">

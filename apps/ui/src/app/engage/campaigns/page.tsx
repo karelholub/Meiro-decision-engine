@@ -14,6 +14,7 @@ import {
 } from "../../../components/ui/operational-table";
 import { FieldLabel, FilterPanel, PageHeader, inputClassName } from "../../../components/ui/page";
 import { EndsSoonBadge, StatusBadge } from "../../../components/ui/status-badges";
+import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { apiClient } from "../../../lib/api";
 import { usePermissions } from "../../../lib/permissions";
 import {
@@ -174,6 +175,7 @@ export default function CampaignInventoryPage() {
         eyebrow="Engage"
         title="Campaign Inventory"
         description="Browse and operate campaigns at scale. Use the calendar as the primary planning view."
+        meta={<MeiroSourceBadge showLinks />}
         actions={
           <>
             <ButtonLink size="sm" href="/engage/calendar" variant="default">Open calendar</ButtonLink>
@@ -303,6 +305,7 @@ export default function CampaignInventoryPage() {
                 {activeColumns.status ? <th className={operationalTableHeaderCellClassName}>Status</th> : null}
                 {activeColumns.appKey ? <th className={operationalTableHeaderCellClassName}>App</th> : null}
                 {activeColumns.placement ? <th className={operationalTableHeaderCellClassName}>Placement</th> : null}
+                {activeColumns.audiences ? <th className={operationalTableHeaderCellClassName}>Pipes audiences</th> : null}
                 {activeColumns.variants ? <th className={operationalTableHeaderCellClassName}>Variants</th> : null}
                 {activeColumns.holdout ? <th className={operationalTableHeaderCellClassName}>Holdout</th> : null}
                 {activeColumns.schedule ? <th className={operationalTableHeaderCellClassName}>Schedule</th> : null}
@@ -323,6 +326,20 @@ export default function CampaignInventoryPage() {
                     {activeColumns.status ? <td className={operationalTableCellClassName}><StatusBadge status={item.status as "DRAFT" | "ACTIVE" | "PENDING_APPROVAL" | "ARCHIVED"} /></td> : null}
                     {activeColumns.appKey ? <td className={operationalTableCellClassName}>{item.appKey}</td> : null}
                     {activeColumns.placement ? <td className={operationalTableCellClassName}>{item.placementKey}</td> : null}
+                    {activeColumns.audiences ? (
+                      <td className={operationalTableCellClassName}>
+                        {item.eligibilityAudiencesAny.length > 0 ? (
+                          <div className="space-y-1">
+                            {item.eligibilityAudiencesAny.slice(0, 2).map((audience) => (
+                              <div key={audience} className="truncate font-mono text-xs text-stone-700">{audience}</div>
+                            ))}
+                            {item.eligibilityAudiencesAny.length > 2 ? <div className="text-xs text-stone-500">+{item.eligibilityAudiencesAny.length - 2}</div> : null}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-amber-700">All profiles</span>
+                        )}
+                      </td>
+                    ) : null}
                     {activeColumns.variants ? <td className={operationalTableCellClassName}>{formatVariantsSummary(item)}</td> : null}
                     {activeColumns.holdout ? <td className={operationalTableCellClassName}>{item.holdoutEnabled ? `${item.holdoutPercentage}%` : "Off"}</td> : null}
                     {activeColumns.schedule ? (
@@ -337,6 +354,14 @@ export default function CampaignInventoryPage() {
                         <div className="flex gap-2">
                           <Link className="rounded border border-stone-300 px-2 py-1 text-xs" href={`/engage/campaigns/${item.id}`}>Details</Link>
                           {canWrite ? <Link className="rounded border border-stone-300 px-2 py-1 text-xs" href={`/engage/campaigns/${item.id}/edit`}>Edit</Link> : null}
+                          {item.eligibilityAudiencesAny[0] ? (
+                            <Link
+                              className="rounded border border-stone-300 px-2 py-1 text-xs"
+                              href={`/execution/precompute?segment=${encodeURIComponent(item.eligibilityAudiencesAny[0])}&appKey=${encodeURIComponent(item.appKey)}&placement=${encodeURIComponent(item.placementKey)}`}
+                            >
+                              Precompute
+                            </Link>
+                          ) : null}
                         </div>
                       </td>
                     ) : null}
