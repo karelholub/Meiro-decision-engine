@@ -328,11 +328,17 @@ export default function OverviewPage() {
             </div>
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-wide text-stone-500">Plan</p>
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/engage/audiences">
+                Audiences & Profiles
+              </Link>
               <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/engage/calendar">
                 Campaign Calendar
               </Link>
               <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/engage/campaigns">
                 Campaign Inventory
+              </Link>
+              <Link className="block rounded-md border border-stone-300 px-2 py-1.5 hover:bg-stone-100" href="/engage/meiro-campaigns">
+                Meiro Campaign Control
               </Link>
             </div>
             <div className="space-y-2">

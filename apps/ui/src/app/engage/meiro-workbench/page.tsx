@@ -9,7 +9,7 @@ import {
   MeiroSegmentUsageList
 } from "../../../components/meiro/MeiroIntelligenceCards";
 import { MeiroProfileSearch } from "../../../components/meiro/MeiroProfileSearch";
-import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
+import { MeiroAudienceWorkflowPanel } from "../../../components/meiro/MeiroAudienceWorkflowPanel";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { InlineError } from "../../../components/ui/app-state";
@@ -135,7 +135,7 @@ export default function MeiroActivationWorkbenchPage() {
       <PageHeader
         density="compact"
         eyebrow="Meiro CDP"
-        title="Activation Workbench"
+        title="Meiro Data Workbench"
         description={
           apiStatus
             ? `Operational layer for ${apiStatus.domain ?? "Meiro CDP"} as ${apiStatus.username ?? "configured user"}.`
@@ -145,7 +145,10 @@ export default function MeiroActivationWorkbenchPage() {
         actions={
           <>
             <ButtonLink size="sm" href="/engage/calendar" variant="outline">
-              Calendar
+              Campaign Calendar
+            </ButtonLink>
+            <ButtonLink size="sm" href="/engage/audiences" variant="outline">
+              Audiences & Profiles
             </ButtonLink>
             <ButtonLink size="sm" href="/execution/orchestration" variant="outline">
               Governance
@@ -158,7 +161,7 @@ export default function MeiroActivationWorkbenchPage() {
       />
 
       {error ? <InlineError title="Meiro workbench unavailable" description={error} /> : null}
-      <MeiroAudienceContextStrip
+      <MeiroAudienceWorkflowPanel
         audience={selectedSegmentId}
         onClear={() => {
           setSelectedSegmentId("");

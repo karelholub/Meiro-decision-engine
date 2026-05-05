@@ -67,13 +67,13 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "engage",
     label: "Engage",
-    hint: "In-app campaign lifecycle",
+    hint: "Pipes audiences, planning, campaigns, and live Meiro operations",
     items: [
-      { href: "/engage/meiro-workbench", label: "Workbench", section: "Plan & launch" },
-      { href: "/engage/audiences", label: "Audiences & Profiles", section: "Plan & launch" },
-      { href: "/engage/calendar", label: "Calendar", section: "Plan & launch" },
-      { href: "/engage/campaigns", label: "Campaigns", section: "Plan & launch" },
-      { href: "/engage/meiro-campaigns", label: "Meiro Control", section: "Plan & launch" },
+      { href: "/engage/audiences", label: "Audiences & Profiles", section: "Start" },
+      { href: "/engage/calendar", label: "Campaign Calendar", section: "Plan" },
+      { href: "/engage/campaigns", label: "Campaign Inventory", section: "Plan" },
+      { href: "/engage/meiro-workbench", label: "Meiro Data Workbench", section: "Operate" },
+      { href: "/engage/meiro-campaigns", label: "Meiro Campaign Control", section: "Operate" },
       { href: "/engage/experiments", label: "Experiments", section: "Plan & launch" },
       { href: "/engage/apps", label: "Apps", section: "Setup" },
       { href: "/engage/placements", label: "Placements", section: "Setup" },
@@ -411,6 +411,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
             <ButtonLink className="hidden lg:inline-flex" href="/engage/calendar" variant="outline">
               Campaign Calendar
+            </ButtonLink>
+            <ButtonLink className="hidden xl:inline-flex" href="/engage/audiences" variant="outline">
+              Audiences & Profiles
             </ButtonLink>
             <ButtonLink href="/catalog?create=asset" variant="default">
               Create Asset
