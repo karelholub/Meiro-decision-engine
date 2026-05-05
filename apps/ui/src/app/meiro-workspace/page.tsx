@@ -186,6 +186,27 @@ export default function MeiroWorkspacePage() {
     return `/simulate?${params.toString()}`;
   }, [selectedDecision?.decisionId, selectedDecisionKey]);
 
+  const audienceJourneyHrefs = useMemo(() => {
+    const audienceParam = selectedAudienceRef ? `?audienceKey=${encodeURIComponent(selectedAudienceRef)}` : "";
+    const campaignParams = new URLSearchParams({
+      appKey: "meiro_store",
+      placementKey: "home_top"
+    });
+    const experimentParams = new URLSearchParams();
+    if (selectedAudienceRef) {
+      campaignParams.set("audienceKey", selectedAudienceRef);
+      experimentParams.set("audienceKey", selectedAudienceRef);
+    }
+    return {
+      audiences: `/engage/audiences${audienceParam}`,
+      simulate: selectedAudienceRef ? `${simulateHref}&audienceKey=${encodeURIComponent(selectedAudienceRef)}` : simulateHref,
+      campaign: `/engage/campaigns/new/edit?${campaignParams.toString()}`,
+      experiment: experimentParams.toString() ? `/engage/experiments/new/edit?${experimentParams.toString()}` : "/engage/experiments/new/edit",
+      precompute: precomputeHref,
+      callback: "/settings/integrations/pipes-callback"
+    };
+  }, [precomputeHref, selectedAudienceRef, simulateHref]);
+
   const createAudiencePrecompute = async () => {
     if (!selectedDecisionKey.trim()) {
       setMessage("Select a decision before creating a precompute run.");
@@ -317,6 +338,59 @@ export default function MeiroWorkspacePage() {
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{message}</div> : null}
       <MeiroAudienceContextStrip audience={selectedAudienceRef} onClear={() => setSelectedAudience("")} />
       {loading ? <LoadingState title="Loading Meiro workspace" /> : null}
+
+      <PagePanel density="compact" className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Audience journey</h3>
+            <p className="mt-1 text-sm text-stone-700">
+              Use one Pipes audience through profile readiness, simulation, campaign creation, precompute, and callback delivery.
+            </p>
+          </div>
+          <ButtonLink size="sm" variant="outline" href={audienceJourneyHrefs.campaign}>
+            Create campaign
+          </ButtonLink>
+        </div>
+        <div className="grid gap-2 md:grid-cols-5">
+          <JourneyStep
+            number="1"
+            title="Verify profiles"
+            detail={selectedAudienceRef ? audienceReadinessDetail : "Select an audience"}
+            status={audienceReadyForPrecompute ? "ok" : "warn"}
+            href={audienceJourneyHrefs.audiences}
+          />
+          <JourneyStep
+            number="2"
+            title="Simulate"
+            detail={selectedDecisionKey || "Select decision"}
+            status={selectedDecisionKey ? "ok" : "warn"}
+            href={audienceJourneyHrefs.simulate}
+          />
+          <JourneyStep
+            number="3"
+            title="Create"
+            detail="Campaign or experiment"
+            status={selectedAudienceRef ? "ok" : "warn"}
+            href={audienceJourneyHrefs.campaign}
+            secondaryHref={audienceJourneyHrefs.experiment}
+            secondaryLabel="Experiment"
+          />
+          <JourneyStep
+            number="4"
+            title="Precompute"
+            detail={audienceReadyForPrecompute ? "Ready to warm" : "Needs cached members"}
+            status={audienceReadyForPrecompute ? "ok" : "warn"}
+            href={audienceJourneyHrefs.precompute}
+          />
+          <JourneyStep
+            number="5"
+            title="Callback"
+            detail={callbackEnabled ? "Delivery ready" : "Configure delivery"}
+            status={callbackEnabled ? "ok" : "warn"}
+            href={audienceJourneyHrefs.callback}
+          />
+        </div>
+      </PagePanel>
 
       <section className="grid gap-3 md:grid-cols-4">
         <MetricCard
@@ -511,6 +585,45 @@ function WorkflowStep({ title, status, detail }: { title: string; status: "ok" |
         <SignalChip tone={status === "ok" ? "success" : "warning"}>{status === "ok" ? "Ready" : "Check"}</SignalChip>
       </div>
       <p className="mt-1 truncate text-xs text-stone-600">{detail}</p>
+    </div>
+  );
+}
+
+function JourneyStep({
+  number,
+  title,
+  detail,
+  status,
+  href,
+  secondaryHref,
+  secondaryLabel
+}: {
+  number: string;
+  title: string;
+  detail: string;
+  status: "ok" | "warn";
+  href: string;
+  secondaryHref?: string;
+  secondaryLabel?: string;
+}) {
+  return (
+    <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-xs font-semibold text-stone-700">{number}</span>
+        <SignalChip tone={status === "ok" ? "success" : "warning"}>{status === "ok" ? "Ready" : "Check"}</SignalChip>
+      </div>
+      <p className="mt-2 font-medium text-stone-900">{title}</p>
+      <p className="mt-1 min-h-8 text-xs text-stone-600">{detail}</p>
+      <div className="mt-2 flex flex-wrap gap-2 text-xs">
+        <Link className="font-medium text-sky-700 hover:underline" href={href}>
+          Open
+        </Link>
+        {secondaryHref && secondaryLabel ? (
+          <Link className="font-medium text-sky-700 hover:underline" href={secondaryHref}>
+            {secondaryLabel}
+          </Link>
+        ) : null}
+      </div>
     </div>
   );
 }
