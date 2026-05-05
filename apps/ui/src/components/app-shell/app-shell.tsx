@@ -70,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
     hint: "In-app campaign lifecycle",
     items: [
       { href: "/engage/meiro-workbench", label: "Workbench", section: "Plan & launch" },
+      { href: "/engage/audiences", label: "Audiences & Profiles", section: "Plan & launch" },
       { href: "/engage/calendar", label: "Calendar", section: "Plan & launch" },
       { href: "/engage/campaigns", label: "Campaigns", section: "Plan & launch" },
       { href: "/engage/meiro-campaigns", label: "Meiro Control", section: "Plan & launch" },
@@ -132,6 +133,7 @@ const navPermissionByHref: Record<string, string> = {
   "/catalog/content": "catalog.content.read",
   "/catalog/bundles": "catalog.content.read",
   "/engage/campaigns": "engage.campaign.read",
+  "/engage/audiences": "decision.read",
   "/engage/meiro-workbench": "engage.campaign.read",
   "/engage/meiro-campaigns": "engage.campaign.read",
   "/engage/calendar": "engage.campaign.read",

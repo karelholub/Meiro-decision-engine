@@ -1008,8 +1008,8 @@ export default function InAppCampaignEditPage() {
                 <p className="text-sm font-semibold text-stone-900">Pipes audience eligibility</p>
                 <p className="text-xs text-stone-600">Select audiences from the active Pipes registry and verify cached profile membership before activation.</p>
               </div>
-              <ButtonLink size="xs" variant="outline" href="/meiro-workspace">
-                Workspace
+              <ButtonLink size="xs" variant="outline" href="/engage/audiences">
+                Audiences
               </ButtonLink>
             </div>
             <div className="grid gap-2 md:grid-cols-[1fr_auto]">
