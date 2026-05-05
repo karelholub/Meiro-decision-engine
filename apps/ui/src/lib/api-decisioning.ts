@@ -32,6 +32,8 @@ import type {
   PipesPrismImportSnapshotResponse,
   PipesPrismMappingRecommendationsResponse,
   PipesPrismStatusResponse,
+  ProfileAudienceReadinessResponse,
+  ProfileUpsertTestResponse,
   ProfileUpsertStatusResponse,
   PipesRequirementsResponse,
   PipesInlineEvaluateResponse
@@ -317,6 +319,13 @@ export const decisioningApiClient = {
     }),
     prismFieldRegistry: () => apiFetch<PipesPrismFieldRegistryResponse>(`/v1/settings/pipes-prism/field-registry`),
     profileUpsertStatus: () => apiFetch<ProfileUpsertStatusResponse>(`/v1/profiles/upsert/status`),
+    audienceReadiness: (audience: string) =>
+      apiFetch<ProfileAudienceReadinessResponse>(`/v1/profiles/audience-readiness${toQuery({ audience })}`),
+    createProfileCacheTest: (input: { audience: string; appKey?: string; profileId?: string; attributes?: Record<string, unknown> }) =>
+      apiFetch<ProfileUpsertTestResponse>(`/v1/profiles/upsert/test`, {
+        method: "POST",
+        body: JSON.stringify(input)
+      }),
     prismProfilePreview: (profileId: string) =>
       apiFetch<PipesPrismProfilePreviewResponse>(`/v1/settings/pipes-prism/profile-preview${toQuery({ profileId })}`),
     prismMappingRecommendations: () => apiFetch<PipesPrismMappingRecommendationsResponse>(`/v1/settings/pipes-prism/mapping-recommendations`),

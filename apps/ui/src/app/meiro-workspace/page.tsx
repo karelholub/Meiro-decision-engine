@@ -13,6 +13,7 @@ import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import {
   apiClient,
   type PipesCallbackConfigResponse,
+  type ProfileAudienceReadinessResponse,
   type PipesPrismFieldRegistryResponse,
   type PipesPrismStatusResponse,
   type ProfileUpsertStatusResponse
@@ -53,15 +54,18 @@ export default function MeiroWorkspacePage() {
   const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
   const [fieldRegistry, setFieldRegistry] = useState<PipesPrismFieldRegistryResponse | null>(null);
   const [profileUpsertStatus, setProfileUpsertStatus] = useState<ProfileUpsertStatusResponse | null>(null);
+  const [audienceReadiness, setAudienceReadiness] = useState<ProfileAudienceReadinessResponse | null>(null);
   const [callback, setCallback] = useState<PipesCallbackConfigResponse | null>(null);
   const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [selectedDecisionKey, setSelectedDecisionKey] = useState("");
   const [selectedAudience, setSelectedAudience] = useState("");
+  const [testProfileId, setTestProfileId] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [creatingRun, setCreatingRun] = useState(false);
+  const [testingCache, setTestingCache] = useState(false);
 
   useEffect(() => {
     setEnvironment(getEnvironment());
@@ -84,6 +88,7 @@ export default function MeiroWorkspacePage() {
       setPrismStatus(statusResponse);
       setFieldRegistry(registryResponse);
       setProfileUpsertStatus(upsertStatusResponse);
+      setAudienceReadiness(null);
       setCallback(callbackResponse);
       setDecisions(production);
       setRuns(runsResponse.items as RunItem[]);
@@ -112,6 +117,30 @@ export default function MeiroWorkspacePage() {
     }
     return trimmed.startsWith("meiro_segment:") ? trimmed : `meiro_segment:${trimmed}`;
   }, [selectedAudience]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadReadiness = async () => {
+      if (!selectedAudienceRef) {
+        setAudienceReadiness(null);
+        return;
+      }
+      try {
+        const response = await apiClient.pipes.audienceReadiness(selectedAudienceRef);
+        if (!cancelled) {
+          setAudienceReadiness(response);
+        }
+      } catch {
+        if (!cancelled) {
+          setAudienceReadiness(null);
+        }
+      }
+    };
+    void loadReadiness();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAudienceRef, profileUpsertStatus?.lastSuccessAt]);
 
   const precomputeHref = useMemo(() => {
     const params = new URLSearchParams();
@@ -148,6 +177,10 @@ export default function MeiroWorkspacePage() {
       setMessage("Select a Pipes audience before creating a precompute run.");
       return;
     }
+    if (!audienceReadyForPrecompute) {
+      setMessage("Selected audience has no cached membership yet. Use Test cache or wait for Pipes profile sync before precomputing.");
+      return;
+    }
     setCreatingRun(true);
     setMessage(null);
     setError(null);
@@ -182,11 +215,62 @@ export default function MeiroWorkspacePage() {
     }
   };
 
+  const createCacheTestProfile = async () => {
+    if (!selectedAudienceRef) {
+      setMessage("Select a Pipes audience before creating a cache test profile.");
+      return;
+    }
+    setTestingCache(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const response = await apiClient.pipes.createProfileCacheTest({
+        audience: selectedAudienceRef,
+        appKey: "meiro_store"
+      });
+      setTestProfileId(response.profileId);
+      setMessage(`Profile cache test ready for ${response.audience}. Profile hash ${response.profileIdHash.slice(0, 12)}...`);
+      await load();
+      const readiness = await apiClient.pipes.audienceReadiness(selectedAudienceRef);
+      setAudienceReadiness(readiness);
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : "Failed to create profile cache test");
+    } finally {
+      setTestingCache(false);
+    }
+  };
+
   const callbackEnabled = Boolean(callback?.config.isEnabled && callback.config.callbackUrl);
   const lastSuccess = callback?.recentDeliveries?.find((delivery) => delivery.status === "RESOLVED")?.lastSeenAt ?? null;
   const recentUpsertFailureCount = profileUpsertStatus
     ? profileUpsertStatus.totals.unauthorized + profileUpsertStatus.totals.invalidBody + profileUpsertStatus.totals.errors
     : 0;
+  const selectedAudienceKnown = Boolean(
+    selectedAudienceRef &&
+      fieldRegistry?.audiences.some((audience) => audience.id === selectedAudience || `meiro_segment:${audience.id}` === selectedAudienceRef)
+  );
+  const cachedAudienceMembers = audienceReadiness?.matchingProfiles ?? 0;
+  const audienceReadyForPrecompute = selectedAudienceKnown && cachedAudienceMembers > 0;
+  const audienceReadinessDetail = selectedAudienceRef
+    ? audienceReadiness
+      ? `${cachedAudienceMembers} cached member${cachedAudienceMembers === 1 ? "" : "s"} / ${audienceReadiness.cache.uniqueProfiles} cached profiles`
+      : "Checking cached membership"
+    : "Select one";
+  const testSimulationHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (selectedDecision?.decisionId) {
+      params.set("decisionId", selectedDecision.decisionId);
+    }
+    if (selectedDecisionKey.trim()) {
+      params.set("decisionKey", selectedDecisionKey.trim());
+    }
+    if (testProfileId.trim()) {
+      params.set("profileId", testProfileId.trim());
+    }
+    params.set("appKey", "meiro_store");
+    params.set("placement", "home_top");
+    return `/simulate?${params.toString()}`;
+  }, [selectedDecision?.decisionId, selectedDecisionKey, testProfileId]);
 
   return (
     <section className="space-y-4">
@@ -233,9 +317,9 @@ export default function MeiroWorkspacePage() {
           }
         />
         <MetricCard
-          label="Callback"
-          value={callbackEnabled ? "Enabled" : "Needs setup"}
-          description={lastSuccess ? `Last success ${new Date(lastSuccess).toLocaleString()}` : "No recent success"}
+          label="Audience readiness"
+          value={audienceReadyForPrecompute ? "Ready" : selectedAudienceRef ? "Check" : "Select"}
+          description={audienceReadinessDetail}
         />
       </section>
 
@@ -270,12 +354,15 @@ export default function MeiroWorkspacePage() {
             </FieldLabel>
           </div>
 
-          <div className="grid gap-2 md:grid-cols-4">
+          <div className="grid gap-2 md:grid-cols-5">
             <ButtonLink href={simulateHref} size="sm" variant="outline">
               Simulate
             </ButtonLink>
-            <Button type="button" size="sm" onClick={() => void createAudiencePrecompute()} disabled={creatingRun}>
+            <Button type="button" size="sm" onClick={() => void createAudiencePrecompute()} disabled={creatingRun || !audienceReadyForPrecompute}>
               {creatingRun ? "Creating..." : "Precompute"}
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => void createCacheTestProfile()} disabled={testingCache}>
+              {testingCache ? "Testing..." : "Test cache"}
             </Button>
             <ButtonLink href={precomputeHref} size="sm" variant="outline">
               Advanced run
@@ -287,7 +374,7 @@ export default function MeiroWorkspacePage() {
 
           <div className="grid gap-2 md:grid-cols-4">
             <WorkflowStep title="1. Source" status={prismStatus?.sourceMode === "pipes_cli" ? "ok" : "warn"} detail={prismStatus?.activeSource ?? "Unknown"} />
-            <WorkflowStep title="2. Audience" status={selectedAudienceRef ? "ok" : "warn"} detail={selectedAudienceRef || "Select one"} />
+            <WorkflowStep title="2. Audience" status={audienceReadyForPrecompute ? "ok" : "warn"} detail={audienceReadinessDetail} />
             <WorkflowStep title="3. Decision" status={selectedDecisionKey ? "ok" : "warn"} detail={selectedDecisionKey || "Select one"} />
             <WorkflowStep title="4. Delivery" status={callbackEnabled ? "ok" : "warn"} detail={callbackEnabled ? "Callback ready" : "Configure callback"} />
           </div>
@@ -304,9 +391,39 @@ export default function MeiroWorkspacePage() {
               <StatusLine label="Profile cache source" ok={prismStatus?.sourceMode === "pipes_cli"} />
               <StatusLine label="Recent profile upsert" ok={Boolean(profileUpsertStatus?.lastSuccessAt)} />
               <StatusLine label="Upsert auth/body checks" ok={Boolean(profileUpsertStatus && recentUpsertFailureCount === 0)} />
+              <StatusLine label="Audience exists in Pipes" ok={selectedAudienceKnown} />
+              <StatusLine label="Cached audience membership" ok={cachedAudienceMembers > 0} />
               <StatusLine label="Callback delivery" ok={callbackEnabled} />
               <StatusLine label="Audience selected" ok={Boolean(selectedAudienceRef)} />
             </div>
+          </PagePanel>
+
+          <PagePanel density="compact" className="space-y-2">
+            <h3 className="font-semibold">Selected audience</h3>
+            {selectedAudienceRef ? (
+              <>
+                <p className="truncate font-mono text-xs text-stone-600">{selectedAudienceRef}</p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <StatusLine label="Registry" ok={selectedAudienceKnown} />
+                  <StatusLine label="Members" ok={cachedAudienceMembers > 0} />
+                </div>
+                <p className="text-xs text-stone-600">
+                  {audienceReadiness
+                    ? `${audienceReadiness.matchingProfiles} matching cached profile(s). Cache has ${audienceReadiness.cache.uniqueProfiles} unique profile(s).`
+                    : "Membership has not been checked yet."}
+                </p>
+                {audienceReadiness?.sampleProfileHashes.length ? (
+                  <p className="truncate font-mono text-xs text-stone-500">sample {audienceReadiness.sampleProfileHashes[0]}</p>
+                ) : null}
+                {testProfileId ? (
+                  <ButtonLink href={testSimulationHref} size="sm" variant="outline" className="w-full">
+                    Simulate test profile
+                  </ButtonLink>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-sm text-stone-600">Select a Pipes audience to check whether profile membership is already cached.</p>
+            )}
           </PagePanel>
 
           <PagePanel density="compact" className="space-y-2">

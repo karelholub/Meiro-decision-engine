@@ -65,6 +65,7 @@ import {
   shouldQueuePipesCallback
 } from "./lib/pipesCallback";
 import {
+  buildProfileCachePatternForEnvironment,
   buildProfileCacheKey,
   buildRealtimeCacheKey,
   buildRealtimeLockKey,
@@ -84,7 +85,7 @@ import { createInAppEventsWorker } from "./jobs/inappEventsWorker";
 import { createOrchestrationEventsWorker } from "./jobs/orchestrationEventsWorker";
 import { createPrecomputeRunner, type SegmentResolver } from "./jobs/precomputeRunner";
 import { createRetentionWorker } from "./jobs/retentionWorker";
-import { createCachedProfileSegmentResolver } from "./services/segmentResolver";
+import { createCachedProfileSegmentResolver, profileMatchesSegment } from "./services/segmentResolver";
 import { registerBootstrapRoutes } from "./routes/bootstrap";
 import { invalidateRealtimeCache, registerCacheRoutes } from "./routes/cache";
 import { registerCatalogRoutes } from "./routes/catalog";
@@ -482,6 +483,15 @@ const profileUpsertBodySchema = z.object({
   segments: z.array(z.string().min(1)).optional(),
   attributes: z.record(z.unknown()).optional(),
   sourceTs: z.string().datetime().optional()
+});
+const profileAudienceReadinessQuerySchema = z.object({
+  audience: z.string().min(1)
+});
+const profileUpsertTestBodySchema = z.object({
+  audience: z.string().min(1),
+  appKey: z.string().min(1).optional(),
+  profileId: z.string().min(1).optional(),
+  attributes: z.record(z.unknown()).optional()
 });
 const pipesProfilePreviewQuerySchema = z.object({
   profileId: z.string().min(1)
@@ -2628,6 +2638,70 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     attributeCount: input.attributeCount ?? null,
     error: input.error ?? null
   });
+  const normalizeAudienceRef = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    return trimmed.startsWith("meiro_segment:") ? trimmed : `meiro_segment:${trimmed}`;
+  };
+  const upsertProfileIntoCache = async (input: {
+    environment: Environment;
+    profile: EngineProfile;
+    appKey: string | null;
+    sourceTs: string | null;
+  }) => {
+    const attributeKeys = Object.keys(input.profile.attributes)
+      .map((key) => key.trim())
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+
+    const warmedCacheKeys: string[] = [];
+    const candidateRequiredSets = [[], attributeKeys];
+    for (const requiredAttributes of candidateRequiredSets) {
+      const profileCacheKey = buildProfileCacheKey({
+        environment: input.environment,
+        profileId: input.profile.profileId,
+        requiredAttributes
+      });
+      profileCache.set(profileCacheKey, input.profile);
+      warmedCacheKeys.push(profileCacheKey);
+      if (cache.enabled) {
+        await cache.setJson(profileCacheKey, input.profile, profileCacheTtlSeconds);
+      }
+    }
+
+    if (cache.enabled) {
+      const hashedProfileId = hashSha256(input.profile.profileId);
+      await cache.setJson(
+        `deci:pipes:segments:v1:${input.environment}:${hashedProfileId}`,
+        {
+          profileIdHash: hashedProfileId,
+          segments: input.profile.audiences,
+          appKey: input.appKey,
+          sourceTs: input.sourceTs,
+          updatedAt: now().toISOString()
+        },
+        profileCacheTtlSeconds
+      );
+    }
+
+    const invalidation = await invalidateRealtimeCache({
+      environment: input.environment,
+      payload: {
+        scope: "profile",
+        profileId: input.profile.profileId,
+        reasons: ["pipes_profile_upsert"]
+      },
+      cache
+    });
+
+    return {
+      attributeKeys,
+      warmedCacheKeys,
+      invalidation
+    };
+  };
   const realtimeCacheStats = {
     hits: 0,
     misses: 0,
@@ -8215,61 +8289,23 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           audiences: parsed.data.segments ?? [],
           consents: []
         };
-        const attributeKeys = Object.keys(profile.attributes)
-          .map((key) => key.trim())
-          .filter(Boolean)
-          .sort((left, right) => left.localeCompare(right));
-
-        const warmedCacheKeys: string[] = [];
-        const candidateRequiredSets = [[], attributeKeys];
-        for (const requiredAttributes of candidateRequiredSets) {
-          const profileCacheKey = buildProfileCacheKey({
-            environment,
-            profileId: profile.profileId,
-            requiredAttributes
-          });
-          profileCache.set(profileCacheKey, profile);
-          warmedCacheKeys.push(profileCacheKey);
-          if (cache.enabled) {
-            await cache.setJson(profileCacheKey, profile, profileCacheTtlSeconds);
-          }
-        }
-
-        if (cache.enabled) {
-          const hashedProfileId = hashSha256(profile.profileId);
-          await cache.setJson(
-            `deci:pipes:segments:v1:${environment}:${hashedProfileId}`,
-            {
-              profileIdHash: hashedProfileId,
-              segments: profile.audiences,
-              appKey: parsed.data.appKey ?? null,
-              sourceTs: parsed.data.sourceTs ?? null,
-              updatedAt: now().toISOString()
-            },
-            profileCacheTtlSeconds
-          );
-        }
-
-        const invalidation = await invalidateRealtimeCache({
+        const cacheResult = await upsertProfileIntoCache({
           environment,
-          payload: {
-            scope: "profile",
-            profileId: profile.profileId,
-            reasons: ["pipes_profile_upsert"]
-          },
-          cache
+          profile,
+          appKey: parsed.data.appKey ?? null,
+          sourceTs: parsed.data.sourceTs ?? null
         });
 
         recordProfileUpsertEvent(
           buildProfileUpsertEvent({
             request,
             environment,
-            status: "ok",
             profileId: profile.profileId,
+            status: "ok",
             appKey: parsed.data.appKey ?? null,
             sourceTs: parsed.data.sourceTs ?? null,
             segmentsCount: profile.audiences.length,
-            attributeCount: attributeKeys.length
+            attributeCount: cacheResult.attributeKeys.length
           })
         );
 
@@ -8278,11 +8314,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           profileId: profile.profileId,
           environment,
           segments: profile.audiences,
-          updatedAttributes: attributeKeys,
+          updatedAttributes: cacheResult.attributeKeys,
           sourceTs: parsed.data.sourceTs ?? null,
           cache: {
-            warmedEntries: warmedCacheKeys.length,
-            invalidatedRealtimeKeys: invalidation.deletedKeys
+            warmedEntries: cacheResult.warmedCacheKeys.length,
+            invalidatedRealtimeKeys: cacheResult.invalidation.deletedKeys
           },
           recomputeEnqueued: false
         };
@@ -8332,6 +8368,122 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       lastProfileIdHash: stats.lastProfileIdHash,
       recent: stats.recent
     };
+  });
+
+  app.get("/v1/profiles/audience-readiness", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = profileAudienceReadinessQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const audienceRef = normalizeAudienceRef(parsed.data.audience);
+    const cacheKeys = cache.enabled ? await cache.scanKeys(buildProfileCachePatternForEnvironment(environment)) : [];
+    const seenProfileIds = new Set<string>();
+    const matchingProfileHashes: string[] = [];
+    let malformedProfiles = 0;
+
+    for (const key of cacheKeys) {
+      const profile = await cache.getJson<EngineProfile>(key);
+      if (!profile?.profileId || !Array.isArray(profile.audiences) || typeof profile.attributes !== "object" || profile.attributes === null) {
+        malformedProfiles += 1;
+        continue;
+      }
+      if (seenProfileIds.has(profile.profileId)) {
+        continue;
+      }
+      seenProfileIds.add(profile.profileId);
+      if (profileMatchesSegment(profile, { attribute: "audience", value: audienceRef })) {
+        matchingProfileHashes.push(hashSha256(profile.profileId));
+      }
+    }
+
+    const matchingProfiles = matchingProfileHashes.length;
+    return {
+      environment,
+      audience: {
+        input: parsed.data.audience,
+        ref: audienceRef
+      },
+      cache: {
+        redisEnabled: cache.enabled,
+        ttlSeconds: profileCacheTtlSeconds,
+        profileCacheKeys: cacheKeys.length,
+        uniqueProfiles: seenProfileIds.size,
+        malformedProfiles
+      },
+      matchingProfiles,
+      sampleProfileHashes: matchingProfileHashes.slice(0, 5),
+      readiness: !cache.enabled
+        ? "cache_disabled"
+        : matchingProfiles > 0
+          ? "cached_membership"
+          : seenProfileIds.size > 0
+            ? "no_cached_membership"
+            : "no_cached_profiles"
+    };
+  });
+
+  app.post("/v1/profiles/upsert/test", { preHandler: requirePermission("settings.pipes.write") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = profileUpsertTestBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const sourceTs = now().toISOString();
+    const audienceRef = normalizeAudienceRef(parsed.data.audience);
+    const profile: EngineProfile = {
+      profileId: parsed.data.profileId ?? `workspace-test-${Date.now()}`,
+      attributes: {
+        profile_cache_test: true,
+        workspace_test_audience: audienceRef,
+        ...(parsed.data.attributes ?? {})
+      },
+      audiences: [audienceRef],
+      consents: []
+    };
+
+    const cacheResult = await upsertProfileIntoCache({
+      environment,
+      profile,
+      appKey: parsed.data.appKey ?? "meiro_store",
+      sourceTs
+    });
+
+    recordProfileUpsertEvent(
+      buildProfileUpsertEvent({
+        request,
+        environment,
+        status: "ok",
+        profileId: profile.profileId,
+        appKey: parsed.data.appKey ?? "meiro_store",
+        sourceTs,
+        segmentsCount: profile.audiences.length,
+        attributeCount: cacheResult.attributeKeys.length
+      })
+    );
+
+    return reply.code(201).send({
+      status: "ok",
+      environment,
+      profileId: profile.profileId,
+      profileIdHash: hashSha256(profile.profileId),
+      audience: audienceRef,
+      updatedAttributes: cacheResult.attributeKeys,
+      cache: {
+        warmedEntries: cacheResult.warmedCacheKeys.length,
+        invalidatedRealtimeKeys: cacheResult.invalidation.deletedKeys
+      }
+    });
   });
 
   app.get("/v1/settings/pipes-prism/profile-preview", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {

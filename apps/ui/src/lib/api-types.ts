@@ -165,6 +165,37 @@ export type ProfileUpsertStatusResponse = {
   }>;
 };
 
+export type ProfileAudienceReadinessResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  audience: {
+    input: string;
+    ref: string;
+  };
+  cache: {
+    redisEnabled: boolean;
+    ttlSeconds: number;
+    profileCacheKeys: number;
+    uniqueProfiles: number;
+    malformedProfiles: number;
+  };
+  matchingProfiles: number;
+  sampleProfileHashes: string[];
+  readiness: "cache_disabled" | "cached_membership" | "no_cached_membership" | "no_cached_profiles";
+};
+
+export type ProfileUpsertTestResponse = {
+  status: "ok";
+  environment: "DEV" | "STAGE" | "PROD";
+  profileId: string;
+  profileIdHash: string;
+  audience: string;
+  updatedAttributes: string[];
+  cache: {
+    warmedEntries: number;
+    invalidatedRealtimeKeys: number;
+  };
+};
+
 export type PipesPrismMappingRecommendationsResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   sourceMode?: "pipes_cli" | "meiro_mcp";
