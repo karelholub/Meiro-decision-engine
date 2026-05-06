@@ -203,7 +203,7 @@ export default function MeiroWorkspacePage() {
       campaign: `/engage/campaigns/new/edit?${campaignParams.toString()}`,
       experiment: experimentParams.toString() ? `/engage/experiments/new/edit?${experimentParams.toString()}` : "/engage/experiments/new/edit",
       precompute: precomputeHref,
-      callback: "/settings/integrations/pipes-callback"
+      diagnostics: "/engage/tools/meiro-diagnostics"
     };
   }, [precomputeHref, selectedAudienceRef, simulateHref]);
 
@@ -384,10 +384,10 @@ export default function MeiroWorkspacePage() {
           />
           <JourneyStep
             number="5"
-            title="Callback"
-            detail={callbackEnabled ? "Delivery ready" : "Configure delivery"}
+            title="Diagnostics"
+            detail={callbackEnabled ? "Delivery ready" : "Fix delivery"}
             status={callbackEnabled ? "ok" : "warn"}
-            href={audienceJourneyHrefs.callback}
+            href={audienceJourneyHrefs.diagnostics}
           />
         </div>
       </PagePanel>
@@ -463,8 +463,8 @@ export default function MeiroWorkspacePage() {
             <ButtonLink href={precomputeHref} size="sm" variant="outline">
               Advanced run
             </ButtonLink>
-            <ButtonLink href="/settings/integrations/pipes-callback" size="sm" variant="outline">
-              Callback
+            <ButtonLink href="/engage/tools/meiro-diagnostics" size="sm" variant="outline">
+              Diagnostics
             </ButtonLink>
           </div>
 

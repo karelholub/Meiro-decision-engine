@@ -6,7 +6,7 @@ import { PagePanel } from "../ui/page";
 import { normalizeMeiroAudienceRef, stripMeiroAudiencePrefix } from "../../lib/meiro-audience-context";
 import { MeiroAudienceContextStrip } from "./MeiroAudienceContextStrip";
 
-type AudienceWorkflowStep = "audiences" | "calendar" | "campaigns" | "control" | "simulate" | "precompute" | "callback";
+type AudienceWorkflowStep = "audiences" | "calendar" | "campaigns" | "control" | "simulate" | "precompute" | "diagnostics";
 
 type MeiroAudienceWorkflowPanelProps = {
   audience: string;
@@ -34,7 +34,7 @@ export function MeiroAudienceWorkflowPanel({ audience, currentStep, onClear, cla
       : "/engage/campaigns/new/edit?appKey=meiro_store&placementKey=home_top",
     simulate: normalizedAudience ? `/simulate?audienceKey=${encodeURIComponent(normalizedAudience)}` : "/simulate",
     precompute: normalizedAudience ? `/execution/precompute?segment=${encodeURIComponent(normalizedAudience)}` : "/execution/precompute",
-    callback: "/settings/integrations/pipes-callback"
+    diagnostics: "/engage/tools/meiro-diagnostics"
   };
 
   return (
@@ -66,7 +66,7 @@ export function MeiroAudienceWorkflowPanel({ audience, currentStep, onClear, cla
         <WorkflowLink active={currentStep === "campaigns" || currentStep === "control"} href={hrefs.campaign} label="Create" detail="Campaign" />
         <WorkflowLink active={currentStep === "simulate"} href={hrefs.simulate} label="Simulate" detail="Decision fit" />
         <WorkflowLink active={currentStep === "precompute"} href={hrefs.precompute} label="Precompute" detail="Warm results" />
-        <WorkflowLink active={currentStep === "callback"} href={hrefs.callback} label="Callback" detail="Deliver profile" />
+        <WorkflowLink active={currentStep === "diagnostics"} href={hrefs.diagnostics} label="Diagnostics" detail="Fix issues" />
       </div>
     </PagePanel>
   );

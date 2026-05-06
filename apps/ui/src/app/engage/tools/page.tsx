@@ -7,6 +7,10 @@ export default function EngageToolsPage() {
       <PageHeader density="compact" title="Engage Tools" description="Operational debuggers and playgrounds for in-app delivery." />
 
       <div className="grid gap-3 md:grid-cols-3">
+        <Link className="rounded-md border border-stone-200 bg-white p-3 hover:bg-stone-50" href="/engage/tools/meiro-diagnostics">
+          <h3 className="font-semibold">Meiro Diagnostics</h3>
+          <p className="mt-1 text-sm text-stone-600">Check Pipes source health, profile cache, precompute, callback delivery, and decide responses.</p>
+        </Link>
         <Link className="rounded-md border border-stone-200 bg-white p-3 hover:bg-stone-50" href="/engage/tools/experiment-playground">
           <h3 className="font-semibold">Experiment Playground</h3>
           <p className="mt-1 text-sm text-stone-600">Run runtime assignments and preview rendered payloads.</p>
