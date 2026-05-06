@@ -7,6 +7,7 @@ import type {
   MeiroCampaignChannel,
   MeiroCampaignListResponse,
   MeiroCampaignRecord,
+  MeiroDiagnosticsSummaryResponse,
   MeiroMcpCheckResponse,
   MeiroMcpAttribute,
   MeiroMcpCustomerAttributes,
@@ -22,6 +23,9 @@ import type {
 
 export const meiroApiClient = {
   meiro: {
+    diagnostics: {
+      summary: () => apiFetch<MeiroDiagnosticsSummaryResponse>("/v1/meiro/diagnostics/summary")
+    },
     api: {
       status: () => apiFetch<MeiroApiStatusResponse>("/v1/meiro/api/status"),
       checkLogin: () =>

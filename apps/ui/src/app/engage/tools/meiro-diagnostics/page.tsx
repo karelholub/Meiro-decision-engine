@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { PipesCallbackConfigResponse, PipesPrismStatusResponse, ProfileUpsertStatusResponse } from "../../../../lib/api";
+import type { MeiroDiagnosticsSummaryResponse } from "../../../../lib/api";
 import { apiClient } from "../../../../lib/api";
 import { ButtonLink } from "../../../../components/ui/button";
 import { PageHeader, PagePanel } from "../../../../components/ui/page";
@@ -10,23 +10,6 @@ import { MeiroSourceBadge } from "../../../../components/meiro/MeiroSourceBadge"
 import { InlineError, LoadingState } from "../../../../components/ui/app-state";
 
 type DiagnosticTone = "ok" | "warn" | "error" | "unknown";
-
-type PrecomputeRunSummary = {
-  runKey: string;
-  mode: "decision" | "stack";
-  key: string;
-  status: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELED";
-  total: number;
-  processed: number;
-  succeeded: number;
-  noop: number;
-  suppressed: number;
-  errors: number;
-  startedAt: string | null;
-  finishedAt: string | null;
-  createdAt: string;
-  parameters: unknown;
-};
 
 const diagnosticLinks = [
   {
@@ -84,30 +67,17 @@ const formatTime = (value: string | null | undefined) => {
 export default function MeiroDiagnosticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
-  const [callback, setCallback] = useState<PipesCallbackConfigResponse | null>(null);
-  const [upsertStatus, setUpsertStatus] = useState<ProfileUpsertStatusResponse | null>(null);
-  const [precomputeRuns, setPrecomputeRuns] = useState<PrecomputeRunSummary[]>([]);
+  const [summary, setSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
 
   const loadDiagnostics = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [prismResult, callbackResult, upsertResult, precomputeResult] = await Promise.allSettled([
-        apiClient.pipes.prismStatus(),
-        apiClient.settings.getPipesCallback(),
-        apiClient.pipes.profileUpsertStatus(),
-        apiClient.execution.precompute.listRuns({ limit: 20 })
-      ]);
-      setPrismStatus(prismResult.status === "fulfilled" ? prismResult.value : null);
-      setCallback(callbackResult.status === "fulfilled" ? callbackResult.value : null);
-      setUpsertStatus(upsertResult.status === "fulfilled" ? upsertResult.value : null);
-      setPrecomputeRuns(precomputeResult.status === "fulfilled" ? precomputeResult.value.items : []);
-
-      const failures = [prismResult, callbackResult, upsertResult, precomputeResult].filter((result) => result.status === "rejected");
-      if (failures.length > 0) {
-        setError(`${failures.length} diagnostic request${failures.length === 1 ? "" : "s"} failed.`);
-      }
+      const response = await apiClient.meiro.diagnostics.summary();
+      setSummary(response);
+    } catch (loadError) {
+      setSummary(null);
+      setError(loadError instanceof Error ? loadError.message : "Failed to load Meiro diagnostics.");
     } finally {
       setLoading(false);
     }
@@ -117,70 +87,71 @@ export default function MeiroDiagnosticsPage() {
     void loadDiagnostics();
   }, []);
 
-  const failedUpserts = upsertStatus ? upsertStatus.totals.unauthorized + upsertStatus.totals.invalidBody + upsertStatus.totals.errors : 0;
-  const failedPrecomputeRuns = precomputeRuns.filter((run) => run.status === "FAILED" || run.errors > 0);
-  const runningPrecomputeRuns = precomputeRuns.filter((run) => run.status === "QUEUED" || run.status === "RUNNING");
-  const callbackReady = Boolean(callback?.config.isEnabled && callback.config.callbackUrl);
+  const failedUpserts = summary
+    ? summary.profileUpserts.totals.unauthorized + summary.profileUpserts.totals.invalidBody + summary.profileUpserts.totals.errors
+    : 0;
+  const callbackReady = Boolean(summary?.callback.enabled);
+  const precomputeRuns = summary?.precompute.recent ?? [];
 
   const statusCards = useMemo(
     () => [
       {
         title: "Pipes source",
-        tone: !prismStatus ? "unknown" as const : prismStatus.configured ? "ok" as const : "error" as const,
-        value: prismStatus?.activeSource ?? "Not loaded",
-        detail: prismStatus?.baseUrl ?? "Base URL unavailable",
+        tone: !summary ? "unknown" as const : summary.pipes.configured ? "ok" as const : "error" as const,
+        value: summary?.pipes.activeSource ?? "Not loaded",
+        detail: summary?.pipes.baseUrl ?? "Base URL unavailable",
         href: "/settings/integrations/pipes"
       },
       {
         title: "Token and CLI",
-        tone: !prismStatus ? "unknown" as const : prismStatus.tokenConfigured && prismStatus.cli.installed ? "ok" as const : "warn" as const,
-        value: prismStatus?.tokenConfigured ? "Token configured" : "Token missing",
-        detail: prismStatus?.cli.installed ? `CLI ${prismStatus.cli.version ?? "installed"}` : prismStatus?.cli.error ?? "CLI not confirmed",
+        tone: !summary ? "unknown" as const : summary.pipes.tokenConfigured ? "ok" as const : "warn" as const,
+        value: summary?.pipes.tokenConfigured ? "Token configured" : "Token missing",
+        detail: summary ? `Command ${summary.pipes.cliCommand}` : "CLI command unavailable",
         href: "/settings/integrations/pipes"
       },
       {
         title: "Callback delivery",
-        tone: !callback ? "unknown" as const : callbackReady ? "ok" as const : "warn" as const,
+        tone: !summary ? "unknown" as const : callbackReady ? "ok" as const : "warn" as const,
         value: callbackReady ? "Enabled" : "Not ready",
-        detail: callback?.config.callbackUrl || "Callback URL missing or disabled",
+        detail: summary?.callback.urlHost || "Callback URL missing or disabled",
         href: "/settings/integrations/pipes-callback"
       },
       {
         title: "Profile upserts",
-        tone: !upsertStatus ? "unknown" as const : failedUpserts > 0 ? "error" as const : upsertStatus.totals.succeeded > 0 ? "ok" as const : "warn" as const,
-        value: upsertStatus ? `${upsertStatus.totals.succeeded}/${upsertStatus.totals.attempts} succeeded` : "Not loaded",
-        detail: upsertStatus ? `Last success ${formatTime(upsertStatus.lastSuccessAt)}` : "Profile cache status unavailable",
+        tone: !summary ? "unknown" as const : failedUpserts > 0 ? "error" as const : summary.profileUpserts.totals.succeeded > 0 ? "ok" as const : "warn" as const,
+        value: summary ? `${summary.profileUpserts.totals.succeeded}/${summary.profileUpserts.totals.attempts} succeeded` : "Not loaded",
+        detail: summary ? `Last success ${formatTime(summary.profileUpserts.lastSuccessAt)}` : "Profile cache status unavailable",
         href: "/execution/cache"
       },
       {
         title: "Profile cache",
-        tone: !upsertStatus ? "unknown" as const : upsertStatus.cache.redisEnabled ? "ok" as const : "warn" as const,
-        value: upsertStatus?.cache.redisEnabled ? "Redis enabled" : "In-memory only",
-        detail: upsertStatus ? `TTL ${upsertStatus.cache.ttlSeconds}s, max ${upsertStatus.cache.inMemoryMaxEntries}` : "Cache status unavailable",
+        tone: !summary ? "unknown" as const : summary.profileUpserts.cache.redisEnabled ? "ok" as const : "warn" as const,
+        value: summary?.profileUpserts.cache.redisEnabled ? "Redis enabled" : "In-memory only",
+        detail: summary ? `TTL ${summary.profileUpserts.cache.ttlSeconds}s, max ${summary.profileUpserts.cache.inMemoryMaxEntries}` : "Cache status unavailable",
         href: "/execution/cache"
       },
       {
         title: "Precompute health",
-        tone: precomputeRuns.length === 0 ? "unknown" as const : failedPrecomputeRuns.length > 0 ? "error" as const : "ok" as const,
-        value: `${runningPrecomputeRuns.length} active`,
-        detail: `${failedPrecomputeRuns.length} failing / ${precomputeRuns.length} recent runs`,
+        tone: !summary ? "unknown" as const : summary.precompute.recent.length === 0 ? "unknown" as const : summary.precompute.failing > 0 ? "error" as const : "ok" as const,
+        value: `${summary?.precompute.active ?? 0} active`,
+        detail: `${summary?.precompute.failing ?? 0} failing / ${summary?.precompute.recent.length ?? 0} recent runs`,
         href: "/execution/precompute"
       }
     ],
-    [callback, callbackReady, failedPrecomputeRuns.length, failedUpserts, precomputeRuns.length, prismStatus, runningPrecomputeRuns.length, upsertStatus]
+    [callbackReady, failedUpserts, summary]
   );
 
   const attentionItems = useMemo(() => {
     const items: string[] = [];
-    if (!prismStatus?.configured) items.push("Pipes source is not confirmed.");
-    if (prismStatus && !prismStatus.tokenConfigured) items.push("Pipes token is missing.");
-    if (prismStatus && !prismStatus.cli.installed) items.push("Pipes CLI is not confirmed.");
+    if (!summary) return items;
+    if (!summary.pipes.configured) items.push("Pipes source is not confirmed.");
+    if (!summary.pipes.tokenConfigured) items.push("Pipes token is missing.");
     if (!callbackReady) items.push("Callback delivery is not enabled or has no URL.");
-    if (upsertStatus && failedUpserts > 0) items.push("Recent profile upserts include auth, body, or server failures.");
-    if (upsertStatus && upsertStatus.totals.succeeded === 0) items.push("No successful profile upsert has been recorded.");
-    if (failedPrecomputeRuns.length > 0) items.push("Recent precompute runs have failures or result errors.");
+    if (failedUpserts > 0) items.push("Recent profile upserts include auth, body, or server failures.");
+    if (summary.profileUpserts.totals.succeeded === 0) items.push("No successful profile upsert has been recorded.");
+    if (summary.precompute.failing > 0) items.push("Recent precompute runs have failures or result errors.");
     return items;
-  }, [callbackReady, failedPrecomputeRuns.length, failedUpserts, prismStatus, upsertStatus]);
+  }, [callbackReady, failedUpserts, summary]);
 
   return (
     <section className="space-y-4">
@@ -205,14 +176,14 @@ export default function MeiroDiagnosticsPage() {
         }
       />
 
-      {error ? <InlineError title="Diagnostics partially unavailable" description={error} /> : null}
+      {error ? <InlineError title="Diagnostics unavailable" description={error} /> : null}
       {loading ? <LoadingState title="Loading Meiro diagnostics" /> : null}
 
       <PagePanel density="compact" className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="font-semibold text-stone-900">What needs attention</h3>
-            <p className="mt-1 text-sm text-stone-700">Current live checks across Pipes source, callback delivery, profile cache, and precompute.</p>
+            <p className="mt-1 text-sm text-stone-700">Current redacted checks across Pipes source, callback delivery, profile cache, and precompute.</p>
           </div>
           <span className={`rounded-md border px-2 py-1 text-xs ${attentionItems.length ? toneClassName.warn : toneClassName.ok}`}>
             {attentionItems.length ? `${attentionItems.length} check${attentionItems.length === 1 ? "" : "s"}` : "All clear"}
@@ -228,7 +199,7 @@ export default function MeiroDiagnosticsPage() {
           </div>
         ) : (
           <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-            No blocking Meiro diagnostics detected from the current status endpoints.
+            No blocking Meiro diagnostics detected from the current redacted summary.
           </p>
         )}
       </PagePanel>
@@ -249,7 +220,7 @@ export default function MeiroDiagnosticsPage() {
       <div className="grid gap-3 lg:grid-cols-2">
         <PagePanel density="compact" className="space-y-2">
           <h3 className="font-semibold text-stone-900">Recent profile upserts</h3>
-          {upsertStatus?.recent.slice(0, 5).map((event) => (
+          {summary?.profileUpserts.recent.map((event) => (
             <div key={`${event.ts}:${event.profileIdHash}:${event.status}`} className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-medium">{event.status}</span>
@@ -259,7 +230,7 @@ export default function MeiroDiagnosticsPage() {
               {event.error ? <p className="mt-1 text-xs text-red-700">{event.error}</p> : null}
             </div>
           ))}
-          {!upsertStatus || upsertStatus.recent.length === 0 ? <p className="text-sm text-stone-600">No profile upsert events recorded yet.</p> : null}
+          {!summary || summary.profileUpserts.recent.length === 0 ? <p className="text-sm text-stone-600">No profile upsert events recorded yet.</p> : null}
         </PagePanel>
 
         <PagePanel density="compact" className="space-y-2">
@@ -284,7 +255,7 @@ export default function MeiroDiagnosticsPage() {
         <div>
           <h3 className="font-semibold text-stone-900">Detailed tools</h3>
           <p className="mt-1 text-sm text-stone-700">
-            Use these pages for deeper investigation after the live status cards identify the failing area.
+            Use these pages for deeper investigation after the redacted status cards identify the failing area.
           </p>
         </div>
         <div className="grid gap-2 md:grid-cols-3">

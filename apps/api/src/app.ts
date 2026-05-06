@@ -567,6 +567,17 @@ const buildResponseError = (reply: FastifyReply, statusCode: number, error: stri
   return reply.code(statusCode).send({ error, details });
 };
 
+const normalizeDiagnosticsUrl = (value: string | undefined | null): string | null => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return trimmed.replace(/(token|key|secret)=([^&]+)/gi, "$1=redacted");
+  }
+};
+
 const hashSha256 = (value: string): string => {
   return sha256(value);
 };
@@ -8367,6 +8378,131 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       lastFailureAt: stats.lastFailureAt,
       lastProfileIdHash: stats.lastProfileIdHash,
       recent: stats.recent
+    };
+  });
+
+  app.get("/v1/meiro/diagnostics/summary", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const profileStats = profileUpsertStatsByEnvironment[environment];
+    const baseUrl = normalizeDiagnosticsUrl(config.meiroPipesBaseUrl);
+    const tokenConfigured = Boolean(config.meiroPipesToken?.trim());
+    const sourceMode = config.meiroPrismSourceMode ?? "pipes_cli";
+
+    const callbackEffective =
+      hasPipesCallbackStorage
+        ? await loadEffectivePipesCallbackConfig({
+            prisma: prisma as PrismaClient,
+            environment
+          })
+        : null;
+    const callbackConfig = callbackEffective?.config ?? null;
+    const callbackRecent =
+      hasDlqStorage && typeof (prisma as unknown as { deadLetterMessage?: { findMany?: unknown } }).deadLetterMessage?.findMany === "function"
+        ? await prisma.deadLetterMessage.findMany({
+            where: { topic: PIPES_CALLBACK_TOPIC },
+            orderBy: { lastSeenAt: "desc" },
+            take: 20,
+            select: {
+              status: true,
+              attempts: true,
+              maxAttempts: true,
+              errorType: true,
+              lastSeenAt: true,
+              resolvedAt: true
+            }
+          })
+        : [];
+
+    const precomputeRuns = await prisma.precomputeRun.findMany({
+      where: { environment },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: {
+        runKey: true,
+        mode: true,
+        key: true,
+        status: true,
+        total: true,
+        processed: true,
+        succeeded: true,
+        noop: true,
+        suppressed: true,
+        errors: true,
+        startedAt: true,
+        finishedAt: true,
+        createdAt: true
+      }
+    });
+
+    return {
+      environment,
+      generatedAt: now().toISOString(),
+      pipes: {
+        configured: Boolean(baseUrl && tokenConfigured),
+        sourceMode,
+        activeSource: sourceMode === "pipes_cli" ? "Pipes CLI" : "Meiro MCP",
+        baseUrl,
+        tokenConfigured,
+        cliCommand: config.meiroPipesCliCommand ?? "mpcli"
+      },
+      callback: {
+        storageAvailable: hasPipesCallbackStorage,
+        source: callbackEffective?.source ?? "unavailable",
+        enabled: Boolean(callbackConfig?.isEnabled && callbackConfig.callbackUrl),
+        mode: callbackConfig?.mode ?? "disabled",
+        authType: callbackConfig?.authType ?? null,
+        hasUrl: Boolean(callbackConfig?.callbackUrl),
+        urlHost: normalizeDiagnosticsUrl(callbackConfig?.callbackUrl),
+        updatedAt: callbackConfig?.updatedAt.toISOString() ?? null,
+        recent: {
+          total: callbackRecent.length,
+          resolved: callbackRecent.filter((entry) => entry.status === "RESOLVED").length,
+          pending: callbackRecent.filter((entry) => entry.status !== "RESOLVED").length,
+          lastSeenAt: callbackRecent[0]?.lastSeenAt.toISOString() ?? null,
+          lastErrorType: callbackRecent.find((entry) => entry.status !== "RESOLVED")?.errorType ?? null
+        }
+      },
+      profileUpserts: {
+        cache: {
+          redisEnabled: cache.enabled,
+          ttlSeconds: profileCacheTtlSeconds,
+          inMemoryMaxEntries: PROFILE_CACHE_MAX_ITEMS
+        },
+        totals: {
+          attempts: profileStats.attempts,
+          succeeded: profileStats.succeeded,
+          unauthorized: profileStats.unauthorized,
+          invalidBody: profileStats.invalidBody,
+          errors: profileStats.errors
+        },
+        lastAttemptAt: profileStats.lastAttemptAt,
+        lastSuccessAt: profileStats.lastSuccessAt,
+        lastFailureAt: profileStats.lastFailureAt,
+        recent: profileStats.recent.slice(0, 5)
+      },
+      precompute: {
+        recent: precomputeRuns.map((run) => ({
+          runKey: run.runKey,
+          mode: run.mode,
+          key: run.key,
+          status: run.status,
+          total: run.total,
+          processed: run.processed,
+          succeeded: run.succeeded,
+          noop: run.noop,
+          suppressed: run.suppressed,
+          errors: run.errors,
+          startedAt: run.startedAt?.toISOString() ?? null,
+          finishedAt: run.finishedAt?.toISOString() ?? null,
+          createdAt: run.createdAt.toISOString()
+        })),
+        active: precomputeRuns.filter((run) => run.status === "QUEUED" || run.status === "RUNNING").length,
+        failing: precomputeRuns.filter((run) => run.status === "FAILED" || run.errors > 0).length
+      }
     };
   });
 

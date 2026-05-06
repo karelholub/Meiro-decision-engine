@@ -165,6 +165,73 @@ export type ProfileUpsertStatusResponse = {
   }>;
 };
 
+export type MeiroDiagnosticsSummaryResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  generatedAt: string;
+  pipes: {
+    configured: boolean;
+    sourceMode: "pipes_cli" | "meiro_mcp";
+    activeSource: "Pipes CLI" | "Meiro MCP";
+    baseUrl: string | null;
+    tokenConfigured: boolean;
+    cliCommand: string;
+  };
+  callback: {
+    storageAvailable: boolean;
+    source: "app" | "environment_default" | "fallback_default" | "unavailable";
+    enabled: boolean;
+    mode: "disabled" | "async_only" | "always";
+    authType: "bearer" | "shared_secret" | "none" | null;
+    hasUrl: boolean;
+    urlHost: string | null;
+    updatedAt: string | null;
+    recent: {
+      total: number;
+      resolved: number;
+      pending: number;
+      lastSeenAt: string | null;
+      lastErrorType: string | null;
+    };
+  };
+  profileUpserts: {
+    cache: {
+      redisEnabled: boolean;
+      ttlSeconds: number;
+      inMemoryMaxEntries: number;
+    };
+    totals: {
+      attempts: number;
+      succeeded: number;
+      unauthorized: number;
+      invalidBody: number;
+      errors: number;
+    };
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    recent: ProfileUpsertStatusResponse["recent"];
+  };
+  precompute: {
+    active: number;
+    failing: number;
+    recent: Array<{
+      runKey: string;
+      mode: "decision" | "stack";
+      key: string;
+      status: "QUEUED" | "RUNNING" | "DONE" | "FAILED" | "CANCELED";
+      total: number;
+      processed: number;
+      succeeded: number;
+      noop: number;
+      suppressed: number;
+      errors: number;
+      startedAt: string | null;
+      finishedAt: string | null;
+      createdAt: string;
+    }>;
+  };
+};
+
 export type ProfileAudienceReadinessResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   audience: {
