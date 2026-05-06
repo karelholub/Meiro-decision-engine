@@ -295,6 +295,15 @@ export default function MeiroWorkspacePage() {
       ? `${cachedAudienceMembers} cached member${cachedAudienceMembers === 1 ? "" : "s"} / ${audienceReadiness.cache.uniqueProfiles} cached profiles`
       : "Checking cached membership"
     : "Select one";
+  const workspaceDiagnosticsReason = !prismStatus?.configured
+    ? "Pipes source configuration is not confirmed."
+    : recentUpsertFailureCount > 0
+      ? "Recent profile upserts include auth, body, or server failures."
+      : selectedAudienceRef && audienceReadiness && cachedAudienceMembers === 0
+        ? "Selected Pipes audience has no cached profile members for precompute."
+        : !callbackEnabled
+          ? "Pipes Callback delivery is not ready."
+          : null;
   const testSimulationHref = useMemo(() => {
     const params = new URLSearchParams();
     if (selectedDecision?.decisionId) {
@@ -351,7 +360,7 @@ export default function MeiroWorkspacePage() {
             Create campaign
           </ButtonLink>
         </div>
-        <div className="grid gap-2 md:grid-cols-5">
+        <div className="grid gap-2 md:grid-cols-4">
           <JourneyStep
             number="1"
             title="Verify profiles"
@@ -382,14 +391,15 @@ export default function MeiroWorkspacePage() {
             status={audienceReadyForPrecompute ? "ok" : "warn"}
             href={audienceJourneyHrefs.precompute}
           />
-          <JourneyStep
-            number="5"
-            title="Diagnostics"
-            detail={callbackEnabled ? "Delivery ready" : "Fix delivery"}
-            status={callbackEnabled ? "ok" : "warn"}
-            href={audienceJourneyHrefs.diagnostics}
-          />
         </div>
+        {workspaceDiagnosticsReason ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p>{workspaceDiagnosticsReason}</p>
+            <ButtonLink size="xs" variant="outline" href={audienceJourneyHrefs.diagnostics}>
+              Open diagnostics
+            </ButtonLink>
+          </div>
+        ) : null}
       </PagePanel>
 
       <section className="grid gap-3 md:grid-cols-4">

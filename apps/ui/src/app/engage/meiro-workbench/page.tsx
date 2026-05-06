@@ -58,6 +58,7 @@ export default function MeiroActivationWorkbenchPage() {
   const [customerProfile, setCustomerProfile] = useState<{ profileId: string; attributes: Record<string, unknown> } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const workflowDiagnosticsReason = error ?? (mcpStatus && !mcpStatus.configured ? "Meiro MCP configuration is incomplete for metadata handoff." : null);
 
   const loadWorkbench = async () => {
     setLoading(true);
@@ -163,6 +164,7 @@ export default function MeiroActivationWorkbenchPage() {
       {error ? <InlineError title="Meiro workbench unavailable" description={error} /> : null}
       <MeiroAudienceWorkflowPanel
         audience={selectedSegmentId}
+        diagnosticsReason={workflowDiagnosticsReason}
         onClear={() => {
           setSelectedSegmentId("");
           storeMeiroAudience("");

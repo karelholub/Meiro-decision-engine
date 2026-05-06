@@ -122,6 +122,7 @@ export default function MeiroCampaignControlPage() {
   const calendarHref = workflowAudience
     ? `/engage/calendar?sourceType=meiro_campaign&audienceKey=${encodeURIComponent(workflowAudience)}`
     : "/engage/calendar?sourceType=meiro_campaign";
+  const workflowDiagnosticsReason = error ?? (apiStatus && !apiStatus.ok ? "Meiro API status is not confirmed for live campaign operations." : null);
 
   const loadCampaigns = async (preferredId = selectedId) => {
     setLoading(true);
@@ -351,6 +352,7 @@ export default function MeiroCampaignControlPage() {
       <MeiroAudienceWorkflowPanel
         audience={workflowAudience}
         currentStep="control"
+        diagnosticsReason={workflowDiagnosticsReason}
         onClear={() => {
           setActivationSegmentIds([]);
           setSegmentInput("");

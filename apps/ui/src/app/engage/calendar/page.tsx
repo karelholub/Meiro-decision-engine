@@ -1264,6 +1264,13 @@ export default function CampaignCalendarPage() {
     assetType
   });
   const currentShareHref = `/engage/calendar?${calendarShareParams({ view, swimlane, from: range.from, filters, segmentTarget: segmentCoverageTarget }).toString()}`;
+  const workflowDiagnosticsReason = error
+    ? error
+    : audienceKey.trim() && !audienceReadinessLoading && audienceReadiness?.matchingProfiles === 0
+      ? "Selected Pipes audience has no cached profile members for precompute."
+      : audienceKey.trim() && !audienceReadinessLoading && !audienceReadiness
+        ? "Pipes audience readiness could not be checked."
+        : null;
 
   const actionPermissions = { canWrite, canActivate, canArchive };
   const bulkSummary = bulkActionDraft
@@ -1521,7 +1528,7 @@ export default function CampaignCalendarPage() {
           {message}
         </div>
       ) : null}
-      <MeiroAudienceWorkflowPanel audience={audienceKey} currentStep="calendar" onClear={() => setAudienceKey("")} />
+      <MeiroAudienceWorkflowPanel audience={audienceKey} currentStep="calendar" diagnosticsReason={workflowDiagnosticsReason} onClear={() => setAudienceKey("")} />
 
       {recentReviewPacks.length > 0 ? (
         <PagePanel className="border-stone-200 bg-white">

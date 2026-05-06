@@ -6,13 +6,14 @@ import { PagePanel } from "../ui/page";
 import { normalizeMeiroAudienceRef, stripMeiroAudiencePrefix } from "../../lib/meiro-audience-context";
 import { MeiroAudienceContextStrip } from "./MeiroAudienceContextStrip";
 
-type AudienceWorkflowStep = "audiences" | "calendar" | "campaigns" | "control" | "simulate" | "precompute" | "diagnostics";
+type AudienceWorkflowStep = "audiences" | "calendar" | "campaigns" | "control" | "simulate" | "precompute";
 
 type MeiroAudienceWorkflowPanelProps = {
   audience: string;
   currentStep?: AudienceWorkflowStep;
   onClear?: () => void;
   className?: string;
+  diagnosticsReason?: string | null;
 };
 
 const stepClassName = (active: boolean) =>
@@ -20,7 +21,7 @@ const stepClassName = (active: boolean) =>
     active ? "border-sky-300 bg-sky-50 text-sky-900" : "border-stone-200 bg-stone-50 text-stone-700"
   }`;
 
-export function MeiroAudienceWorkflowPanel({ audience, currentStep, onClear, className = "" }: MeiroAudienceWorkflowPanelProps) {
+export function MeiroAudienceWorkflowPanel({ audience, currentStep, onClear, className = "", diagnosticsReason }: MeiroAudienceWorkflowPanelProps) {
   const normalizedAudience = normalizeMeiroAudienceRef(audience);
   const audienceKey = stripMeiroAudiencePrefix(normalizedAudience);
   const audienceParam = audienceKey ? `?audienceKey=${encodeURIComponent(audienceKey)}` : "";
@@ -60,14 +61,22 @@ export function MeiroAudienceWorkflowPanel({ audience, currentStep, onClear, cla
 
       <MeiroAudienceContextStrip audience={normalizedAudience} onClear={onClear} />
 
-      <div className="grid gap-2 md:grid-cols-6">
+      <div className="grid gap-2 md:grid-cols-5">
         <WorkflowLink active={currentStep === "audiences"} href={hrefs.audiences} label="Profiles" detail="Verify cache" />
         <WorkflowLink active={currentStep === "calendar"} href={hrefs.calendar} label="Calendar" detail="Plan pressure" />
         <WorkflowLink active={currentStep === "campaigns" || currentStep === "control"} href={hrefs.campaign} label="Create" detail="Campaign" />
         <WorkflowLink active={currentStep === "simulate"} href={hrefs.simulate} label="Simulate" detail="Decision fit" />
         <WorkflowLink active={currentStep === "precompute"} href={hrefs.precompute} label="Precompute" detail="Warm results" />
-        <WorkflowLink active={currentStep === "diagnostics"} href={hrefs.diagnostics} label="Diagnostics" detail="Fix issues" />
       </div>
+
+      {diagnosticsReason ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <p>{diagnosticsReason}</p>
+          <ButtonLink size="xs" variant="outline" href={hrefs.diagnostics}>
+            Open diagnostics
+          </ButtonLink>
+        </div>
+      ) : null}
     </PagePanel>
   );
 }

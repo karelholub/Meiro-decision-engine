@@ -200,7 +200,7 @@ export default function CampaignInventoryPage() {
 
       {error ? <InlineError title="Campaign inventory unavailable" description={error} /> : null}
       {message ? <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</div> : null}
-      <MeiroAudienceWorkflowPanel audience={audienceKey} currentStep="campaigns" onClear={() => setAudienceKey("")} />
+      <MeiroAudienceWorkflowPanel audience={audienceKey} currentStep="campaigns" diagnosticsReason={error} onClear={() => setAudienceKey("")} />
 
       <FilterPanel density="compact">
         <div className="grid gap-x-2 gap-y-2 md:grid-cols-6">
