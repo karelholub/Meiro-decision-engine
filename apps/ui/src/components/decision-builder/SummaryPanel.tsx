@@ -11,6 +11,7 @@ import type { ValidationByStep } from "./types";
 import { deriveRequiredFieldsFromDraft, draftRiskFlags, getDecisionSummaryText } from "./wizard-utils";
 import { apiClient } from "../../lib/api";
 import { DEFAULT_APP_ENUM_SETTINGS } from "../../lib/app-enum-settings";
+import { useAuthoringFieldRegistry } from "./useAuthoringFieldRegistry";
 
 interface SummaryPanelProps {
   definition: DecisionDefinition;
@@ -35,10 +36,17 @@ const dependencyHref = (type: string, key: string) => {
   return null;
 };
 
+const audienceCandidates = (value: string) => {
+  const trimmed = value.trim();
+  const unprefixed = trimmed.startsWith("meiro_segment:") ? trimmed.slice("meiro_segment:".length) : trimmed;
+  return [trimmed, unprefixed, `meiro_segment:${unprefixed}`].filter(Boolean);
+};
+
 export function SummaryPanel({ definition, validation, groupedErrors, readOnlyReasons, requirements, dependencies, readiness }: SummaryPanelProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [catalogPreview, setCatalogPreview] = useState<unknown | null>(null);
   const [copyRequirementsStatus, setCopyRequirementsStatus] = useState<"idle" | "copied">("idle");
+  const authoringFields = useAuthoringFieldRegistry();
 
   const summaryText = useMemo(() => getDecisionSummaryText(definition), [definition]);
   const localRequirements = useMemo(() => deriveRequiredFieldsFromDraft(definition), [definition]);
@@ -58,6 +66,22 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
         notes: []
       };
   const riskFlags = useMemo(() => draftRiskFlags(definition), [definition]);
+  const registryCoverage = useMemo(() => {
+    const fieldIds = new Set(authoringFields.registry.map((item) => item.field));
+    const audienceIds = new Set(
+      authoringFields.prismAudiences.flatMap((audience) => [...audienceCandidates(audience.id), ...audienceCandidates(audience.name)])
+    );
+    const missingAttributes = displayedRequirements.requiredAttributes.filter((field) => !fieldIds.has(field));
+    const missingAudiences = displayedRequirements.requiredAudiences.filter((audience) => !audienceCandidates(audience).some((candidate) => audienceIds.has(candidate)));
+    return {
+      missingAttributes,
+      missingAudiences,
+      attributeCount: displayedRequirements.requiredAttributes.length,
+      audienceCount: displayedRequirements.requiredAudiences.length,
+      registryFieldCount: authoringFields.registry.length,
+      registryAudienceCount: authoringFields.prismAudiences.length
+    };
+  }, [authoringFields.prismAudiences, authoringFields.registry, displayedRequirements.requiredAttributes, displayedRequirements.requiredAudiences]);
   const jsonPreview = useMemo(() => (previewOpen ? pretty(definition) : ""), [definition, previewOpen]);
   const referencedContentKey = useMemo(() => {
     for (const rule of definition.flow.rules) {
@@ -169,6 +193,32 @@ export function SummaryPanel({ definition, validation, groupedErrors, readOnlyRe
               {displayedRequirements.optionalContextKeys.length > 0 ? <p>Optional context: {displayedRequirements.optionalContextKeys.join(", ")}</p> : null}
             </div>
           )}
+          {displayedRequirements.requiredAttributes.length > 0 || displayedRequirements.requiredAudiences.length > 0 ? (
+            <div className="mt-2 rounded-md border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold">Pipes registry coverage</p>
+                <Link href="/settings/integrations/pipes" className="underline">
+                  Open registry
+                </Link>
+              </div>
+              <p className="mt-1">
+                Registry source: {authoringFields.sourceLabel}; {registryCoverage.registryFieldCount} field(s), {registryCoverage.registryAudienceCount} audience(s).
+              </p>
+              {registryCoverage.missingAttributes.length === 0 && registryCoverage.missingAudiences.length === 0 ? (
+                <p className="mt-1 text-emerald-700">Required attributes and audiences are present in the current authoring registry.</p>
+              ) : (
+                <div className="mt-1 space-y-1 text-amber-800">
+                  {registryCoverage.missingAttributes.length ? (
+                    <p>Missing field mapping: {registryCoverage.missingAttributes.join(", ")}</p>
+                  ) : null}
+                  {registryCoverage.missingAudiences.length ? (
+                    <p>Missing audience mapping: {registryCoverage.missingAudiences.join(", ")}</p>
+                  ) : null}
+                  <p>Map these local aliases to Pipes fields/audiences or update the decision to use registry-backed keys before production precompute.</p>
+                </div>
+              )}
+            </div>
+          ) : null}
           {displayedRequirements.notes.length > 0 ? (
             <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-800">
               {displayedRequirements.notes.map((note) => (
