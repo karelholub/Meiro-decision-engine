@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { MeiroSourceBadge } from "../../../../components/meiro/MeiroSourceBadge";
-import { apiClient, type PipesCallbackConfigResponse } from "../../../../lib/api";
+import { apiClient, type PipesCallbackConfigResponse, type PipesDecisionAttributeSyncResponse } from "../../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../../lib/environment";
 import { Button } from "../../../../components/ui/button";
 import { CollapsibleSection, RedactedJsonViewer, StatusChipsRow, isCallbackConfigValid } from "../../../../components/configure";
@@ -40,6 +40,7 @@ export default function PipesCallbackSettingsPage() {
   const [source, setSource] = useState<PipesCallbackConfigResponse["source"]>("fallback_default");
   const [deliveries, setDeliveries] = useState<PipesCallbackConfigResponse["recentDeliveries"]>([]);
   const [pipesPrefill, setPipesPrefill] = useState<PipesCallbackConfigResponse["pipesPrefill"] | null>(null);
+  const [attributeSync, setAttributeSync] = useState<PipesDecisionAttributeSyncResponse | null>(null);
   const [dlqPendingCount, setDlqPendingCount] = useState<number | null>(null);
 
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -84,8 +85,13 @@ export default function PipesCallbackSettingsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [callback, dlqMetrics] = await Promise.all([apiClient.settings.getPipesCallback(normalizedAppKey), apiClient.dlq.metrics()]);
+      const [callback, dlqMetrics, sync] = await Promise.all([
+        apiClient.settings.getPipesCallback(normalizedAppKey),
+        apiClient.dlq.metrics(),
+        apiClient.settings.getPipesDecisionAttributeSync(normalizedAppKey)
+      ]);
       hydrate(callback);
+      setAttributeSync(sync);
 
       const callbackMetrics = dlqMetrics.items.filter((entry) => entry.topic === "PIPES_CALLBACK_DELIVERY");
       const pending = callbackMetrics
@@ -207,6 +213,8 @@ export default function PipesCallbackSettingsPage() {
 
   const lastSuccessAt = deliveries.find((item) => item.status === "RESOLVED")?.lastSeenAt ?? null;
   const lastFailure = deliveries.find((item) => item.status !== "RESOLVED") ?? null;
+  const attributeSyncStatus =
+    attributeSync?.readiness.status === "ready" ? "ok" : attributeSync?.readiness.status === "blocked" ? "error" : attributeSync ? "warn" : "unknown";
 
   return (
     <section className="space-y-4">
@@ -222,7 +230,12 @@ export default function PipesCallbackSettingsPage() {
         <StatusChipsRow
           chips={[
             { label: "Callback enabled", status: isEnabled ? "ok" : "warn" },
-            { label: "DLQ pending", status: (dlqPendingCount ?? 0) > 0 ? "warn" : "ok", detail: String(dlqPendingCount ?? "-") }
+            { label: "DLQ pending", status: (dlqPendingCount ?? 0) > 0 ? "warn" : "ok", detail: String(dlqPendingCount ?? "-") },
+            {
+              label: "Decision attributes",
+              status: attributeSyncStatus,
+              detail: attributeSync ? `${attributeSync.registry.missingAttributes.length} missing` : "-"
+            }
           ]}
         />
         <p className="text-sm">Last success: {lastSuccessAt ? new Date(lastSuccessAt).toLocaleString() : "Not available"}</p>
@@ -232,6 +245,46 @@ export default function PipesCallbackSettingsPage() {
         <Link className="text-sm underline" href="/execution/dlq?topic=PIPES_CALLBACK_DELIVERY">
           Open callback DLQ
         </Link>
+      </PagePanel>
+
+      <PagePanel density="compact" className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Decision attribute back sync</h3>
+            <p className="text-sm text-stone-600">Pipes should derive these profile attributes from decision-result collect events.</p>
+          </div>
+          <Link className="text-sm underline" href="/settings/integrations/pipes">
+            Open full contract
+          </Link>
+        </div>
+        {attributeSync ? (
+          <>
+            <StatusChipsRow
+              chips={[
+                { label: "Readiness", status: attributeSyncStatus, detail: attributeSync.readiness.status.replace(/_/g, " ") },
+                { label: "Registry snapshot", status: attributeSync.registry.syncedAt ? "ok" : "warn" },
+                { label: "Derived fields", status: attributeSync.registry.missingAttributes.length === 0 ? "ok" : "warn", detail: `${attributeSync.contract.length - attributeSync.registry.missingAttributes.length}/${attributeSync.contract.length}` }
+              ]}
+            />
+            {attributeSync.readiness.warnings.length > 0 ? (
+              <ul className="space-y-1 rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+                {attributeSync.readiness.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(attributeSync.prompt)}>
+                Copy Pipes agent prompt
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(attributeSync.sampleEvent, null, 2))}>
+                Copy sample event
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-stone-600">Back-sync readiness has not loaded yet.</p>
+        )}
       </PagePanel>
 
       <PagePanel density="compact" className="space-y-3">
