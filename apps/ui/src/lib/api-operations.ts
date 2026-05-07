@@ -22,6 +22,7 @@ import type {
   ActivationGraphResponse,
   ActivationTimelineResponse,
   PipesCallbackConfigResponse,
+  PipesDecisionAttributeSyncResponse,
   OrchestrationPolicyJson,
   OrchestrationPolicy
 } from "./api-types";
@@ -417,6 +418,8 @@ export const operationsApiClient = {
           body: JSON.stringify(appKey ? { appKey } : {})
         }
       ),
+    getPipesDecisionAttributeSync: (appKey?: string) =>
+      apiFetch<PipesDecisionAttributeSyncResponse>(`/v1/settings/pipes-callback/attribute-sync${toQuery({ appKey })}`),
     validateWbsMapping: (mappingJson: unknown) =>
       apiFetch<{ valid: boolean; errors: string[]; warnings: string[]; formatted?: string | null }>(
         `/v1/settings/wbs-mapping/validate`,

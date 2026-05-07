@@ -5,6 +5,7 @@ import {
   ApiError,
   apiClient,
   type PipesInlineEvaluateResponse,
+  type PipesDecisionAttributeSyncResponse,
   type PipesPrismCheckResponse,
   type PipesPrismImportCandidatesResponse,
   type PipesPrismImportDraftsResponse,
@@ -82,6 +83,8 @@ export default function PipesIntegrationPage() {
   const [requirementsReachable, setRequirementsReachable] = useState<"ok" | "error" | "unknown">("unknown");
   const [evaluateReachable, setEvaluateReachable] = useState<"ok" | "error" | "unknown">("unknown");
   const [callbackConfigured, setCallbackConfigured] = useState<"ok" | "warn" | "unknown">("unknown");
+  const [attributeSync, setAttributeSync] = useState<PipesDecisionAttributeSyncResponse | null>(null);
+  const [attributeSyncError, setAttributeSyncError] = useState<string | null>(null);
   const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
   const [prismCheck, setPrismCheck] = useState<PipesPrismCheckResponse | null>(null);
   const [prismCandidates, setPrismCandidates] = useState<PipesPrismImportCandidatesResponse | null>(null);
@@ -132,6 +135,15 @@ export default function PipesIntegrationPage() {
       }
 
       try {
+        const sync = await apiClient.settings.getPipesDecisionAttributeSync();
+        setAttributeSync(sync);
+        setAttributeSyncError(null);
+      } catch (error) {
+        setAttributeSync(null);
+        setAttributeSyncError(error instanceof Error ? error.message : "Failed to load decision attribute sync status");
+      }
+
+      try {
         const status = await apiClient.pipes.prismStatus();
         setPrismStatus(status);
         if (status.sourceMode !== "pipes_cli") {
@@ -160,6 +172,8 @@ export default function PipesIntegrationPage() {
   const evaluateEndpoint = useMemo(() => `${API_BASE_URL}/v1/evaluate`, []);
   const requirementsEndpoint = useMemo(() => `${API_BASE_URL}/v1/requirements/${requirementsMode}/:key`, [requirementsMode]);
   const pipesCliSourceActive = prismStatus?.sourceMode !== "meiro_mcp";
+  const attributeSyncReady =
+    attributeSync?.readiness.status === "ready" ? "ok" : attributeSync?.readiness.status === "blocked" ? "error" : attributeSync ? "warn" : "unknown";
   const prismCreateDraftKeys = useMemo(
     () => prismImportPreview?.operations.filter((operation) => operation.action === "create_draft").map((operation) => operation.targetKey) ?? [],
     [prismImportPreview]
@@ -426,7 +440,8 @@ export default function PipesIntegrationPage() {
         chips={[
           { label: "Requirements endpoint", status: requirementsReachable },
           { label: "Evaluate endpoint", status: evaluateReachable },
-          { label: "Callback configured", status: callbackConfigured }
+          { label: "Callback configured", status: callbackConfigured },
+          { label: "Decision attributes", status: attributeSyncReady }
         ]}
       />
 
@@ -789,6 +804,93 @@ export default function PipesIntegrationPage() {
               <li>`Content-Type: application/json`</li>
             </ul>
           </div>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Decision Attribute Back Sync"
+        subtitle="Verify that decision-result events can enrich Pipes profiles with reusable decision attributes."
+        defaultOpen={false}
+      >
+        <div className="space-y-3">
+          {attributeSyncError ? <p className="text-sm text-red-700">{attributeSyncError}</p> : null}
+          {attributeSync ? (
+            <>
+              <div className="grid gap-2 md:grid-cols-4">
+                <div className="rounded border border-stone-200 bg-stone-50 p-2 text-sm">
+                  <p className="text-xs text-stone-500">Status</p>
+                  <p className="font-medium">{attributeSync.readiness.status.replace(/_/g, " ")}</p>
+                </div>
+                <div className="rounded border border-stone-200 bg-stone-50 p-2 text-sm">
+                  <p className="text-xs text-stone-500">Callback</p>
+                  <p className="font-medium">{attributeSync.callback.configured ? `${attributeSync.callback.mode}` : "not configured"}</p>
+                </div>
+                <div className="rounded border border-stone-200 bg-stone-50 p-2 text-sm">
+                  <p className="text-xs text-stone-500">Registry</p>
+                  <p className="font-medium">{attributeSync.registry.attributeCount} attributes</p>
+                </div>
+                <div className="rounded border border-stone-200 bg-stone-50 p-2 text-sm">
+                  <p className="text-xs text-stone-500">Missing derived fields</p>
+                  <p className="font-medium">{attributeSync.registry.missingAttributes.length}</p>
+                </div>
+              </div>
+
+              {attributeSync.readiness.warnings.length > 0 ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+                  <ul className="list-disc space-y-1 pl-5">
+                    {attributeSync.readiness.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-sm text-emerald-800">
+                  Decision attributes are present in the active Pipes registry snapshot.
+                </p>
+              )}
+
+              <div className="overflow-auto rounded border border-stone-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-stone-600">
+                      <th className="border-b border-stone-200 px-2 py-1">Profile attribute</th>
+                      <th className="border-b border-stone-200 px-2 py-1">Type</th>
+                      <th className="border-b border-stone-200 px-2 py-1">Source path</th>
+                      <th className="border-b border-stone-200 px-2 py-1">Registry</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attributeSync.contract.map((attribute) => (
+                      <tr key={attribute.key}>
+                        <td className="border-b border-stone-100 px-2 py-1">
+                          <p className="font-medium">{attribute.label}</p>
+                          <p className="font-mono text-xs text-stone-600">{attribute.key}</p>
+                        </td>
+                        <td className="border-b border-stone-100 px-2 py-1">{attribute.dataType}</td>
+                        <td className="border-b border-stone-100 px-2 py-1 font-mono text-xs">{attribute.sourcePath}</td>
+                        <td className={`border-b border-stone-100 px-2 py-1 ${attribute.presentInPipesRegistry ? "text-emerald-700" : "text-amber-700"}`}>
+                          {attribute.presentInPipesRegistry ? "present" : "missing"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(attributeSync.prompt)}>
+                  Copy Pipes agent prompt
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(JSON.stringify(attributeSync.sampleEvent, null, 2))}>
+                  Copy sample event
+                </Button>
+              </div>
+
+              <RedactedJsonViewer title="Sample decision-result collect event" value={attributeSync.sampleEvent} defaultOpen={false} />
+            </>
+          ) : (
+            <p className="text-sm text-stone-600">Decision attribute sync status has not loaded yet.</p>
+          )}
         </div>
       </CollapsibleSection>
 

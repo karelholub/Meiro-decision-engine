@@ -55,6 +55,110 @@ const testBodySchema = z.object({
 });
 
 type PrismSourceMode = "pipes_cli" | "meiro_mcp";
+const PRISM_IMPORT_SNAPSHOT_KEY = "pipes-prism.importSnapshot";
+
+const decisionAttributeContract = [
+  {
+    key: "decision_engine_last_event_at",
+    label: "Last decision event time",
+    dataType: "datetime",
+    sourcePath: "event_time",
+    description: "Timestamp of the latest decision result event received from deciEngine."
+  },
+  {
+    key: "decision_engine_last_decision_key",
+    label: "Last decision key",
+    dataType: "string",
+    sourcePath: "event_payload.decision_key",
+    description: "Decision key evaluated for the profile."
+  },
+  {
+    key: "decision_engine_last_stack_key",
+    label: "Last decision stack key",
+    dataType: "string",
+    sourcePath: "event_payload.decision_stack_key",
+    description: "Decision stack key evaluated for the profile, when stack mode is used."
+  },
+  {
+    key: "decision_engine_last_action_type",
+    label: "Last decision action type",
+    dataType: "string",
+    sourcePath: "event_payload.action_type",
+    description: "Returned action type, for example message, personalize, decision_action, or noop."
+  },
+  {
+    key: "decision_engine_last_eligible",
+    label: "Last decision eligibility",
+    dataType: "boolean",
+    sourcePath: "event_payload.eligible",
+    description: "Whether the latest decision request was eligible."
+  },
+  {
+    key: "decision_engine_last_reason_codes",
+    label: "Last decision reason codes",
+    dataType: "array",
+    sourcePath: "event_payload.reasons",
+    description: "Reason codes emitted by the latest decision evaluation."
+  },
+  {
+    key: "decision_engine_last_placement_key",
+    label: "Last placement key",
+    dataType: "string",
+    sourcePath: "event_payload.placement_key",
+    description: "Placement/context key associated with the latest decision."
+  },
+  {
+    key: "decision_engine_last_delivery_id",
+    label: "Last decision delivery ID",
+    dataType: "string",
+    sourcePath: "event_payload.delivery_id",
+    description: "Idempotent delivery id for the latest decision-result event."
+  }
+] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+const firstString = (item: Record<string, unknown>, keys: string[]): string | null => {
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+};
+
+const collectionFromPayload = (payload: unknown): Record<string, unknown>[] => {
+  if (Array.isArray(payload)) {
+    return payload.filter(isRecord);
+  }
+  if (!isRecord(payload)) {
+    return [];
+  }
+  for (const key of ["items", "data", "results", "attributes"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      return value.filter(isRecord);
+    }
+  }
+  return [];
+};
+
+const sectionItems = (snapshot: unknown, key: string): Record<string, unknown>[] => {
+  if (!isRecord(snapshot)) {
+    return [];
+  }
+  const direct = snapshot[key];
+  if (direct) {
+    return collectionFromPayload(direct);
+  }
+  const sections = snapshot.sections;
+  if (Array.isArray(sections)) {
+    const section = sections.find((entry) => isRecord(entry) && entry.key === key);
+    return isRecord(section) ? collectionFromPayload(section.items) : [];
+  }
+  return [];
+};
 
 const normalizeBaseUrl = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
@@ -100,6 +204,41 @@ const buildPipesPrefill = (input: { baseUrl?: string; token?: string; sourceMode
     warnings
   };
 };
+
+const sampleDecisionCollectEvent = () => ({
+  event_type: "decision_action",
+  event_time: new Date(0).toISOString(),
+  event_payload: {
+    event_id: "sample-decision-delivery",
+    delivery_id: "sample-decision-delivery",
+    correlation_id: "sample-correlation",
+    source_system: "decision-engine",
+    schema_version: "decision_engine_collect.v1",
+    environment: "DEV",
+    app_key: "meiro_store",
+    customer_id: "profile-id-from-pipes",
+    profile_id: "profile-id-from-pipes",
+    decision_key: "cart_recovery",
+    decision_stack_key: null,
+    placement_key: "home_top",
+    action_type: "message",
+    eligible: true,
+    reasons: ["ELIGIBLE"],
+    response: {
+      eligible: true,
+      result: {
+        actionType: "message",
+        payload: {
+          campaignKey: "cart_recovery",
+          contentKey: "cart_recovery_high"
+        }
+      },
+      reasons: ["ELIGIBLE"],
+      missingFields: [],
+      typeIssues: []
+    }
+  }
+});
 
 const serializeDeliveryItem = (item: {
   id: string;
@@ -194,6 +333,97 @@ export const registerPipesCallbackRoutes = async (deps: RegisterPipesCallbackRou
         token: deps.pipesToken,
         sourceMode: deps.prismSourceMode
       })
+    };
+  });
+
+  deps.app.get("/v1/settings/pipes-callback/attribute-sync", { preHandler: deps.requireWriteAuth }, async (request, reply) => {
+    const environment = deps.resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = querySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return deps.buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const effective = await loadEffectivePipesCallbackConfig({
+      prisma: deps.prisma,
+      environment,
+      appKey: parsed.data.appKey
+    });
+    const callbackConfigured = Boolean(effective.config.isEnabled && effective.config.callbackUrl && effective.config.mode !== "disabled");
+    const snapshotRow =
+      typeof (deps.prisma as unknown as { appSetting?: { findFirst?: unknown } }).appSetting?.findFirst === "function"
+        ? await deps.prisma.appSetting.findFirst({
+            where: {
+              environment,
+              key: PRISM_IMPORT_SNAPSHOT_KEY
+            }
+          })
+        : null;
+    const snapshot = snapshotRow?.valueJson ?? null;
+    const registryAttributeKeys = new Set(
+      sectionItems(snapshot, "attributes")
+        .map((item) => firstString(item, ["id", "key", "name"]))
+        .filter((value): value is string => Boolean(value))
+    );
+    const contract = decisionAttributeContract.map((attribute) => ({
+      ...attribute,
+      presentInPipesRegistry: registryAttributeKeys.has(attribute.key)
+    }));
+    const missingAttributes = contract.filter((attribute) => !attribute.presentInPipesRegistry).map((attribute) => attribute.key);
+    const status = !callbackConfigured
+      ? "blocked"
+      : !snapshotRow
+        ? "needs_snapshot"
+        : missingAttributes.length > 0
+          ? "needs_pipes_config"
+          : "ready";
+
+    const promptLines = [
+      "Goal: configure Meiro Pipes/Prism to derive profile attributes from deciEngine decision-result events.",
+      `Instance: ${normalizeBaseUrl(deps.pipesBaseUrl) ?? "https://meiro-internal.eu.pipes.meiro.io"}`,
+      "Event source: /collect/decision-engine-actions",
+      "Accepted event types: eligibility_check, inapp_message, personalize, decision_action.",
+      "Identity join: use event_payload.profile_id / event_payload.customer_id as the profile identifier used by Pipes profile resolution.",
+      "Create or verify the following profile attributes:",
+      ...decisionAttributeContract.map((attribute) => `- ${attribute.key} (${attribute.dataType}) from ${attribute.sourcePath}: ${attribute.description}`),
+      "Use latest-event semantics per profile. Update these attributes only from events where event_payload.schema_version = decision_engine_collect.v1 and event_payload.source_system = decision-engine.",
+      "After configuration, send a test decision event from deciEngine, sync the local Prism snapshot, and verify all attributes are present in /v1/settings/pipes-callback/attribute-sync."
+    ];
+
+    return {
+      environment,
+      sourceMode: deps.prismSourceMode ?? "pipes_cli",
+      activeSource: deps.prismSourceMode === "meiro_mcp" ? "Meiro MCP" : "Pipes CLI",
+      callback: {
+        configured: callbackConfigured,
+        enabled: effective.config.isEnabled,
+        mode: effective.config.mode,
+        hasUrl: Boolean(effective.config.callbackUrl),
+        authType: effective.config.authType,
+        source: effective.source,
+        updatedAt: effective.config.updatedAt.toISOString()
+      },
+      registry: {
+        syncedAt: snapshotRow?.updatedAt?.toISOString() ?? null,
+        attributeCount: registryAttributeKeys.size,
+        missingAttributes
+      },
+      contract,
+      sampleEvent: sampleDecisionCollectEvent(),
+      readiness: {
+        status,
+        warnings: [
+          ...(!callbackConfigured ? ["Pipes callback delivery is not enabled; deciEngine decision events will not reach Pipes."] : []),
+          ...(!snapshotRow ? ["Local Prism snapshot is missing; sync it from Pipes before verifying derived profile attributes."] : []),
+          ...(missingAttributes.length > 0
+            ? [`Pipes registry does not yet expose derived decision attribute(s): ${missingAttributes.join(", ")}.`]
+            : [])
+        ]
+      },
+      prompt: promptLines.join("\n")
     };
   });
 

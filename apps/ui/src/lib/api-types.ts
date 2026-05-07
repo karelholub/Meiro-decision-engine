@@ -133,6 +133,40 @@ export type PipesPrismProfilePreviewResponse = {
   message: string;
 };
 
+export type PipesDecisionAttributeSyncResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  sourceMode: "pipes_cli" | "meiro_mcp";
+  activeSource: "Pipes CLI" | "Meiro MCP";
+  callback: {
+    configured: boolean;
+    enabled: boolean;
+    mode: "disabled" | "async_only" | "always";
+    hasUrl: boolean;
+    authType: "bearer" | "shared_secret" | "none";
+    source: "app" | "environment_default" | "fallback_default";
+    updatedAt: string;
+  };
+  registry: {
+    syncedAt: string | null;
+    attributeCount: number;
+    missingAttributes: string[];
+  };
+  contract: Array<{
+    key: string;
+    label: string;
+    dataType: "datetime" | "string" | "boolean" | "array";
+    sourcePath: string;
+    description: string;
+    presentInPipesRegistry: boolean;
+  }>;
+  sampleEvent: Record<string, unknown>;
+  readiness: {
+    status: "ready" | "needs_pipes_config" | "needs_snapshot" | "blocked";
+    warnings: string[];
+  };
+  prompt: string;
+};
+
 export type ProfileUpsertStatusResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   cache: {
