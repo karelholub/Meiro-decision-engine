@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { MeiroSourceBadge } from "../../../components/meiro/MeiroSourceBadge";
 import { MeiroSegmentPicker } from "../../../components/meiro/MeiroSegmentPicker";
 import { MeiroAudienceContextStrip } from "../../../components/meiro/MeiroAudienceContextStrip";
+import { MeiroBackboneReadinessPanel } from "../../../components/meiro/MeiroBackboneReadinessPanel";
 import { Button } from "../../../components/ui/button";
 import {
   OperationalTableShell,
@@ -14,7 +15,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
-import { apiClient } from "../../../lib/api";
+import { apiClient, type MeiroDiagnosticsSummaryResponse } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience, stripMeiroAudiencePrefix } from "../../../lib/meiro-audience-context";
 
@@ -73,6 +74,7 @@ export default function PrecomputeRunsPage() {
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [creatingRun, setCreatingRun] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const [diagnosticsSummary, setDiagnosticsSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
 
   const suggestedRunKey = useMemo(() => {
     const keyPart = key.trim() || "target";
@@ -83,6 +85,22 @@ export default function PrecomputeRunsPage() {
     setEnvironment(getEnvironment());
     return onEnvironmentChange(setEnvironment);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDiagnostics = async () => {
+      try {
+        const response = await apiClient.meiro.diagnostics.summary();
+        if (!cancelled) setDiagnosticsSummary(response);
+      } catch {
+        if (!cancelled) setDiagnosticsSummary(null);
+      }
+    };
+    void loadDiagnostics();
+    return () => {
+      cancelled = true;
+    };
+  }, [environment]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -239,6 +257,8 @@ export default function PrecomputeRunsPage() {
           storeMeiroAudience("");
         }}
       />
+
+      <MeiroBackboneReadinessPanel summary={diagnosticsSummary} compact />
 
       {key.trim() ? (
         <PagePanel density="compact" className="flex flex-wrap items-center justify-between gap-3">

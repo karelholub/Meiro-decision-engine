@@ -9,10 +9,12 @@ import { Button, ButtonLink } from "../../components/ui/button";
 import { MetricCard } from "../../components/ui/card";
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 import { MeiroAudienceContextStrip } from "../../components/meiro/MeiroAudienceContextStrip";
+import { MeiroBackboneReadinessPanel } from "../../components/meiro/MeiroBackboneReadinessPanel";
 import { MeiroSegmentPicker } from "../../components/meiro/MeiroSegmentPicker";
 import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import {
   apiClient,
+  type MeiroDiagnosticsSummaryResponse,
   type PipesCallbackConfigResponse,
   type ProfileAudienceReadinessResponse,
   type PipesPrismFieldRegistryResponse,
@@ -56,6 +58,7 @@ export default function MeiroWorkspacePage() {
   const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
   const [fieldRegistry, setFieldRegistry] = useState<PipesPrismFieldRegistryResponse | null>(null);
   const [profileUpsertStatus, setProfileUpsertStatus] = useState<ProfileUpsertStatusResponse | null>(null);
+  const [diagnosticsSummary, setDiagnosticsSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
   const [audienceReadiness, setAudienceReadiness] = useState<ProfileAudienceReadinessResponse | null>(null);
   const [callback, setCallback] = useState<PipesCallbackConfigResponse | null>(null);
   const [decisions, setDecisions] = useState<DecisionVersionSummary[]>([]);
@@ -90,10 +93,11 @@ export default function MeiroWorkspacePage() {
     setLoading(true);
     setError(null);
     try {
-      const [statusResponse, registryResponse, upsertStatusResponse, callbackResponse, decisionResponse, runsResponse] = await Promise.all([
+      const [statusResponse, registryResponse, upsertStatusResponse, diagnosticsResponse, callbackResponse, decisionResponse, runsResponse] = await Promise.all([
         apiClient.pipes.prismStatus().catch(() => null),
         apiClient.pipes.prismFieldRegistry().catch(() => null),
         apiClient.pipes.profileUpsertStatus().catch(() => null),
+        apiClient.meiro.diagnostics.summary().catch(() => null),
         apiClient.settings.getPipesCallback().catch(() => null),
         apiClient.decisions.list({ status: "ACTIVE", limit: 200, page: 1 }),
         apiClient.execution.precompute.listRuns({ limit: 20 }).catch(() => ({ items: [] }))
@@ -102,6 +106,7 @@ export default function MeiroWorkspacePage() {
       setPrismStatus(statusResponse);
       setFieldRegistry(registryResponse);
       setProfileUpsertStatus(upsertStatusResponse);
+      setDiagnosticsSummary(diagnosticsResponse);
       setAudienceReadiness(null);
       setCallback(callbackResponse);
       setDecisions(production);
@@ -347,6 +352,8 @@ export default function MeiroWorkspacePage() {
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{message}</div> : null}
       <MeiroAudienceContextStrip audience={selectedAudienceRef} onClear={() => setSelectedAudience("")} />
       {loading ? <LoadingState title="Loading Meiro workspace" /> : null}
+
+      <MeiroBackboneReadinessPanel summary={diagnosticsSummary} compact />
 
       <PagePanel density="compact" className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">

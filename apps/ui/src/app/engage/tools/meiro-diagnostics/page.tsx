@@ -6,6 +6,7 @@ import type { MeiroDiagnosticsSummaryResponse } from "../../../../lib/api";
 import { apiClient } from "../../../../lib/api";
 import { ButtonLink } from "../../../../components/ui/button";
 import { PageHeader, PagePanel } from "../../../../components/ui/page";
+import { MeiroBackboneReadinessPanel } from "../../../../components/meiro/MeiroBackboneReadinessPanel";
 import { MeiroSourceBadge } from "../../../../components/meiro/MeiroSourceBadge";
 import { InlineError, LoadingState } from "../../../../components/ui/app-state";
 
@@ -178,6 +179,8 @@ export default function MeiroDiagnosticsPage() {
 
       {error ? <InlineError title="Diagnostics unavailable" description={error} /> : null}
       {loading ? <LoadingState title="Loading Meiro diagnostics" /> : null}
+
+      <MeiroBackboneReadinessPanel summary={summary} />
 
       <PagePanel density="compact" className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">

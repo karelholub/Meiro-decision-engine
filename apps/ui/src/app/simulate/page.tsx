@@ -12,12 +12,13 @@ import type {
 import { parseLegacyKey } from "@decisioning/shared";
 import { InlineError } from "../../components/ui/app-state";
 import { MeiroAudienceContextStrip } from "../../components/meiro/MeiroAudienceContextStrip";
+import { MeiroBackboneReadinessPanel } from "../../components/meiro/MeiroBackboneReadinessPanel";
 import { MeiroProfileSearch } from "../../components/meiro/MeiroProfileSearch";
 import { MeiroSourceBadge } from "../../components/meiro/MeiroSourceBadge";
 import { Button } from "../../components/ui/button";
 import { FilterPanel, PageHeader, PagePanel, inputClassName } from "../../components/ui/page";
 import { DependenciesPanel } from "../../components/registry/DependenciesPanel";
-import { ApiError, apiClient, type InAppV2DecideResponse, type PipesPrismStatusResponse } from "../../lib/api";
+import { ApiError, apiClient, type InAppV2DecideResponse, type MeiroDiagnosticsSummaryResponse, type PipesPrismStatusResponse } from "../../lib/api";
 import { useAppEnumSettings } from "../../lib/app-enum-settings";
 import type { DependencyItem } from "../../lib/dependencies";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../lib/environment";
@@ -134,6 +135,7 @@ export default function SimulatePage() {
   const [meiroWbsCategoryId, setMeiroWbsCategoryId] = useState("accessories");
   const [meiroWbsLoading, setMeiroWbsLoading] = useState(false);
   const [prismStatus, setPrismStatus] = useState<PipesPrismStatusResponse | null>(null);
+  const [diagnosticsSummary, setDiagnosticsSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
   const [pipesFieldCounts, setPipesFieldCounts] = useState<{ attributes: number; audiences: number } | null>(null);
   const [pipesProfileId, setPipesProfileId] = useState("p-1001");
   const [pipesProfileLoading, setPipesProfileLoading] = useState(false);
@@ -227,12 +229,13 @@ export default function SimulatePage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [decisionResponse, stackResponse, inAppAppsResponse, inAppPlacementsResponse, pipesStatusResponse] = await Promise.all([
+        const [decisionResponse, stackResponse, inAppAppsResponse, inAppPlacementsResponse, pipesStatusResponse, diagnosticsResponse] = await Promise.all([
           apiClient.decisions.list({ status: "ACTIVE", limit: 100, page: 1 }),
           apiClient.stacks.list({ status: "ACTIVE", limit: 100, page: 1 }),
           apiClient.inapp.apps.list(),
           apiClient.inapp.placements.list(),
-          apiClient.pipes.prismStatus().catch(() => null)
+          apiClient.pipes.prismStatus().catch(() => null),
+          apiClient.meiro.diagnostics.summary().catch(() => null)
         ]);
 
         setDecisions(decisionResponse.items);
@@ -240,6 +243,7 @@ export default function SimulatePage() {
         setInAppApps(inAppAppsResponse.items);
         setInAppPlacements(inAppPlacementsResponse.items);
         setPrismStatus(pipesStatusResponse);
+        setDiagnosticsSummary(diagnosticsResponse);
         setDecisionId((current) => current || decisionResponse.items[0]?.decisionId || "");
         setDecisionKey((current) => current || decisionResponse.items[0]?.key || "");
         setStackKey((current) => current || stackResponse.items[0]?.key || "");
@@ -874,6 +878,8 @@ export default function SimulatePage() {
           storeMeiroAudience("");
         }}
       />
+
+      <MeiroBackboneReadinessPanel summary={diagnosticsSummary} compact />
 
       <FilterPanel density="compact" className="!space-y-0 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">

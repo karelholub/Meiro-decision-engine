@@ -168,6 +168,30 @@ export type ProfileUpsertStatusResponse = {
 export type MeiroDiagnosticsSummaryResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   generatedAt: string;
+  backbone?: {
+    status: "ready" | "warning" | "blocked";
+    activeInstanceHost: string | null;
+    expectedInstanceHost: string;
+    sourceOfTruth: "pipes_cli" | "meiro_mcp";
+    mixedSourceReadsAllowed: false;
+    stages: Array<{
+      id: string;
+      label: string;
+      status: "ready" | "warning" | "blocked";
+      detail: string;
+      href: string;
+    }>;
+    issues: string[];
+    nextActions: string[];
+    eventContracts: {
+      incomingProfileUpsert: string;
+      inlineEvaluation: string;
+      decisionRequirements: string;
+      stackRequirements: string;
+      callbackEventTypes: string[];
+      measurementJoinKeys: string[];
+    };
+  };
   pipes: {
     configured: boolean;
     sourceMode: "pipes_cli" | "meiro_mcp";

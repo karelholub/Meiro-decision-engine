@@ -578,6 +578,16 @@ const normalizeDiagnosticsUrl = (value: string | undefined | null): string | nul
   }
 };
 
+const diagnosticsHost = (value: string | undefined | null): string | null => {
+  const normalized = normalizeDiagnosticsUrl(value);
+  if (!normalized) return null;
+  try {
+    return new URL(normalized).host;
+  } catch {
+    return normalized.replace(/^https?:\/\//, "").replace(/\/.*$/, "") || normalized;
+  }
+};
+
 const hashSha256 = (value: string): string => {
   return sha256(value);
 };
@@ -8389,6 +8399,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
 
     const profileStats = profileUpsertStatsByEnvironment[environment];
     const baseUrl = normalizeDiagnosticsUrl(config.meiroPipesBaseUrl);
+    const activeInstanceHost = diagnosticsHost(config.meiroPipesBaseUrl);
     const tokenConfigured = Boolean(config.meiroPipesToken?.trim());
     const sourceMode = config.meiroPrismSourceMode ?? "pipes_cli";
 
@@ -8437,10 +8448,97 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         createdAt: true
       }
     });
+    const upsertFailures = profileStats.unauthorized + profileStats.invalidBody + profileStats.errors;
+    const callbackEnabled = Boolean(callbackConfig?.isEnabled && callbackConfig.callbackUrl);
+    const sourceReady = Boolean(baseUrl && tokenConfigured && sourceMode === "pipes_cli");
+    const internalInstanceReady = activeInstanceHost === "meiro-internal.eu.pipes.meiro.io";
+    const profileSyncReady = profileStats.succeeded > 0 && upsertFailures === 0;
+    const cacheReady = cache.enabled || profileStats.succeeded > 0;
+    const precomputeFailing = precomputeRuns.filter((run) => run.status === "FAILED" || run.errors > 0).length;
+    const precomputeReady = precomputeFailing === 0;
+    const backboneIssues = [
+      ...(!sourceReady ? ["Pipes CLI source is not fully configured as the active Meiro backbone."] : []),
+      ...(sourceReady && !internalInstanceReady
+        ? [`Active Pipes instance is ${activeInstanceHost ?? "unknown"}, expected meiro-internal.eu.pipes.meiro.io.`]
+        : []),
+      ...(!profileSyncReady ? ["No clean successful Pipes profile upsert stream has been observed since API start."] : []),
+      ...(!callbackEnabled ? ["Pipes Callback delivery is disabled or missing a callback URL."] : []),
+      ...(precomputeFailing > 0 ? ["Recent precompute runs contain failures or result errors."] : [])
+    ];
 
     return {
       environment,
       generatedAt: now().toISOString(),
+      backbone: {
+        status: !sourceReady || !internalInstanceReady ? "blocked" : backboneIssues.length ? "warning" : "ready",
+        activeInstanceHost,
+        expectedInstanceHost: "meiro-internal.eu.pipes.meiro.io",
+        sourceOfTruth: sourceMode === "pipes_cli" ? "pipes_cli" : "meiro_mcp",
+        mixedSourceReadsAllowed: false,
+        stages: [
+          {
+            id: "collect",
+            label: "Collect",
+            status: sourceReady && internalInstanceReady ? "ready" : "blocked",
+            detail: sourceReady
+              ? `Reading Prism configuration from ${activeInstanceHost ?? "configured Pipes instance"}.`
+              : "Configure MEIRO_PRISM_SOURCE_MODE=pipes_cli, base URL, token, and mpcli in the API container.",
+            href: "/settings/integrations/pipes"
+          },
+          {
+            id: "identity",
+            label: "Identity & profile cache",
+            status: profileSyncReady && cacheReady ? "ready" : "warning",
+            detail: `${profileStats.succeeded}/${profileStats.attempts} upserts succeeded; cache ${cache.enabled ? "Redis" : "in-memory"}.`,
+            href: "/execution/cache"
+          },
+          {
+            id: "audiences",
+            label: "Audience handoff",
+            status: profileStats.succeeded > 0 ? "ready" : "warning",
+            detail: "Pipes audiences resolve through cached profile membership before segment precompute.",
+            href: "/meiro-workspace"
+          },
+          {
+            id: "decisions",
+            label: "Decision precompute",
+            status: precomputeReady ? "ready" : "warning",
+            detail: `${precomputeRuns.filter((run) => run.status === "QUEUED" || run.status === "RUNNING").length} active; ${precomputeFailing} failing recent runs.`,
+            href: "/execution/precompute"
+          },
+          {
+            id: "activation_feedback",
+            label: "Activation feedback",
+            status: callbackEnabled ? "ready" : "warning",
+            detail: callbackEnabled ? "Decision outcomes can be delivered back to Pipes Callback." : "Enable Pipes Callback to send decision outcomes back to Prism/Pipes.",
+            href: "/settings/integrations/pipes-callback"
+          },
+          {
+            id: "measurement",
+            label: "Measurement handoff",
+            status: callbackEnabled ? "ready" : "warning",
+            detail: "Decision events should keep campaign_id, native_meiro_campaign_id, creative_asset_id, and offer_catalog_id for MMM/MTA joins.",
+            href: "/engage/tools/events-monitor"
+          }
+        ],
+        issues: backboneIssues,
+        nextActions: backboneIssues.length
+          ? [
+              "Keep MEIRO_PRISM_SOURCE_MODE=pipes_cli for production Pipes-backed workflows.",
+              "Use only the internal Pipes instance for Prism metadata and profile sync.",
+              "Verify /v1/profiles/upsert receives clean profile callbacks before segment precompute.",
+              "Use Pipes Callback delivery for decision_action, eligibility_check, personalize, and inapp_message events."
+            ]
+          : ["Backbone checks are ready; continue with audience simulation, precompute, and measurement validation."],
+        eventContracts: {
+          incomingProfileUpsert: "/v1/profiles/upsert",
+          inlineEvaluation: "/v1/evaluate",
+          decisionRequirements: "/v1/requirements/decision/:key",
+          stackRequirements: "/v1/requirements/stack/:key",
+          callbackEventTypes: ["decision_action", "eligibility_check", "personalize", "inapp_message"],
+          measurementJoinKeys: ["campaign_id", "native_meiro_campaign_id", "creative_asset_id", "offer_catalog_id"]
+        }
+      },
       pipes: {
         configured: Boolean(baseUrl && tokenConfigured),
         sourceMode,
