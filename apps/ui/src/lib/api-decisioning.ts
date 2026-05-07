@@ -33,6 +33,7 @@ import type {
   PipesPrismMappingRecommendationsResponse,
   PipesPrismStatusResponse,
   PipesAudienceExportPromptResponse,
+  PrecomputeReadinessResponse,
   ProfileAudienceReadinessResponse,
   ProfileUpsertTestResponse,
   ProfileUpsertStatusResponse,
@@ -322,6 +323,8 @@ export const decisioningApiClient = {
     profileUpsertStatus: () => apiFetch<ProfileUpsertStatusResponse>(`/v1/profiles/upsert/status`),
     audienceReadiness: (audience: string) =>
       apiFetch<ProfileAudienceReadinessResponse>(`/v1/profiles/audience-readiness${toQuery({ audience })}`),
+    precomputeReadiness: (params: { audience: string; mode: "decision" | "stack"; key: string; sampleLimit?: number }) =>
+      apiFetch<PrecomputeReadinessResponse>(`/v1/precompute/readiness${toQuery(params)}`),
     audienceExportPrompt: (params: { audience: string; mode: "decision" | "stack"; key: string; appKey?: string; placement?: string }) =>
       apiFetch<PipesAudienceExportPromptResponse>(`/v1/profiles/audience-export-prompt${toQuery(params)}`),
     createProfileCacheTest: (input: { audience: string; appKey?: string; profileId?: string; attributes?: Record<string, unknown> }) =>

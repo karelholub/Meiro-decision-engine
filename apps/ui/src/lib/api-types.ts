@@ -274,6 +274,44 @@ export type ProfileAudienceReadinessResponse = {
   readiness: "cache_disabled" | "cached_membership" | "no_cached_membership" | "no_cached_profiles";
 };
 
+export type PrecomputeReadinessResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  target: {
+    mode: "decision" | "stack";
+    key: string;
+    version: number;
+  };
+  audience: {
+    input: string;
+    ref: string;
+  };
+  cache: {
+    redisEnabled: boolean;
+    ttlSeconds: number;
+    profileCacheKeys: number;
+    uniqueProfiles: number;
+    malformedProfiles: number;
+  };
+  cohort: {
+    matchingProfiles: number;
+    sampleSize: number;
+    sampleLimit: number;
+  };
+  required: {
+    attributes: string[];
+    audiences: string[];
+    consents: string[];
+    contextKeys: string[];
+  };
+  coverage: {
+    attributes: Array<{ key: string; present: number; sampleSize: number }>;
+    audiences: Array<{ key: string; present: number; sampleSize: number }>;
+    consents: Array<{ key: string; present: number; sampleSize: number }>;
+  };
+  status: "ready" | "likely_noop" | "blocked";
+  warnings: string[];
+};
+
 export type ProfileUpsertTestResponse = {
   status: "ok";
   environment: "DEV" | "STAGE" | "PROD";

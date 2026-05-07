@@ -15,7 +15,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
-import { apiClient, type MeiroDiagnosticsSummaryResponse, type PipesAudienceExportPromptResponse } from "../../../lib/api";
+import { apiClient, type MeiroDiagnosticsSummaryResponse, type PipesAudienceExportPromptResponse, type PrecomputeReadinessResponse } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience, stripMeiroAudiencePrefix } from "../../../lib/meiro-audience-context";
 
@@ -55,6 +55,23 @@ const parseLookups = (input: string) => {
     .filter((row) => row.attribute && row.value);
 };
 
+const readinessToneClassName = (status: PrecomputeReadinessResponse["status"]) => {
+  if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-950";
+  if (status === "likely_noop") return "border-amber-200 bg-amber-50 text-amber-950";
+  return "border-red-200 bg-red-50 text-red-950";
+};
+
+const readinessLabel = (status: PrecomputeReadinessResponse["status"]) => {
+  if (status === "ready") return "Ready";
+  if (status === "likely_noop") return "Likely NOOP";
+  return "Blocked";
+};
+
+const coverageSummary = (items: Array<{ key: string; present: number; sampleSize: number }>) => {
+  if (items.length === 0) return "No requirements";
+  return items.map((item) => `${item.key}: ${item.present}/${item.sampleSize}`).join(", ");
+};
+
 export default function PrecomputeRunsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [runs, setRuns] = useState<RunItem[]>([]);
@@ -76,6 +93,7 @@ export default function PrecomputeRunsPage() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
   const [audienceReadiness, setAudienceReadiness] = useState<{ matchingProfiles: number; uniqueProfiles: number; readiness: string } | null>(null);
+  const [precomputeReadiness, setPrecomputeReadiness] = useState<PrecomputeReadinessResponse | null>(null);
   const [audienceExportPrompt, setAudienceExportPrompt] = useState<PipesAudienceExportPromptResponse | null>(null);
   const [audienceExportLoading, setAudienceExportLoading] = useState(false);
 
@@ -159,6 +177,7 @@ export default function PrecomputeRunsPage() {
     const loadAudienceExportContext = async () => {
       if (!normalizedMeiroSegmentValue) {
         setAudienceReadiness(null);
+        setPrecomputeReadiness(null);
         setAudienceExportPrompt(null);
         return;
       }
@@ -170,8 +189,18 @@ export default function PrecomputeRunsPage() {
         } catch {
           parsedContext = {};
         }
-        const [readinessResponse, promptResponse] = await Promise.all([
+        const [readinessResponse, precomputeResponse, promptResponse] = await Promise.all([
           apiClient.pipes.audienceReadiness(normalizedMeiroSegmentValue).catch(() => null),
+          key.trim()
+            ? apiClient.pipes
+                .precomputeReadiness({
+                  audience: normalizedMeiroSegmentValue,
+                  mode,
+                  key: key.trim(),
+                  sampleLimit: 50
+                })
+                .catch(() => null)
+            : Promise.resolve(null),
           key.trim()
             ? apiClient.pipes.audienceExportPrompt({
                 audience: normalizedMeiroSegmentValue,
@@ -192,6 +221,7 @@ export default function PrecomputeRunsPage() {
                 }
               : null
           );
+          setPrecomputeReadiness(precomputeResponse);
           setAudienceExportPrompt(promptResponse);
         }
       } finally {
@@ -254,6 +284,10 @@ export default function PrecomputeRunsPage() {
       }
       if (cohortType === "segment" && segmentSource === "meiro" && audienceReadiness && audienceReadiness.matchingProfiles === 0) {
         setMessage("Selected Pipes audience has no cached members yet. Copy the Pipes export prompt, run the audience export in Pipes, then refresh before precomputing.");
+        return;
+      }
+      if (cohortType === "segment" && segmentSource === "meiro" && precomputeReadiness?.status === "blocked") {
+        setMessage(precomputeReadiness.warnings[0] ?? "Precompute readiness is blocked for the selected Pipes audience.");
         return;
       }
 
@@ -352,6 +386,52 @@ export default function PrecomputeRunsPage() {
             <Link className="rounded-md border border-stone-300 px-3 py-1.5 hover:bg-stone-100" href="/settings/integrations/pipes-callback">
               Check callback
             </Link>
+          </div>
+        </PagePanel>
+      ) : null}
+
+      {precomputeReadiness ? (
+        <PagePanel density="compact" className={`border ${readinessToneClassName(precomputeReadiness.status)}`}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide">Precompute readiness</p>
+              <h3 className="mt-1 text-base font-semibold">
+                {readinessLabel(precomputeReadiness.status)} for {precomputeReadiness.target.mode}{" "}
+                <span className="font-mono">{precomputeReadiness.target.key}</span>
+              </h3>
+              <p className="mt-1 text-sm">
+                {precomputeReadiness.cohort.matchingProfiles} cached audience member(s); sampled {precomputeReadiness.cohort.sampleSize} profile(s).
+              </p>
+            </div>
+            <Link
+              className="rounded-md border border-current px-3 py-1.5 text-sm hover:bg-white/50"
+              href={`/settings/integrations/pipes?requirementsKey=${encodeURIComponent(precomputeReadiness.target.key)}`}
+            >
+              View requirements
+            </Link>
+          </div>
+          {precomputeReadiness.warnings.length ? (
+            <ul className="mt-3 space-y-1 text-sm">
+              {precomputeReadiness.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm">Sampled cached profiles contain the required audiences, attributes, and consents.</p>
+          )}
+          <div className="mt-3 grid gap-2 text-xs md:grid-cols-3">
+            <div>
+              <p className="font-semibold">Audiences</p>
+              <p className="mt-1 break-words">{coverageSummary(precomputeReadiness.coverage.audiences)}</p>
+            </div>
+            <div>
+              <p className="font-semibold">Attributes</p>
+              <p className="mt-1 break-words">{coverageSummary(precomputeReadiness.coverage.attributes)}</p>
+            </div>
+            <div>
+              <p className="font-semibold">Consents</p>
+              <p className="mt-1 break-words">{coverageSummary(precomputeReadiness.coverage.consents)}</p>
+            </div>
           </div>
         </PagePanel>
       ) : null}

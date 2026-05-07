@@ -495,6 +495,12 @@ const pipesAudienceExportPromptQuerySchema = z.object({
   appKey: z.string().min(1).optional(),
   placement: z.string().min(1).optional()
 });
+const precomputeReadinessQuerySchema = z.object({
+  audience: z.string().min(1),
+  mode: z.enum(["decision", "stack"]).default("decision"),
+  key: z.string().min(1),
+  sampleLimit: z.coerce.number().int().positive().max(200).optional()
+});
 const profileUpsertTestBodySchema = z.object({
   audience: z.string().min(1),
   appKey: z.string().min(1).optional(),
@@ -8710,6 +8716,195 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           : seenProfileIds.size > 0
             ? "no_cached_membership"
             : "no_cached_profiles"
+    };
+  });
+
+  app.get("/v1/precompute/readiness", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = precomputeReadinessQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const audienceRef = normalizeAudienceRef(parsed.data.audience);
+    const sampleLimit = parsed.data.sampleLimit ?? 50;
+    let version = 0;
+    let required: { attributes: string[]; audiences: string[]; contextKeys: string[] } = {
+      attributes: [],
+      audiences: [],
+      contextKeys: []
+    };
+    const requiredConsents = new Set<string>();
+
+    if (parsed.data.mode === "decision") {
+      const activeVersion = await fetchActiveDecision({
+        environment,
+        decisionKey: parsed.data.key
+      });
+      if (!activeVersion) {
+        return buildResponseError(reply, 404, "Active decision not found");
+      }
+      let definition: DecisionDefinition;
+      try {
+        definition = parseDefinition(activeVersion.definitionJson);
+      } catch (error) {
+        return buildResponseError(reply, 500, "Active decision definition is invalid", String(error));
+      }
+      version = activeVersion.version;
+      const requirements = await buildDecisionRequirementsWithCatalog({
+        environment,
+        definition
+      });
+      required = requirements.required;
+      for (const consent of definition.eligibility.consent?.requiredConsents ?? []) {
+        requiredConsents.add(consent);
+      }
+      for (const consent of definition.policies?.requiredConsents ?? []) {
+        requiredConsents.add(consent);
+      }
+    } else {
+      const activeStack = await fetchActiveStack({
+        environment,
+        stackKey: parsed.data.key
+      });
+      if (!activeStack) {
+        return buildResponseError(reply, 404, "Active stack not found");
+      }
+      let stackDefinition: DecisionStackDefinition;
+      try {
+        stackDefinition = parseStackDefinition(activeStack.definitionJson);
+      } catch (error) {
+        return buildResponseError(reply, 500, "Active stack definition is invalid", String(error));
+      }
+      version = activeStack.version;
+      const activeDefinitions = await fetchActiveDecisionDefinitionsByKeys({
+        environment,
+        keys: stackDefinition.steps.map((step) => step.decisionKey)
+      });
+      const allContentKeys = new Set<string>();
+      for (const definition of Object.values(activeDefinitions.definitionsByKey)) {
+        for (const key of collectDecisionReferencedContentKeys(definition)) {
+          allContentKeys.add(key);
+        }
+        for (const consent of definition.eligibility.consent?.requiredConsents ?? []) {
+          requiredConsents.add(consent);
+        }
+        for (const consent of definition.policies?.requiredConsents ?? []) {
+          requiredConsents.add(consent);
+        }
+      }
+      const contentBlocksByKey = await fetchActiveContentBlocksByKeys({
+        environment,
+        keys: [...allContentKeys]
+      });
+      const decisionRequirementsByKey: Record<string, ReturnType<typeof deriveDecisionRequirements>> = {};
+      for (const [decisionKey, definition] of Object.entries(activeDefinitions.definitionsByKey)) {
+        decisionRequirementsByKey[decisionKey] = deriveDecisionRequirements(definition, contentBlocksByKey);
+      }
+      const requirements = deriveStackRequirements({
+        stack: stackDefinition,
+        decisionsByKey: activeDefinitions.definitionsByKey,
+        decisionRequirementsByKey
+      });
+      required = requirements.required;
+    }
+
+    const requiredAudiences = [...new Set(required.audiences.map((value) => value.trim()).filter(Boolean))].sort();
+    const requiredAttributes = [...new Set(required.attributes.map((value) => value.trim()).filter(Boolean))].sort();
+    const requiredConsentList = [...requiredConsents].sort();
+    const cacheKeys = cache.enabled ? await cache.scanKeys(buildProfileCachePatternForEnvironment(environment)) : [];
+    const seenProfileIds = new Set<string>();
+    const sampleProfiles: EngineProfile[] = [];
+    let matchingProfiles = 0;
+    let malformedProfiles = 0;
+
+    for (const cacheKey of cacheKeys) {
+      const profile = await cache.getJson<EngineProfile>(cacheKey);
+      if (!profile?.profileId || !Array.isArray(profile.audiences) || typeof profile.attributes !== "object" || profile.attributes === null) {
+        malformedProfiles += 1;
+        continue;
+      }
+      if (seenProfileIds.has(profile.profileId)) {
+        continue;
+      }
+      seenProfileIds.add(profile.profileId);
+      if (!profileMatchesSegment(profile, { attribute: "audience", value: audienceRef })) {
+        continue;
+      }
+      matchingProfiles += 1;
+      if (sampleProfiles.length < sampleLimit) {
+        sampleProfiles.push(profile);
+      }
+    }
+
+    const countProfilesWith = (predicate: (profile: EngineProfile) => boolean) => sampleProfiles.filter(predicate).length;
+    const audienceCoverage = requiredAudiences.map((audience) => ({
+      key: audience,
+      present: countProfilesWith((profile) => profileMatchesSegment(profile, { attribute: "audience", value: audience })),
+      sampleSize: sampleProfiles.length
+    }));
+    const attributeCoverage = requiredAttributes.map((attribute) => ({
+      key: attribute,
+      present: countProfilesWith((profile) => Object.prototype.hasOwnProperty.call(profile.attributes, attribute)),
+      sampleSize: sampleProfiles.length
+    }));
+    const consentCoverage = requiredConsentList.map((consent) => ({
+      key: consent,
+      present: countProfilesWith((profile) => Array.isArray(profile.consents) && profile.consents.includes(consent)),
+      sampleSize: sampleProfiles.length
+    }));
+    const missingAudiences = audienceCoverage.filter((item) => item.sampleSize > 0 && item.present === 0).map((item) => item.key);
+    const missingAttributes = attributeCoverage.filter((item) => item.sampleSize > 0 && item.present === 0).map((item) => item.key);
+    const missingConsents = consentCoverage.filter((item) => item.sampleSize > 0 && item.present === 0).map((item) => item.key);
+    const warnings = [
+      ...(!cache.enabled ? ["Redis profile cache is disabled; segment precompute cannot inspect cached Pipes membership."] : []),
+      ...(matchingProfiles === 0 ? [`Selected audience ${audienceRef} has no cached members.`] : []),
+      ...(missingAudiences.length ? [`Sampled profiles do not contain required audience(s): ${missingAudiences.join(", ")}.`] : []),
+      ...(missingAttributes.length ? [`Sampled profiles do not contain required attribute(s): ${missingAttributes.join(", ")}.`] : []),
+      ...(missingConsents.length ? [`Sampled profiles do not contain required consent(s): ${missingConsents.join(", ")}.`] : [])
+    ];
+    const status = !cache.enabled || matchingProfiles === 0 ? "blocked" : warnings.length > 0 ? "likely_noop" : "ready";
+
+    return {
+      environment,
+      target: {
+        mode: parsed.data.mode,
+        key: parsed.data.key,
+        version
+      },
+      audience: {
+        input: parsed.data.audience,
+        ref: audienceRef
+      },
+      cache: {
+        redisEnabled: cache.enabled,
+        ttlSeconds: profileCacheTtlSeconds,
+        profileCacheKeys: cacheKeys.length,
+        uniqueProfiles: seenProfileIds.size,
+        malformedProfiles
+      },
+      cohort: {
+        matchingProfiles,
+        sampleSize: sampleProfiles.length,
+        sampleLimit
+      },
+      required: {
+        attributes: requiredAttributes,
+        audiences: requiredAudiences,
+        consents: requiredConsentList,
+        contextKeys: required.contextKeys
+      },
+      coverage: {
+        attributes: attributeCoverage,
+        audiences: audienceCoverage,
+        consents: consentCoverage
+      },
+      status,
+      warnings
     };
   });
 
