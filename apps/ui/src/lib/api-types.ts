@@ -380,6 +380,17 @@ export type PipesAudienceExportPromptResponse = {
     requirementsEndpoint: string;
     profileUpsertEndpoint: string;
   };
+  requirements: {
+    attributes: string[];
+    audiences: string[];
+    consents: string[];
+    contextKeys: string[];
+  };
+  missing: {
+    attributes: string[];
+    audiences: string[];
+    consents: string[];
+  };
   readiness: {
     redisEnabled: boolean;
     cachedProfileKeys: number;

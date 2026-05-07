@@ -612,6 +612,12 @@ export default function PrecomputeRunsPage() {
                         {audienceExportPrompt?.warnings.length ? (
                           <p className="mt-1 text-xs text-amber-800">{audienceExportPrompt.warnings[0]}</p>
                         ) : null}
+                        {audienceExportPrompt ? (
+                          <p className="mt-1 text-xs">
+                            Export prompt includes {audienceExportPrompt.requirements.audiences.length} audience(s),{" "}
+                            {audienceExportPrompt.requirements.attributes.length} attribute(s), and {audienceExportPrompt.requirements.consents.length} consent(s).
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button size="sm" variant="outline" onClick={() => void copyAudienceExportPrompt()} disabled={!audienceExportPrompt?.prompt}>

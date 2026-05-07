@@ -482,6 +482,7 @@ const profileUpsertBodySchema = z.object({
   profileId: z.string().min(1),
   appKey: z.string().min(1).optional(),
   segments: z.array(z.string().min(1)).optional(),
+  consents: z.array(z.string().min(1)).optional(),
   attributes: z.record(z.unknown()).optional(),
   sourceTs: z.string().datetime().optional()
 });
@@ -8372,7 +8373,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           profileId: parsed.data.profileId,
           attributes: parsed.data.attributes ?? {},
           audiences: parsed.data.segments ?? [],
-          consents: []
+          consents: parsed.data.consents ?? []
         };
         const cacheResult = await upsertProfileIntoCache({
           environment,
@@ -9085,7 +9086,118 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     const placement = parsed.data.placement ?? "home_top";
     const targetKeyLabel = parsed.data.mode === "stack" ? "stackKey" : "decisionKey";
     const targetPath = parsed.data.mode === "stack" ? `/v1/requirements/stack/${parsed.data.key}` : `/v1/requirements/decision/${parsed.data.key}`;
+    let required: { attributes: string[]; audiences: string[]; contextKeys: string[] } = {
+      attributes: [],
+      audiences: [],
+      contextKeys: []
+    };
+    const requiredConsents = new Set<string>();
+
+    if (parsed.data.mode === "decision") {
+      const activeVersion = await fetchActiveDecision({
+        environment,
+        decisionKey: parsed.data.key
+      });
+      if (activeVersion) {
+        try {
+          const definition = parseDefinition(activeVersion.definitionJson);
+          const requirements = await buildDecisionRequirementsWithCatalog({
+            environment,
+            definition
+          });
+          required = requirements.required;
+          for (const consent of definition.eligibility.consent?.requiredConsents ?? []) {
+            requiredConsents.add(consent);
+          }
+          for (const consent of definition.policies?.requiredConsents ?? []) {
+            requiredConsents.add(consent);
+          }
+        } catch {
+          // Keep prompt generation available even if the target definition is temporarily invalid.
+        }
+      }
+    } else {
+      const activeStack = await fetchActiveStack({
+        environment,
+        stackKey: parsed.data.key
+      });
+      if (activeStack) {
+        try {
+          const stackDefinition = parseStackDefinition(activeStack.definitionJson);
+          const activeDefinitions = await fetchActiveDecisionDefinitionsByKeys({
+            environment,
+            keys: stackDefinition.steps.map((step) => step.decisionKey)
+          });
+          const allContentKeys = new Set<string>();
+          for (const definition of Object.values(activeDefinitions.definitionsByKey)) {
+            for (const key of collectDecisionReferencedContentKeys(definition)) {
+              allContentKeys.add(key);
+            }
+            for (const consent of definition.eligibility.consent?.requiredConsents ?? []) {
+              requiredConsents.add(consent);
+            }
+            for (const consent of definition.policies?.requiredConsents ?? []) {
+              requiredConsents.add(consent);
+            }
+          }
+          const contentBlocksByKey = await fetchActiveContentBlocksByKeys({
+            environment,
+            keys: [...allContentKeys]
+          });
+          const decisionRequirementsByKey: Record<string, ReturnType<typeof deriveDecisionRequirements>> = {};
+          for (const [decisionKey, definition] of Object.entries(activeDefinitions.definitionsByKey)) {
+            decisionRequirementsByKey[decisionKey] = deriveDecisionRequirements(definition, contentBlocksByKey);
+          }
+          const requirements = deriveStackRequirements({
+            stack: stackDefinition,
+            decisionsByKey: activeDefinitions.definitionsByKey,
+            decisionRequirementsByKey
+          });
+          required = requirements.required;
+        } catch {
+          // Keep prompt generation available even if stack requirements cannot be derived.
+        }
+      }
+    }
+
+    const requiredAttributes = [...new Set(required.attributes.map((value) => value.trim()).filter(Boolean))].sort();
+    const requiredAudiences = [...new Set(required.audiences.map((value) => value.trim()).filter(Boolean))].sort();
+    const requiredConsentList = [...requiredConsents].sort();
     const cacheKeys = cache.enabled ? await cache.scanKeys(buildProfileCachePatternForEnvironment(environment)) : [];
+    const seenProfileIds = new Set<string>();
+    const sampleProfiles: EngineProfile[] = [];
+    let matchingProfiles = 0;
+    for (const cacheKey of cacheKeys) {
+      const profile = await cache.getJson<EngineProfile>(cacheKey);
+      if (!profile?.profileId || !Array.isArray(profile.audiences) || typeof profile.attributes !== "object" || profile.attributes === null) {
+        continue;
+      }
+      if (seenProfileIds.has(profile.profileId)) {
+        continue;
+      }
+      seenProfileIds.add(profile.profileId);
+      if (profileMatchesSegment(profile, { attribute: "audience", value: audienceRef })) {
+        matchingProfiles += 1;
+        if (sampleProfiles.length < 50) {
+          sampleProfiles.push(profile);
+        }
+      }
+    }
+    const countProfilesWith = (predicate: (profile: EngineProfile) => boolean) => sampleProfiles.filter(predicate).length;
+    const missing = {
+      audiences:
+        sampleProfiles.length === 0
+          ? requiredAudiences
+          : requiredAudiences.filter((audience) => countProfilesWith((profile) => profileMatchesSegment(profile, { attribute: "audience", value: audience })) === 0),
+      attributes:
+        sampleProfiles.length === 0
+          ? requiredAttributes
+          : requiredAttributes.filter((attribute) => countProfilesWith((profile) => Object.prototype.hasOwnProperty.call(profile.attributes, attribute)) === 0),
+      consents:
+        sampleProfiles.length === 0
+          ? requiredConsentList
+          : requiredConsentList.filter((consent) => countProfilesWith((profile) => Array.isArray(profile.consents) && profile.consents.includes(consent)) === 0)
+    };
     const readiness = {
       redisEnabled: cache.enabled,
       cachedProfileKeys: cacheKeys.length,
@@ -9100,6 +9212,31 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       "",
       "Selected audience:",
       JSON.stringify({ audienceRef, audienceId }, null, 2),
+      "",
+      "Decision/stack required data:",
+      JSON.stringify(
+        {
+          requiredAudiences,
+          requiredAttributes,
+          requiredConsents: requiredConsentList,
+          requiredContextKeys: required.contextKeys
+        },
+        null,
+        2
+      ),
+      "",
+      "Current cached-sample gaps to fix in this export:",
+      JSON.stringify(
+        {
+          matchingProfiles,
+          sampledProfiles: sampleProfiles.length,
+          missingAudiences: missing.audiences,
+          missingAttributes: missing.attributes,
+          missingConsents: missing.consents
+        },
+        null,
+        2
+      ),
       "",
       "deciEngine target:",
       JSON.stringify(
@@ -9126,9 +9263,10 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           profileId: "profile.profileKey or another stable Prism profile identifier",
           appKey,
           sourceTs: "profile.updatedAt or export timestamp",
-          segments: [audienceRef],
+          segments: [...new Set([audienceRef, ...requiredAudiences])],
+          consents: requiredConsentList,
           attributes: {
-            "only_required_or_reviewed_attribute_ids": "values needed by the decision requirements endpoint"
+            "required_decision_attributes": requiredAttributes.length > 0 ? requiredAttributes : "no required attributes"
           }
         },
         null,
@@ -9139,9 +9277,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       "1. Resolve the audience members for the selected audience in Pipes/Prism.",
       "2. Call the deciEngine requirements endpoint to identify required attributes for the selected decision/stack.",
       "3. Export profiles in batches to DECISION_ENGINE_BASE_URL + /v1/profiles/upsert.",
-      "4. Include the selected audience reference in segments for every exported profile.",
-      "5. Keep profile payloads below the configured request size limit; send only required/reviewed attributes.",
-      "6. Do not log token values, email addresses, phone numbers, or raw profile payloads.",
+      "4. Include the selected audience reference and required decision audiences in segments for every exported profile when membership is true.",
+      "5. Include required decision attributes under their deciEngine field names, or provide an explicit mapping recommendation if the Pipes field uses a different ID/key.",
+      "6. Include required consents in consents when the profile has those consents.",
+      "7. Keep profile payloads below the configured request size limit; send only required/reviewed attributes.",
+      "8. Do not log token values, email addresses, phone numbers, or raw profile payloads.",
       "",
       "Validation steps:",
       "1. Confirm /v1/profiles/upsert returns 2xx for sample profiles.",
@@ -9165,6 +9305,13 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         requirementsEndpoint: targetPath,
         profileUpsertEndpoint: "/v1/profiles/upsert"
       },
+      requirements: {
+        attributes: requiredAttributes,
+        audiences: requiredAudiences,
+        consents: requiredConsentList,
+        contextKeys: required.contextKeys
+      },
+      missing,
       readiness,
       prompt,
       warnings: [
@@ -9172,7 +9319,11 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
         ...(activeInstanceHost !== "meiro-internal.eu.pipes.meiro.io"
           ? [`Active Pipes instance is ${activeInstanceHost ?? "unknown"}; expected meiro-internal.eu.pipes.meiro.io.`]
           : []),
-        ...(!cache.enabled ? ["Redis profile cache is disabled; precompute membership will only use local process cache."] : [])
+        ...(!cache.enabled ? ["Redis profile cache is disabled; precompute membership will only use local process cache."] : []),
+        ...(matchingProfiles === 0 ? [`Selected audience ${audienceRef} has no cached members yet; export all required data before precompute.`] : []),
+        ...(missing.audiences.length ? [`Export should add required audience segment(s): ${missing.audiences.join(", ")}.`] : []),
+        ...(missing.attributes.length ? [`Export should add required attribute(s): ${missing.attributes.join(", ")}.`] : []),
+        ...(missing.consents.length ? [`Export should add required consent(s): ${missing.consents.join(", ")}.`] : [])
       ]
     };
   });
