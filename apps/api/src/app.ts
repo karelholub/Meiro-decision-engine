@@ -3161,6 +3161,7 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           profileId: input.profileId
         })
       );
+      let partialCachedProfile: EngineProfile | null = null;
       for (const candidateKey of candidateKeys) {
         if (candidateKey === profileCacheKey) {
           continue;
@@ -3177,6 +3178,21 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           await cache.setJson(profileCacheKey, candidate, profileCacheTtlSeconds);
           return candidate;
         }
+        if (
+          partialCachedProfile === null &&
+          candidate?.profileId === input.profileId &&
+          Array.isArray(candidate.audiences) &&
+          typeof candidate.attributes === "object" &&
+          candidate.attributes !== null
+        ) {
+          partialCachedProfile = candidate;
+        }
+      }
+
+      if (partialCachedProfile && (config.meiroPrismSourceMode ?? "pipes_cli") === "pipes_cli") {
+        profileCache.set(profileCacheKey, partialCachedProfile);
+        await cache.setJson(profileCacheKey, partialCachedProfile, profileCacheTtlSeconds);
+        return partialCachedProfile;
       }
     }
 
