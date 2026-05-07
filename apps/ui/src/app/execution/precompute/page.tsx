@@ -15,7 +15,7 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
-import { apiClient, type MeiroDiagnosticsSummaryResponse } from "../../../lib/api";
+import { apiClient, type MeiroDiagnosticsSummaryResponse, type PipesAudienceExportPromptResponse } from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience, stripMeiroAudiencePrefix } from "../../../lib/meiro-audience-context";
 
@@ -75,6 +75,9 @@ export default function PrecomputeRunsPage() {
   const [creatingRun, setCreatingRun] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
+  const [audienceReadiness, setAudienceReadiness] = useState<{ matchingProfiles: number; uniqueProfiles: number; readiness: string } | null>(null);
+  const [audienceExportPrompt, setAudienceExportPrompt] = useState<PipesAudienceExportPromptResponse | null>(null);
+  const [audienceExportLoading, setAudienceExportLoading] = useState(false);
 
   const suggestedRunKey = useMemo(() => {
     const keyPart = key.trim() || "target";
@@ -144,6 +147,73 @@ export default function PrecomputeRunsPage() {
     }
   }, [cohortType, segmentSource, segmentValue]);
 
+  const normalizedMeiroSegmentValue = useMemo(() => {
+    if (cohortType !== "segment" || segmentSource !== "meiro" || !segmentValue.trim()) {
+      return "";
+    }
+    return segmentValue.trim().startsWith("meiro_segment:") ? segmentValue.trim() : `meiro_segment:${segmentValue.trim()}`;
+  }, [cohortType, segmentSource, segmentValue]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAudienceExportContext = async () => {
+      if (!normalizedMeiroSegmentValue) {
+        setAudienceReadiness(null);
+        setAudienceExportPrompt(null);
+        return;
+      }
+      setAudienceExportLoading(true);
+      try {
+        let parsedContext: Record<string, unknown> = {};
+        try {
+          parsedContext = contextText.trim() ? (JSON.parse(contextText) as Record<string, unknown>) : {};
+        } catch {
+          parsedContext = {};
+        }
+        const [readinessResponse, promptResponse] = await Promise.all([
+          apiClient.pipes.audienceReadiness(normalizedMeiroSegmentValue).catch(() => null),
+          key.trim()
+            ? apiClient.pipes.audienceExportPrompt({
+                audience: normalizedMeiroSegmentValue,
+                mode,
+                key: key.trim(),
+                appKey: typeof parsedContext.appKey === "string" ? parsedContext.appKey : "meiro_store",
+                placement: typeof parsedContext.placement === "string" ? parsedContext.placement : "home_top"
+              }).catch(() => null)
+            : Promise.resolve(null)
+        ]);
+        if (!cancelled) {
+          setAudienceReadiness(
+            readinessResponse
+              ? {
+                  matchingProfiles: readinessResponse.matchingProfiles,
+                  uniqueProfiles: readinessResponse.cache.uniqueProfiles,
+                  readiness: readinessResponse.readiness
+                }
+              : null
+          );
+          setAudienceExportPrompt(promptResponse);
+        }
+      } finally {
+        if (!cancelled) {
+          setAudienceExportLoading(false);
+        }
+      }
+    };
+    void loadAudienceExportContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [contextText, key, mode, normalizedMeiroSegmentValue]);
+
+  const copyAudienceExportPrompt = async () => {
+    if (!audienceExportPrompt?.prompt || !navigator.clipboard?.writeText) {
+      return;
+    }
+    await navigator.clipboard.writeText(audienceExportPrompt.prompt);
+    setMessage("Copied Pipes audience export prompt.");
+  };
+
   const loadRuns = async (manual = false, preserveMessage = false) => {
     setLoadingRuns(true);
     try {
@@ -176,15 +246,14 @@ export default function PrecomputeRunsPage() {
       }
       const parsedContext = contextText.trim() ? (JSON.parse(contextText) as Record<string, unknown>) : {};
       const normalizedSegmentAttribute = segmentSource === "meiro" ? "audience" : segmentAttribute.trim();
-      const normalizedSegmentValue =
-        segmentSource === "meiro"
-          ? segmentValue.trim().startsWith("meiro_segment:")
-            ? segmentValue.trim()
-            : `meiro_segment:${segmentValue.trim()}`
-          : segmentValue.trim();
+      const normalizedSegmentValue = segmentSource === "meiro" ? normalizedMeiroSegmentValue : segmentValue.trim();
 
       if (cohortType === "segment" && (!normalizedSegmentAttribute || !segmentValue.trim())) {
         setMessage(segmentSource === "meiro" ? "Select a Meiro segment before creating the run." : "Segment attribute and value are required.");
+        return;
+      }
+      if (cohortType === "segment" && segmentSource === "meiro" && audienceReadiness && audienceReadiness.matchingProfiles === 0) {
+        setMessage("Selected Pipes audience has no cached members yet. Copy the Pipes export prompt, run the audience export in Pipes, then refresh before precomputing.");
         return;
       }
 
@@ -375,6 +444,36 @@ export default function PrecomputeRunsPage() {
                 <p className="mt-1 text-xs text-stone-600">
                   Runs resolve this segment against profiles already cached or upserted locally with matching Meiro audience membership.
                 </p>
+                {normalizedMeiroSegmentValue ? (
+                  <div className="mt-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold">Pipes audience export handoff</p>
+                        <p className="mt-1 text-xs">
+                          {audienceExportLoading
+                            ? "Checking cached audience membership..."
+                            : audienceReadiness
+                              ? `${audienceReadiness.matchingProfiles} cached member(s) / ${audienceReadiness.uniqueProfiles} cached profile(s).`
+                              : "Cached membership is unavailable."}
+                        </p>
+                        {audienceExportPrompt?.warnings.length ? (
+                          <p className="mt-1 text-xs text-amber-800">{audienceExportPrompt.warnings[0]}</p>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" onClick={() => void copyAudienceExportPrompt()} disabled={!audienceExportPrompt?.prompt}>
+                          Copy Pipes export prompt
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => void loadRuns(true)} disabled={loadingRuns}>
+                          Refresh
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs">
+                      Use this prompt when the selected audience has no cached members. Pipes should export the audience profiles to `/v1/profiles/upsert`; then this page can precompute against cached membership.
+                    </p>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <>

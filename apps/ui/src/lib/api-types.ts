@@ -287,6 +287,32 @@ export type ProfileUpsertTestResponse = {
   };
 };
 
+export type PipesAudienceExportPromptResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  audience: {
+    input: string;
+    ref: string;
+    id: string;
+  };
+  target: {
+    mode: "decision" | "stack";
+    key: string;
+    appKey: string;
+    placement: string;
+    requirementsEndpoint: string;
+    profileUpsertEndpoint: string;
+  };
+  readiness: {
+    redisEnabled: boolean;
+    cachedProfileKeys: number;
+    sourceMode: "pipes_cli" | "meiro_mcp";
+    activeInstanceHost: string | null;
+    expectedInstanceHost: string;
+  };
+  prompt: string;
+  warnings: string[];
+};
+
 export type PipesPrismMappingRecommendationsResponse = {
   environment: "DEV" | "STAGE" | "PROD";
   sourceMode?: "pipes_cli" | "meiro_mcp";

@@ -487,6 +487,13 @@ const profileUpsertBodySchema = z.object({
 const profileAudienceReadinessQuerySchema = z.object({
   audience: z.string().min(1)
 });
+const pipesAudienceExportPromptQuerySchema = z.object({
+  audience: z.string().min(1),
+  mode: z.enum(["decision", "stack"]).default("decision"),
+  key: z.string().min(1),
+  appKey: z.string().min(1).optional(),
+  placement: z.string().min(1).optional()
+});
 const profileUpsertTestBodySchema = z.object({
   audience: z.string().min(1),
   appKey: z.string().min(1).optional(),
@@ -8659,6 +8666,118 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
           : seenProfileIds.size > 0
             ? "no_cached_membership"
             : "no_cached_profiles"
+    };
+  });
+
+  app.get("/v1/profiles/audience-export-prompt", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = pipesAudienceExportPromptQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid query", parsed.error.flatten());
+    }
+
+    const audienceRef = normalizeAudienceRef(parsed.data.audience);
+    const audienceId = audienceRef.replace(/^meiro_segment:/, "");
+    const baseUrl = normalizeDiagnosticsUrl(config.meiroPipesBaseUrl);
+    const activeInstanceHost = diagnosticsHost(config.meiroPipesBaseUrl);
+    const sourceMode = config.meiroPrismSourceMode ?? "pipes_cli";
+    const appKey = parsed.data.appKey ?? "meiro_store";
+    const placement = parsed.data.placement ?? "home_top";
+    const targetKeyLabel = parsed.data.mode === "stack" ? "stackKey" : "decisionKey";
+    const targetPath = parsed.data.mode === "stack" ? `/v1/requirements/stack/${parsed.data.key}` : `/v1/requirements/decision/${parsed.data.key}`;
+    const cacheKeys = cache.enabled ? await cache.scanKeys(buildProfileCachePatternForEnvironment(environment)) : [];
+    const readiness = {
+      redisEnabled: cache.enabled,
+      cachedProfileKeys: cacheKeys.length,
+      sourceMode,
+      activeInstanceHost,
+      expectedInstanceHost: "meiro-internal.eu.pipes.meiro.io"
+    };
+    const prompt = [
+      "You are the Meiro Pipes agent for the internal production instance.",
+      `Instance: ${baseUrl ?? "https://meiro-internal.eu.pipes.meiro.io"}`,
+      "Goal: export the selected Pipes audience to deciEngine profile cache before running decision precompute.",
+      "",
+      "Selected audience:",
+      JSON.stringify({ audienceRef, audienceId }, null, 2),
+      "",
+      "deciEngine target:",
+      JSON.stringify(
+        {
+          environment,
+          profileUpsertEndpoint: "/v1/profiles/upsert",
+          requirementsEndpoint: targetPath,
+          [targetKeyLabel]: parsed.data.key,
+          appKey,
+          placement,
+          expectedHeaders: {
+            "Content-Type": "application/json",
+            "X-ENV": environment,
+            "X-API-KEY": "use DECISION_ENGINE_API_KEY secret"
+          }
+        },
+        null,
+        2
+      ),
+      "",
+      "Required payload contract for each exported profile:",
+      JSON.stringify(
+        {
+          profileId: "profile.profileKey or another stable Prism profile identifier",
+          appKey,
+          sourceTs: "profile.updatedAt or export timestamp",
+          segments: [audienceRef],
+          attributes: {
+            "only_required_or_reviewed_attribute_ids": "values needed by the decision requirements endpoint"
+          }
+        },
+        null,
+        2
+      ),
+      "",
+      "Implementation guidance:",
+      "1. Resolve the audience members for the selected audience in Pipes/Prism.",
+      "2. Call the deciEngine requirements endpoint to identify required attributes for the selected decision/stack.",
+      "3. Export profiles in batches to DECISION_ENGINE_BASE_URL + /v1/profiles/upsert.",
+      "4. Include the selected audience reference in segments for every exported profile.",
+      "5. Keep profile payloads below the configured request size limit; send only required/reviewed attributes.",
+      "6. Do not log token values, email addresses, phone numbers, or raw profile payloads.",
+      "",
+      "Validation steps:",
+      "1. Confirm /v1/profiles/upsert returns 2xx for sample profiles.",
+      "2. Refresh deciEngine Precompute and verify audience readiness shows cached members.",
+      "3. Create the precompute run only after cached membership is non-zero.",
+      "4. Confirm decision results are generated for the selected audience."
+    ].join("\n");
+
+    return {
+      environment,
+      audience: {
+        input: parsed.data.audience,
+        ref: audienceRef,
+        id: audienceId
+      },
+      target: {
+        mode: parsed.data.mode,
+        key: parsed.data.key,
+        appKey,
+        placement,
+        requirementsEndpoint: targetPath,
+        profileUpsertEndpoint: "/v1/profiles/upsert"
+      },
+      readiness,
+      prompt,
+      warnings: [
+        ...(sourceMode !== "pipes_cli" ? ["MEIRO_PRISM_SOURCE_MODE is not pipes_cli; switch to Pipes CLI for production profile export handoff."] : []),
+        ...(activeInstanceHost !== "meiro-internal.eu.pipes.meiro.io"
+          ? [`Active Pipes instance is ${activeInstanceHost ?? "unknown"}; expected meiro-internal.eu.pipes.meiro.io.`]
+          : []),
+        ...(!cache.enabled ? ["Redis profile cache is disabled; precompute membership will only use local process cache."] : [])
+      ]
     };
   });
 
