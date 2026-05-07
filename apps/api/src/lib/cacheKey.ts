@@ -103,6 +103,10 @@ export const buildProfileCachePatternForEnvironment = (environment: Environment)
   return `${PROFILE_CACHE_PREFIX}:${encodeSegment(environment)}:*`;
 };
 
+export const buildProfileCachePatternForProfile = (input: { environment: Environment; profileId: string }): string => {
+  return `${PROFILE_CACHE_PREFIX}:${encodeSegment(input.environment)}:${encodeSegment(input.profileId)}:*`;
+};
+
 export const buildCachePatternForProfile = (input: { environment: Environment; profileId: string }): string => {
   return `${CACHE_PREFIX}:*:${encodeSegment(input.environment)}:*:${encodeSegment(`profile:${input.profileId}`)}:*`;
 };

@@ -191,7 +191,7 @@ export const readConfig = (): AppConfig => ({
     "locale",
     "deviceType"
   ]),
-  profileCacheTtlSeconds: toNumber(process.env.PROFILE_CACHE_TTL_SECONDS, 30),
+  profileCacheTtlSeconds: toNumber(process.env.PROFILE_CACHE_TTL_SECONDS, 3600),
   precomputeConcurrency: toNumber(process.env.PRECOMPUTE_CONCURRENCY, 20),
   precomputeMaxRetries: toNumber(process.env.PRECOMPUTE_MAX_RETRIES, 2),
   precomputeLookupDelayMs: toNumber(process.env.PRECOMPUTE_LOOKUP_DELAY_MS, 25),

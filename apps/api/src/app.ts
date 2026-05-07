@@ -66,6 +66,7 @@ import {
 } from "./lib/pipesCallback";
 import {
   buildProfileCachePatternForEnvironment,
+  buildProfileCachePatternForProfile,
   buildProfileCacheKey,
   buildRealtimeCacheKey,
   buildRealtimeLockKey,
@@ -3150,6 +3151,33 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
     if (redisCached) {
       profileCache.set(profileCacheKey, redisCached);
       return redisCached;
+    }
+
+    if (cache.enabled) {
+      const requiredAttributes = [...new Set(input.requiredAttributes.map((value) => value.trim()).filter(Boolean))];
+      const candidateKeys = await cache.scanKeys(
+        buildProfileCachePatternForProfile({
+          environment: input.environment,
+          profileId: input.profileId
+        })
+      );
+      for (const candidateKey of candidateKeys) {
+        if (candidateKey === profileCacheKey) {
+          continue;
+        }
+        const candidate = await cache.getJson<EngineProfile>(candidateKey);
+        if (
+          candidate?.profileId === input.profileId &&
+          Array.isArray(candidate.audiences) &&
+          typeof candidate.attributes === "object" &&
+          candidate.attributes !== null &&
+          requiredAttributes.every((attribute) => Object.prototype.hasOwnProperty.call(candidate.attributes, attribute))
+        ) {
+          profileCache.set(profileCacheKey, candidate);
+          await cache.setJson(profileCacheKey, candidate, profileCacheTtlSeconds);
+          return candidate;
+        }
+      }
     }
 
     const profile = await meiro.getProfile(input.profileId, {
