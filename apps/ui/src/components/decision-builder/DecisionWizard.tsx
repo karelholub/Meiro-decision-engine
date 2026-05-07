@@ -841,7 +841,13 @@ export function DecisionWizard({
         {activeStep === "guardrails" ? (
           <section className="panel space-y-3 p-3">
             <h3 className="font-semibold">Guardrails</h3>
-            <GuardrailsEditor definition={draft} onChange={setDraft} readOnly={readOnly} errorByPath={errorByPathMerged} />
+            <GuardrailsEditor
+              definition={draft}
+              onChange={setDraft}
+              readOnly={readOnly}
+              errorByPath={errorByPathMerged}
+              registry={authoringFields.registry}
+            />
           </section>
         ) : null}
 

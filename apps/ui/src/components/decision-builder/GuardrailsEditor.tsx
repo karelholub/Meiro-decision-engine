@@ -1,12 +1,14 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import type { DecisionDefinition } from "@decisioning/dsl";
 import { getGlobalSuppressAudienceKey, onAppSettingsChange } from "../../lib/app-settings";
+import type { FieldRegistryItem } from "./types";
 
 interface GuardrailsEditorProps {
   definition: DecisionDefinition;
   onChange: (next: DecisionDefinition) => void;
   readOnly?: boolean;
   errorByPath?: Record<string, string>;
+  registry: FieldRegistryItem[];
 }
 
 const hasMarketingConsentShortcut = (definition: DecisionDefinition) => {
@@ -19,9 +21,11 @@ const hasMxEmailExistsShortcut = (definition: DecisionDefinition) => {
   return (definition.eligibility.attributes ?? []).some((predicate) => predicate.field === "mx_email" && predicate.op === "exists");
 };
 
-export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }: GuardrailsEditorProps) {
+export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath, registry }: GuardrailsEditorProps) {
   const shortcutEnabled = hasMarketingConsentShortcut(definition);
   const mxEmailShortcutEnabled = hasMxEmailExistsShortcut(definition);
+  const consentShortcutMapped = registry.some((field) => field.field === "consent_marketing");
+  const mxEmailShortcutMapped = registry.some((field) => field.field === "mx_email");
   const [globalSuppressAudienceKey, setGlobalSuppressAudienceKey] = useState("");
   const [capPerDayInput, setCapPerDayInput] = useState(definition.caps.perProfilePerDay?.toString() ?? "");
   const [capPerWeekInput, setCapPerWeekInput] = useState(definition.caps.perProfilePerWeek?.toString() ?? "");
@@ -336,6 +340,11 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
           Require `consent_marketing = true` shortcut
         </label>
         <p className="mt-1 text-xs text-stone-600">Adds/removes an eligibility condition without editing JSON.</p>
+        {!consentShortcutMapped ? (
+          <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+            `consent_marketing` is not present in the active registry. Prefer the mapped Pipes consent field before production precompute.
+          </p>
+        ) : null}
         <label className="mt-2 flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -345,6 +354,11 @@ export function GuardrailsEditor({ definition, onChange, readOnly, errorByPath }
           />
           Require `mx_email exists` shortcut
         </label>
+        {!mxEmailShortcutMapped ? (
+          <p className="mt-1 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+            `mx_email` is not present in the active registry. Prefer the mapped Pipes email field before production precompute.
+          </p>
+        ) : null}
         {globalSuppressAudienceKey ? (
           <label className="mt-2 flex items-center gap-2 text-sm">
             <input

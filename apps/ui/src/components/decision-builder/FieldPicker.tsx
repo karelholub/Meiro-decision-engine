@@ -19,6 +19,7 @@ const formatSamples = (values: unknown[] | undefined) => {
 
 export function FieldPicker({ value, onChange, registry, disabled, error, sampleValueLookup }: FieldPickerProps) {
   const [query, setQuery] = useState("");
+  const selectedField = useMemo(() => registry.find((item) => item.field === value), [registry, value]);
 
   const filtered = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -99,6 +100,12 @@ export function FieldPicker({ value, onChange, registry, disabled, error, sample
           placeholder="profile.attribute"
         />
       </label>
+
+      {value.trim() && !selectedField ? (
+        <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+          This field is not present in the active registry. Map it to a Pipes field before production precompute.
+        </p>
+      ) : null}
 
       {error ? <p className="text-xs text-red-700">{error}</p> : null}
     </div>
