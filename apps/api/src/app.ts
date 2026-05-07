@@ -501,6 +501,13 @@ const precomputeReadinessQuerySchema = z.object({
   key: z.string().min(1),
   sampleLimit: z.coerce.number().int().positive().max(200).optional()
 });
+const precomputeSampleBodySchema = z.object({
+  audience: z.string().min(1),
+  mode: z.enum(["decision", "stack"]).default("decision"),
+  key: z.string().min(1),
+  context: z.record(z.unknown()).optional(),
+  sampleSize: z.number().int().positive().max(20).optional()
+});
 const profileUpsertTestBodySchema = z.object({
   audience: z.string().min(1),
   appKey: z.string().min(1).optional(),
@@ -8905,6 +8912,156 @@ export const buildApp = async (deps: BuildAppDeps = {}) => {
       },
       status,
       warnings
+    };
+  });
+
+  app.post("/v1/precompute/sample", { preHandler: requirePermission("settings.pipes.read") }, async (request, reply) => {
+    const environment = resolveEnvironment(request, reply);
+    if (!environment) {
+      return;
+    }
+
+    const parsed = precomputeSampleBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return buildResponseError(reply, 400, "Invalid body", parsed.error.flatten());
+    }
+
+    const audienceRef = normalizeAudienceRef(parsed.data.audience);
+    const sampleSize = parsed.data.sampleSize ?? 5;
+    const cacheKeys = cache.enabled ? await cache.scanKeys(buildProfileCachePatternForEnvironment(environment)) : [];
+    const seenProfileIds = new Set<string>();
+    const profiles: EngineProfile[] = [];
+    let matchingProfiles = 0;
+    let malformedProfiles = 0;
+
+    for (const cacheKey of cacheKeys) {
+      const profile = await cache.getJson<EngineProfile>(cacheKey);
+      if (!profile?.profileId || !Array.isArray(profile.audiences) || typeof profile.attributes !== "object" || profile.attributes === null) {
+        malformedProfiles += 1;
+        continue;
+      }
+      if (seenProfileIds.has(profile.profileId)) {
+        continue;
+      }
+      seenProfileIds.add(profile.profileId);
+      if (!profileMatchesSegment(profile, { attribute: "audience", value: audienceRef })) {
+        continue;
+      }
+      matchingProfiles += 1;
+      if (profiles.length < sampleSize) {
+        profiles.push(profile);
+      }
+    }
+
+    const reasonCounts: Record<string, number> = {};
+    const outcomeCounts = {
+      eligible: 0,
+      noop: 0,
+      suppressed: 0,
+      errors: 0
+    };
+    const items: Array<{
+      profileIdHash: string;
+      eligible: boolean;
+      actionType: string;
+      reasons: string[];
+      missingFields: string[];
+      typeIssueCount: number;
+      status: "READY" | "SUPPRESSED" | "NOOP" | "ERROR";
+    }> = [];
+
+    for (const profile of profiles) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/evaluate",
+        headers: {
+          "content-type": "application/json",
+          "x-env": environment,
+          ...(config.apiWriteKey ? { "x-api-key": config.apiWriteKey } : {})
+        },
+        payload: {
+          mode: "full",
+          ...(parsed.data.mode === "decision" ? { decisionKey: parsed.data.key } : { stackKey: parsed.data.key }),
+          profile,
+          context: parsed.data.context ?? {},
+          debug: false
+        }
+      });
+
+      if (response.statusCode >= 400) {
+        outcomeCounts.errors += 1;
+        reasonCounts.EVALUATE_FAILED = (reasonCounts.EVALUATE_FAILED ?? 0) + 1;
+        items.push({
+          profileIdHash: hashSha256(profile.profileId),
+          eligible: false,
+          actionType: "noop",
+          reasons: ["EVALUATE_FAILED"],
+          missingFields: [],
+          typeIssueCount: 0,
+          status: "ERROR"
+        });
+        continue;
+      }
+
+      const payload = response.json() as {
+        eligible?: boolean;
+        result?: { actionType?: string } | null;
+        reasons?: string[];
+        missingFields?: string[];
+        typeIssues?: unknown[];
+      };
+      const reasons = Array.isArray(payload.reasons) ? payload.reasons.filter((code): code is string => typeof code === "string") : [];
+      for (const reason of reasons) {
+        reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
+      }
+      const actionType = typeof payload.result?.actionType === "string" ? payload.result.actionType : "noop";
+      const eligible = Boolean(payload.eligible);
+      const status = !eligible || actionType === "noop" ? "NOOP" : actionType === "suppress" ? "SUPPRESSED" : "READY";
+      if (status === "READY") {
+        outcomeCounts.eligible += 1;
+      } else if (status === "SUPPRESSED") {
+        outcomeCounts.suppressed += 1;
+      } else {
+        outcomeCounts.noop += 1;
+      }
+      items.push({
+        profileIdHash: hashSha256(profile.profileId),
+        eligible,
+        actionType,
+        reasons,
+        missingFields: Array.isArray(payload.missingFields)
+          ? payload.missingFields.filter((field): field is string => typeof field === "string")
+          : [],
+        typeIssueCount: Array.isArray(payload.typeIssues) ? payload.typeIssues.length : 0,
+        status
+      });
+    }
+
+    return {
+      environment,
+      target: {
+        mode: parsed.data.mode,
+        key: parsed.data.key
+      },
+      audience: {
+        input: parsed.data.audience,
+        ref: audienceRef
+      },
+      cache: {
+        redisEnabled: cache.enabled,
+        ttlSeconds: profileCacheTtlSeconds,
+        profileCacheKeys: cacheKeys.length,
+        uniqueProfiles: seenProfileIds.size,
+        malformedProfiles
+      },
+      cohort: {
+        matchingProfiles,
+        sampled: profiles.length,
+        requested: sampleSize
+      },
+      outcomeCounts,
+      reasonCounts: Object.fromEntries(Object.entries(reasonCounts).sort(([left], [right]) => left.localeCompare(right))),
+      items
     };
   });
 

@@ -312,6 +312,46 @@ export type PrecomputeReadinessResponse = {
   warnings: string[];
 };
 
+export type PrecomputeSampleResponse = {
+  environment: "DEV" | "STAGE" | "PROD";
+  target: {
+    mode: "decision" | "stack";
+    key: string;
+  };
+  audience: {
+    input: string;
+    ref: string;
+  };
+  cache: {
+    redisEnabled: boolean;
+    ttlSeconds: number;
+    profileCacheKeys: number;
+    uniqueProfiles: number;
+    malformedProfiles: number;
+  };
+  cohort: {
+    matchingProfiles: number;
+    sampled: number;
+    requested: number;
+  };
+  outcomeCounts: {
+    eligible: number;
+    noop: number;
+    suppressed: number;
+    errors: number;
+  };
+  reasonCounts: Record<string, number>;
+  items: Array<{
+    profileIdHash: string;
+    eligible: boolean;
+    actionType: string;
+    reasons: string[];
+    missingFields: string[];
+    typeIssueCount: number;
+    status: "READY" | "SUPPRESSED" | "NOOP" | "ERROR";
+  }>;
+};
+
 export type ProfileUpsertTestResponse = {
   status: "ok";
   environment: "DEV" | "STAGE" | "PROD";

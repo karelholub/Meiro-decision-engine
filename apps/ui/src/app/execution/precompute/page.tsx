@@ -15,7 +15,13 @@ import {
   operationalTableHeaderCellClassName
 } from "../../../components/ui/operational-table";
 import { FieldLabel, PageHeader, PagePanel, inputClassName } from "../../../components/ui/page";
-import { apiClient, type MeiroDiagnosticsSummaryResponse, type PipesAudienceExportPromptResponse, type PrecomputeReadinessResponse } from "../../../lib/api";
+import {
+  apiClient,
+  type MeiroDiagnosticsSummaryResponse,
+  type PipesAudienceExportPromptResponse,
+  type PrecomputeReadinessResponse,
+  type PrecomputeSampleResponse
+} from "../../../lib/api";
 import { getEnvironment, onEnvironmentChange, type UiEnvironment } from "../../../lib/environment";
 import { normalizeMeiroAudienceRef, readStoredMeiroAudience, storeMeiroAudience, stripMeiroAudiencePrefix } from "../../../lib/meiro-audience-context";
 
@@ -72,6 +78,12 @@ const coverageSummary = (items: Array<{ key: string; present: number; sampleSize
   return items.map((item) => `${item.key}: ${item.present}/${item.sampleSize}`).join(", ");
 };
 
+const reasonCountSummary = (counts: Record<string, number>) => {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return "No reason codes";
+  return entries.map(([key, value]) => `${key}: ${value}`).join(", ");
+};
+
 export default function PrecomputeRunsPage() {
   const [environment, setEnvironment] = useState<UiEnvironment>("DEV");
   const [runs, setRuns] = useState<RunItem[]>([]);
@@ -94,8 +106,10 @@ export default function PrecomputeRunsPage() {
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<MeiroDiagnosticsSummaryResponse | null>(null);
   const [audienceReadiness, setAudienceReadiness] = useState<{ matchingProfiles: number; uniqueProfiles: number; readiness: string } | null>(null);
   const [precomputeReadiness, setPrecomputeReadiness] = useState<PrecomputeReadinessResponse | null>(null);
+  const [precomputeSample, setPrecomputeSample] = useState<PrecomputeSampleResponse | null>(null);
   const [audienceExportPrompt, setAudienceExportPrompt] = useState<PipesAudienceExportPromptResponse | null>(null);
   const [audienceExportLoading, setAudienceExportLoading] = useState(false);
+  const [samplingRun, setSamplingRun] = useState(false);
 
   const suggestedRunKey = useMemo(() => {
     const keyPart = key.trim() || "target";
@@ -178,6 +192,7 @@ export default function PrecomputeRunsPage() {
       if (!normalizedMeiroSegmentValue) {
         setAudienceReadiness(null);
         setPrecomputeReadiness(null);
+        setPrecomputeSample(null);
         setAudienceExportPrompt(null);
         return;
       }
@@ -222,6 +237,7 @@ export default function PrecomputeRunsPage() {
               : null
           );
           setPrecomputeReadiness(precomputeResponse);
+          setPrecomputeSample(null);
           setAudienceExportPrompt(promptResponse);
         }
       } finally {
@@ -242,6 +258,32 @@ export default function PrecomputeRunsPage() {
     }
     await navigator.clipboard.writeText(audienceExportPrompt.prompt);
     setMessage("Copied Pipes audience export prompt.");
+  };
+
+  const runSample = async () => {
+    if (!normalizedMeiroSegmentValue || !key.trim()) {
+      setMessage("Select a Pipes audience and target key before running a sample.");
+      return;
+    }
+    setSamplingRun(true);
+    try {
+      const parsedContext = contextText.trim() ? (JSON.parse(contextText) as Record<string, unknown>) : {};
+      const response = await apiClient.pipes.precomputeSample({
+        audience: normalizedMeiroSegmentValue,
+        mode,
+        key: key.trim(),
+        context: parsedContext,
+        sampleSize: 5
+      });
+      setPrecomputeSample(response);
+      setMessage(
+        `Sampled ${response.cohort.sampled} profile(s): ready ${response.outcomeCounts.eligible}, suppressed ${response.outcomeCounts.suppressed}, noop ${response.outcomeCounts.noop}, errors ${response.outcomeCounts.errors}.`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to run sample.");
+    } finally {
+      setSamplingRun(false);
+    }
   };
 
   const loadRuns = async (manual = false, preserveMessage = false) => {
@@ -436,6 +478,37 @@ export default function PrecomputeRunsPage() {
         </PagePanel>
       ) : null}
 
+      {precomputeSample ? (
+        <PagePanel density="compact" className="border border-stone-200">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-600">Sample result</p>
+              <h3 className="mt-1 text-base font-semibold">
+                {precomputeSample.cohort.sampled} sampled from {precomputeSample.cohort.matchingProfiles} cached member(s)
+              </h3>
+              <p className="mt-1 text-sm text-stone-700">
+                Ready {precomputeSample.outcomeCounts.eligible}, suppressed {precomputeSample.outcomeCounts.suppressed}, noop{" "}
+                {precomputeSample.outcomeCounts.noop}, errors {precomputeSample.outcomeCounts.errors}
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => void runSample()} disabled={samplingRun}>
+              Re-run sample
+            </Button>
+          </div>
+          <p className="mt-3 text-xs text-stone-700">{reasonCountSummary(precomputeSample.reasonCounts)}</p>
+          <div className="mt-3 grid gap-2 text-xs md:grid-cols-2">
+            {precomputeSample.items.slice(0, 6).map((item) => (
+              <div key={item.profileIdHash} className="rounded-md border border-stone-200 bg-white p-2">
+                <p className="font-mono text-[11px]">{item.profileIdHash.slice(0, 16)}</p>
+                <p className="mt-1 font-semibold">{item.status} / {item.actionType}</p>
+                <p className="mt-1 break-words text-stone-700">{item.reasons.length ? item.reasons.join(", ") : "No reasons"}</p>
+                {item.missingFields.length ? <p className="mt-1 break-words text-amber-800">Missing: {item.missingFields.join(", ")}</p> : null}
+              </div>
+            ))}
+          </div>
+        </PagePanel>
+      ) : null}
+
       <PagePanel density="compact" className="grid gap-3 md:grid-cols-2">
         <FieldLabel className="flex flex-col gap-1">
           Mode
@@ -582,6 +655,11 @@ export default function PrecomputeRunsPage() {
       </PagePanel>
 
       <div className="flex gap-2">
+        {cohortType === "segment" && segmentSource === "meiro" ? (
+          <Button size="sm" variant="outline" onClick={() => void runSample()} disabled={samplingRun || !normalizedMeiroSegmentValue || !key.trim()}>
+            Run sample
+          </Button>
+        ) : null}
         <Button size="sm" onClick={() => void createRun()} disabled={creatingRun}>
           Create Run
         </Button>
