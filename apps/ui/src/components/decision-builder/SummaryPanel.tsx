@@ -11,7 +11,7 @@ import type { ValidationByStep } from "./types";
 import { deriveRequiredFieldsFromDraft, draftRiskFlags, getDecisionSummaryText } from "./wizard-utils";
 import { apiClient } from "../../lib/api";
 import { DEFAULT_APP_ENUM_SETTINGS } from "../../lib/app-enum-settings";
-import { useAuthoringFieldRegistry } from "./useAuthoringFieldRegistry";
+import type { AuthoringFieldRegistryState } from "./useAuthoringFieldRegistry";
 
 interface SummaryPanelProps {
   definition: DecisionDefinition;
@@ -21,6 +21,7 @@ interface SummaryPanelProps {
   requirements?: DecisionAuthoringRequirementsResponse | null;
   dependencies?: DecisionDependenciesResponse | null;
   readiness?: DecisionReadinessResponse | null;
+  authoringFields: AuthoringFieldRegistryState;
 }
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
@@ -42,11 +43,19 @@ const audienceCandidates = (value: string) => {
   return [trimmed, unprefixed, `meiro_segment:${unprefixed}`].filter(Boolean);
 };
 
-export function SummaryPanel({ definition, validation, groupedErrors, readOnlyReasons, requirements, dependencies, readiness }: SummaryPanelProps) {
+export function SummaryPanel({
+  definition,
+  validation,
+  groupedErrors,
+  readOnlyReasons,
+  requirements,
+  dependencies,
+  readiness,
+  authoringFields
+}: SummaryPanelProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [catalogPreview, setCatalogPreview] = useState<unknown | null>(null);
   const [copyRequirementsStatus, setCopyRequirementsStatus] = useState<"idle" | "copied">("idle");
-  const authoringFields = useAuthoringFieldRegistry();
 
   const summaryText = useMemo(() => getDecisionSummaryText(definition), [definition]);
   const localRequirements = useMemo(() => deriveRequiredFieldsFromDraft(definition), [definition]);

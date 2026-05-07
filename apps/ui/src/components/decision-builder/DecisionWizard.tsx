@@ -538,6 +538,22 @@ export function DecisionWizard({
     }));
   };
 
+  const removeAudienceAny = (audienceId: string) => {
+    const current = audiencesAnyInput
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const audiencesAny = current.filter((audience) => audience !== audienceId);
+    setAudiencesAnyInput(audiencesAny.join(", "));
+    setDraft((draftCurrent) => ({
+      ...draftCurrent,
+      eligibility: {
+        ...draftCurrent.eligibility,
+        audiencesAny
+      }
+    }));
+  };
+
   const timeoutPreset = useMemo(() => {
     const timeout = draft.performance?.timeoutMs ?? 120;
     if (timeout <= 120) {
@@ -715,8 +731,47 @@ export function DecisionWizard({
               />
             </label>
             {authoringFields.prismAudiences.length > 0 ? (
-              <div className="space-y-1">
-                <p className="text-xs text-stone-600">{authoringFields.audienceSourceLabel}</p>
+              <div className="space-y-2">
+                <label className="flex flex-col gap-1 text-sm">
+                  Add from {authoringFields.audienceSourceLabel}
+                  <select
+                    value=""
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        addAudienceAny(event.target.value);
+                      }
+                    }}
+                    disabled={readOnly}
+                    className="rounded-md border border-stone-300 px-2 py-1"
+                  >
+                    <option value="">Select a Pipes audience</option>
+                    {authoringFields.prismAudiences.map((audience) => (
+                      <option key={audience.id} value={audience.id}>
+                        {audience.name} ({audience.id})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {(draft.eligibility.audiencesAny ?? []).length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {(draft.eligibility.audiencesAny ?? []).map((audience) => {
+                      const match = authoringFields.prismAudiences.find((candidate) => candidate.id === audience);
+                      return (
+                        <button
+                          key={audience}
+                          type="button"
+                          onClick={() => removeAudienceAny(audience)}
+                          disabled={readOnly}
+                          className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-left text-xs text-emerald-800 disabled:cursor-default"
+                          title={audience}
+                        >
+                          {match?.name ?? audience} x
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <p className="text-xs text-stone-600">Recent {authoringFields.audienceSourceLabel}</p>
                 <div className="flex max-h-24 flex-wrap gap-1 overflow-auto rounded-md border border-stone-200 bg-stone-50 p-2">
                   {authoringFields.prismAudiences.slice(0, 18).map((audience) => {
                     const selected = (draft.eligibility.audiencesAny ?? []).includes(audience.id);
@@ -1359,6 +1414,7 @@ export function DecisionWizard({
         requirements={requirements}
         dependencies={dependencies}
         readiness={readiness}
+        authoringFields={authoringFields}
       />
     </div>
   );

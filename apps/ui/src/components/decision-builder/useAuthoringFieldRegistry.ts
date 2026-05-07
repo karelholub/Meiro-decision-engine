@@ -4,6 +4,15 @@ import { apiClient } from "../../lib/api";
 import { fieldRegistry as fallbackFieldRegistry } from "./field-registry";
 import type { FieldDataType, FieldRegistryItem } from "./types";
 
+export interface AuthoringFieldRegistryState {
+  registry: FieldRegistryItem[];
+  sourceLabel: string;
+  mappedFieldCount: number;
+  prismAudiences: Array<{ id: string; name: string }>;
+  prismAudienceCount: number;
+  audienceSourceLabel: string;
+}
+
 const inferType = (mapping: WbsMappingAttributeRule): FieldDataType => {
   if (mapping.transform === "coerceNumber") {
     return "number";
@@ -58,7 +67,7 @@ const mergeRegistries = (base: FieldRegistryItem[], mapped: FieldRegistryItem[])
   return [...byField.values()].sort((left, right) => Number(Boolean(right.common)) - Number(Boolean(left.common)) || left.label.localeCompare(right.label));
 };
 
-export function useAuthoringFieldRegistry() {
+export function useAuthoringFieldRegistry(): AuthoringFieldRegistryState {
   const [mappedFields, setMappedFields] = useState<FieldRegistryItem[]>([]);
   const [meiroFields, setMeiroFields] = useState<FieldRegistryItem[]>([]);
   const [prismFields, setPrismFields] = useState<FieldRegistryItem[]>([]);
