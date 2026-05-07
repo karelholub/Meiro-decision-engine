@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDeliveryTaskPayload,
   computeDeliveryId,
+  createTestDeliveryTemplate,
   deliverCallbackTask,
   redactCallbackValue,
   type EffectivePipesCallbackConfig
@@ -100,6 +101,26 @@ describe("pipes callback", () => {
     });
 
     expect(payload.event_type).toBe("eligibility_check");
+  });
+
+  it("builds test callback payloads in Pipes collect shape", () => {
+    const sample = createTestDeliveryTemplate({
+      environment: "DEV",
+      appKey: "meiro_store"
+    });
+
+    expect(sample.payload.event_type).toBe("decision_action");
+    expect(sample.payload.event_payload).toMatchObject({
+      delivery_id: sample.deliveryId,
+      correlation_id: sample.correlationId,
+      source_system: "decision-engine",
+      schema_version: "decision_engine_collect.v1",
+      app_key: "meiro_store",
+      profile_id: "pipes-test-profile",
+      decision_key: "test_decision",
+      action_type: "message",
+      eligible: true
+    });
   });
 
   it("computes deterministic delivery ids within the same bucket", () => {

@@ -608,45 +608,57 @@ export const createTestDeliveryTemplate = (input: {
     correlationId,
     deliveryId,
     payload: {
-      deliveryId,
-      correlationId,
-      environment: input.environment,
-      appKey: input.appKey ?? null,
-      sentAt: now.toISOString(),
-      source: DECISION_ENGINE_SOURCE,
-      type: "decision_result",
-      request: {
-        mode: "full",
-        decisionKey: "test_decision",
-        identity: {
-          profileId,
-          lookup: null
-        },
-        context: {
-          appKey: input.appKey ?? null,
-          placement: "test"
-        }
-      },
-      response: {
+      event_type: "decision_action",
+      event_time: now.toISOString(),
+      event_payload: {
+        event_id: deliveryId,
+        delivery_id: deliveryId,
+        correlation_id: correlationId,
+        source_system: DECISION_ENGINE_SOURCE,
+        schema_version: "decision_engine_collect.v1",
+        environment: input.environment,
+        app_key: input.appKey ?? null,
+        customer_id: profileId,
+        profile_id: profileId,
+        decision_key: "test_decision",
+        decision_stack_key: null,
+        placement_key: "test",
+        action_type: "message",
         eligible: true,
-        result: {
-          actionType: "message",
-          payload: {
-            templateId: "callback_test"
+        reasons: ["TEST_CALLBACK"],
+        request: {
+          mode: "full",
+          decisionKey: "test_decision",
+          identity: {
+            profileId,
+            lookup: null
+          },
+          context: {
+            appKey: input.appKey ?? null,
+            placement: "test"
           }
         },
-        reasons: ["TEST_CALLBACK"],
-        missingFields: [],
-        typeIssues: []
-      },
-      meta: {
-        latencyMs: {
-          total: 1,
-          engine: 1
+        response: {
+          eligible: true,
+          result: {
+            actionType: "message",
+            payload: {
+              templateId: "callback_test"
+            }
+          },
+          reasons: ["TEST_CALLBACK"],
+          missingFields: [],
+          typeIssues: []
         },
-        cache: {},
-        version: {
-          decisionVersion: 1
+        meta: {
+          latencyMs: {
+            total: 1,
+            engine: 1
+          },
+          cache: {},
+          version: {
+            decisionVersion: 1
+          }
         }
       }
     }

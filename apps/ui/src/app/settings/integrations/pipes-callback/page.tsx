@@ -184,18 +184,24 @@ export default function PipesCallbackSettingsPage() {
   };
 
   const samplePayload = {
-    event: "decision.outcome",
-    timestamp: new Date().toISOString(),
-    appKey: normalizedAppKey ?? "default",
-    profile: {
-      profileId: "[REDACTED]",
-      attributes: {
-        customer_tier: "gold"
-      }
-    },
-    outcome: {
-      decisionKey: "cart_recovery",
-      actionType: "message"
+    event_type: "decision_action",
+    event_time: new Date().toISOString(),
+    event_payload: {
+      event_id: "sample-decision-delivery",
+      delivery_id: "sample-decision-delivery",
+      correlation_id: "sample-correlation",
+      source_system: "decision-engine",
+      schema_version: "decision_engine_collect.v1",
+      environment,
+      app_key: normalizedAppKey ?? "default",
+      customer_id: "[REDACTED]",
+      profile_id: "[REDACTED]",
+      decision_key: "cart_recovery",
+      decision_stack_key: null,
+      placement_key: "home_top",
+      action_type: "message",
+      eligible: true,
+      reasons: ["ELIGIBLE"]
     }
   };
 
